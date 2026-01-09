@@ -18,7 +18,7 @@ None
 - [x] **Phase 2: Model Discovery** - Dynamic model fetching from Replicate/fal.ai APIs ✓
 - [x] **Phase 3: Generate Node Refactor** - Rename NanoBanana to generic Generate with multi-model support ✓
 - [x] **Phase 4: Model Search Dialog** - Floating action bar icons and searchable model browser ✓
-- [ ] **Phase 5: Image URL Server** - Local endpoint serving images as URLs for providers
+- [x] **Phase 5: Image URL Server** - Local endpoint serving images as URLs for providers ✓
 - [ ] **Phase 6: Video & Polish** - Video playback, parameter customization, edge cases
 
 ## Phase Details
@@ -74,7 +74,7 @@ Plans:
 
 Plans:
 - [x] 05-01: Image serving endpoint and URL generation
-- [ ] 05-02: Integration with generate node for URL-based providers
+- [x] 05-02: Integration with generate node for URL-based providers
 
 ### Phase 6: Video & Polish
 **Goal**: GenerateVideo node for video generation, video playback, custom parameters, edge cases
@@ -100,5 +100,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Model Discovery | 3/3 | Complete | 2026-01-09 |
 | 3. Generate Node Refactor | 3/3 | Complete | 2026-01-09 |
 | 4. Model Search Dialog | 2/2 | Complete | 2026-01-09 |
-| 5. Image URL Server | 1/2 | In progress | - |
+| 5. Image URL Server | 2/2 | Complete | 2026-01-09 |
 | 6. Video & Polish | 0/4 | Not started | - |
