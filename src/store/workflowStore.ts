@@ -1835,6 +1835,28 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     }, 0);
     groupIdCounter = maxGroupId;
 
+    // Migrate legacy nanoBanana nodes: derive selectedModel from model field if missing
+    workflow.nodes = workflow.nodes.map((node) => {
+      if (node.type === "nanoBanana") {
+        const data = node.data as NanoBananaNodeData;
+        if (data.model && !data.selectedModel) {
+          const displayName = data.model === "nano-banana" ? "Nano Banana" : "Nano Banana Pro";
+          return {
+            ...node,
+            data: {
+              ...data,
+              selectedModel: {
+                provider: "gemini" as ProviderType,
+                modelId: data.model,
+                displayName,
+              },
+            },
+          };
+        }
+      }
+      return node;
+    }) as WorkflowNode[];
+
     // Look up saved config from localStorage (only if workflow has an ID)
     const configs = loadSaveConfigs();
     const savedConfig = workflow.id ? configs[workflow.id] : null;
