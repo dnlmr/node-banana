@@ -22,6 +22,7 @@ import {
   AnnotationNode,
   PromptNode,
   GenerateImageNode,
+  GenerateVideoNode,
   LLMGenerateNode,
   SplitGridNode,
   OutputNode,
@@ -42,6 +43,7 @@ const nodeTypes: NodeTypes = {
   annotation: AnnotationNode,
   prompt: PromptNode,
   nanoBanana: GenerateImageNode,
+  generateVideo: GenerateVideoNode,
   llmGenerate: LLMGenerateNode,
   splitGrid: SplitGridNode,
   output: OutputNode,
@@ -96,6 +98,8 @@ const getNodeHandles = (nodeType: string): { inputs: string[]; outputs: string[]
     case "prompt":
       return { inputs: [], outputs: ["text"] };
     case "nanoBanana":
+      return { inputs: ["image", "text"], outputs: ["image"] };
+    case "generateVideo":
       return { inputs: ["image", "text"], outputs: ["image"] };
     case "llmGenerate":
       return { inputs: ["text", "image"], outputs: ["text"] };
@@ -725,6 +729,7 @@ export function WorkflowCanvas() {
             annotation: { width: 300, height: 280 },
             prompt: { width: 320, height: 220 },
             nanoBanana: { width: 300, height: 300 },
+            generateVideo: { width: 300, height: 300 },
             llmGenerate: { width: 320, height: 360 },
             splitGrid: { width: 300, height: 320 },
             output: { width: 320, height: 320 },
@@ -1144,6 +1149,8 @@ export function WorkflowCanvas() {
                 return "#f97316";
               case "nanoBanana":
                 return "#22c55e";
+              case "generateVideo":
+                return "#9333ea";
               case "llmGenerate":
                 return "#06b6d4";
               case "splitGrid":

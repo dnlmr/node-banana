@@ -16,6 +16,7 @@ import {
   AnnotationNodeData,
   PromptNodeData,
   NanoBananaNodeData,
+  GenerateVideoNodeData,
   LLMGenerateNodeData,
   SplitGridNodeData,
   OutputNodeData,
@@ -210,6 +211,15 @@ const createDefaultNodeData = (type: NodeType): WorkflowNodeData => {
         selectedHistoryIndex: 0,
       } as NanoBananaNodeData;
     }
+    case "generateVideo":
+      return {
+        inputImages: [],
+        inputPrompt: null,
+        outputVideo: null,
+        selectedModel: undefined,
+        status: "idle",
+        error: null,
+      } as GenerateVideoNodeData;
     case "llmGenerate":
       return {
         inputPrompt: null,
@@ -448,6 +458,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       annotation: { width: 300, height: 280 },
       prompt: { width: 320, height: 220 },
       nanoBanana: { width: 300, height: 300 },
+      generateVideo: { width: 300, height: 300 },
       llmGenerate: { width: 320, height: 360 },
       splitGrid: { width: 300, height: 320 },
       output: { width: 320, height: 320 },

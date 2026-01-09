@@ -6,6 +6,7 @@ export type NodeType =
   | "annotation"
   | "prompt"
   | "nanoBanana"
+  | "generateVideo"
   | "llmGenerate"
   | "splitGrid"
   | "output";
@@ -150,6 +151,18 @@ export interface NanoBananaNodeData extends BaseNodeData {
   selectedHistoryIndex: number; // Currently selected image in carousel
 }
 
+// Generate Video Node Data (Video Generation)
+export interface GenerateVideoNodeData extends BaseNodeData {
+  inputImages: string[];
+  inputImageRefs?: string[];  // External image references for storage optimization
+  inputPrompt: string | null;
+  outputVideo: string | null;  // Video data URL or URL
+  outputVideoRef?: string;  // External video reference for storage optimization
+  selectedModel?: SelectedModel;  // Required for video generation (no legacy fallback)
+  status: NodeStatus;
+  error: string | null;
+}
+
 // LLM Generate Node Data (Text Generation)
 export interface LLMGenerateNodeData extends BaseNodeData {
   inputPrompt: string | null;
@@ -200,6 +213,7 @@ export type WorkflowNodeData =
   | AnnotationNodeData
   | PromptNodeData
   | NanoBananaNodeData
+  | GenerateVideoNodeData
   | LLMGenerateNodeData
   | SplitGridNodeData
   | OutputNodeData;
@@ -233,6 +247,9 @@ export interface GenerateRequest {
 export interface GenerateResponse {
   success: boolean;
   image?: string;
+  video?: string;
+  videoUrl?: string;  // For large videos, return URL directly
+  contentType?: "image" | "video";
   error?: string;
 }
 
