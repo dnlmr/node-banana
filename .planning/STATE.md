@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-09)
 
 **Core value:** Provider infrastructure that dynamically discovers models from external APIs, enabling users to access hundreds of image/video generation models without hardcoding schemas.
-**Current focus:** Phase 4 - Model Search Dialog
+**Current focus:** Phase 5 - Image URL Server
 
 ## Current Position
 
-Phase: 4 of 6 (Model Search Dialog)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-01-09 - Completed 04-01-PLAN.md (Floating action bar provider icons)
+Phase: 4 of 6 (Model Search Dialog) - COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-01-09 - Completed 04-02-PLAN.md (Model search dialog)
 
-Progress: [==========================================================] 60% (9/15 plans)
+Progress: [=================================================================] 67% (10/15 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 4.6 min
-- Total execution time: 0.70 hours
+- Total plans completed: 10
+- Average duration: 5.6 min
+- Total execution time: 0.93 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [==========================================================] 60% (9/15
 | 1. Provider Infrastructure | 2/2 | 14 min | 7 min |
 | 2. Model Discovery | 3/3 | 14 min | 4.7 min |
 | 3. Generate Node Refactor | 3/3 | 13 min | 4.3 min |
-| 4. Model Search Dialog | 1/2 | 2 min | 2 min |
+| 4. Model Search Dialog | 2/2 | 17 min | 8.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 5 min, 5 min, 3 min, 2 min
-- Trend: improving
+- Last 5 plans: 5 min, 3 min, 2 min, 15 min
+- Trend: stable (04-02 included UAT refinements)
 
 ## Accumulated Context
 
@@ -64,10 +64,13 @@ Recent decisions affecting current work:
 - Dual migration approach: loadWorkflow migrates + UI effect for runtime
 - fal.ai icon always visible in action bar (works without key but rate limited)
 - Replicate icon only visible when API key is configured
+- Client-side search filtering for Replicate (their search API unreliable)
+- Show all capability badges to differentiate similar models
+- Extract variant suffix from fal.ai model IDs for display name
 
 ### Deferred Issues
 
-None.
+- UAT-001: Provider icons should use real logos (minor, cosmetic)
 
 ### Blockers/Concerns
 
@@ -76,6 +79,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-01-09
-Stopped at: Completed 04-01-PLAN.md (Floating action bar provider icons)
+Stopped at: Completed Phase 4 (Model Search Dialog)
 Resume file: None
-Next action: Execute 04-02-PLAN.md (Model search dialog with filtering and selection)
+Next action: Plan Phase 5 (Image URL Server)
