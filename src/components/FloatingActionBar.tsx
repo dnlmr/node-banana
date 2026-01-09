@@ -394,6 +394,21 @@ export function FloatingActionBar() {
           )}
         </div>
       </div>
+
+      {/* Model search dialog placeholder */}
+      {modelSearchOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-neutral-800 p-4 rounded-lg border border-neutral-700 shadow-xl">
+            <p className="text-white text-sm">Model Search Dialog (Coming in 04-02)</p>
+            <button
+              onClick={() => setModelSearchOpen(false)}
+              className="mt-3 px-3 py-1.5 bg-neutral-700 hover:bg-neutral-600 text-white text-xs rounded transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
