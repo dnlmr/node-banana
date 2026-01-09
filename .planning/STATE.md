@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-09)
 ## Current Position
 
 Phase: 3 of 6 (Generate Node Refactor)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-01-09 - Completed 03-01-PLAN.md (Rename NanoBanana to GenerateImage)
+Last activity: 2026-01-09 - Completed 03-02-PLAN.md (Provider-specific execution)
 
-Progress: [======================================] 40% (6/15 plans)
+Progress: [==========================================] 47% (7/15 plans)
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 5.5 min
-- Total execution time: 0.55 hours
+- Total plans completed: 7
+- Average duration: 5.3 min
+- Total execution time: 0.62 hours
 
 **By Phase:**
 
@@ -29,10 +29,10 @@ Progress: [======================================] 40% (6/15 plans)
 |-------|-------|-------|----------|
 | 1. Provider Infrastructure | 2/2 | 14 min | 7 min |
 | 2. Model Discovery | 3/3 | 14 min | 4.7 min |
-| 3. Generate Node Refactor | 1/3 | 5 min | 5 min |
+| 3. Generate Node Refactor | 2/3 | 10 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 4 min, 5 min, 5 min, 5 min
+- Last 5 plans: 5 min, 5 min, 5 min, 5 min
 - Trend: stable
 
 ## Accumulated Context
@@ -57,6 +57,9 @@ Recent decisions affecting current work:
 - Provider dropdown shows Gemini always, others only if API key configured
 - Aspect ratio/resolution controls shown only for Gemini provider
 - Backward compatibility via aliases: NanoBananaNode, saveNanoBananaDefaults
+- Server-side provider execution in API route (not client-side)
+- Header-based API key passing: X-Replicate-API-Key, X-Fal-API-Key
+- fal.ai sync API (fal.run) instead of queue-based async
 
 ### Deferred Issues
 
@@ -69,6 +72,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-01-09
-Stopped at: Completed 03-01-PLAN.md (GenerateImageNode with provider/model selector)
+Stopped at: Completed 03-02-PLAN.md (Provider-specific execution)
 Resume file: None
-Next action: Execute 03-02-PLAN.md (Provider-specific execution in generate API route)
+Next action: Execute 03-03-PLAN.md (Backward compatibility for existing workflows)
