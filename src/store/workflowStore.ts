@@ -340,9 +340,12 @@ export const saveGenerateImageDefaults = (settings: Partial<GenerateImageDefault
   localStorage.setItem(GENERATE_IMAGE_DEFAULTS_KEY, JSON.stringify(updated));
 };
 
-// Backward-compatible aliases
+/**
+ * @deprecated Backward-compatible aliases. Use `GenerateImageDefaults` and `saveGenerateImageDefaults` instead.
+ */
 type NanoBananaDefaults = GenerateImageDefaults;
 const loadNanoBananaDefaults = loadGenerateImageDefaults;
+/** @deprecated Use `saveGenerateImageDefaults` instead */
 export const saveNanoBananaDefaults = saveGenerateImageDefaults;
 
 // localStorage helpers for provider settings
