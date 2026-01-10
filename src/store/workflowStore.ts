@@ -1072,6 +1072,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
                 model: nodeData.model,
                 useGoogleSearch: nodeData.useGoogleSearch,
                 selectedModel: nodeData.selectedModel,
+                parameters: nodeData.parameters,
               };
 
               // Build headers with API keys for external providers
@@ -1277,6 +1278,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
                 images,
                 prompt: text,
                 selectedModel: nodeData.selectedModel,
+                parameters: nodeData.parameters,
               };
 
               // Build headers with API keys for external providers

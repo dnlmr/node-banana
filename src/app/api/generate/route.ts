@@ -278,6 +278,11 @@ async function generateWithReplicate(
     ...input.parameters,
   };
 
+  // Log parameters being passed
+  if (input.parameters && Object.keys(input.parameters).length > 0) {
+    console.log(`[API:${requestId}] Custom parameters:`, JSON.stringify(input.parameters));
+  }
+
   // Add image input if provided (for img2img workflows)
   // Note: Different Replicate models use different parameter names
   // Using 'image' as it's most common for img2img models
@@ -460,6 +465,11 @@ async function generateWithFal(
     prompt: input.prompt,
     ...input.parameters,
   };
+
+  // Log parameters being passed
+  if (input.parameters && Object.keys(input.parameters).length > 0) {
+    console.log(`[API:${requestId}] Custom parameters:`, JSON.stringify(input.parameters));
+  }
 
   // Add image_url if provided (for img2img workflows)
   // fal.ai accepts both URLs and data URIs in this field
