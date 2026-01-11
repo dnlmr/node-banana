@@ -10,6 +10,7 @@ interface ModelParametersProps {
   provider: ProviderType;
   parameters: Record<string, unknown>;
   onParametersChange: (parameters: Record<string, unknown>) => void;
+  onExpandChange?: (expanded: boolean, parameterCount: number) => void;
 }
 
 /**
@@ -22,6 +23,7 @@ export function ModelParameters({
   provider,
   parameters,
   onParametersChange,
+  onExpandChange,
 }: ModelParametersProps) {
   const [schema, setSchema] = useState<ModelParameter[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -105,7 +107,11 @@ export function ModelParameters({
     <div className="shrink-0">
       {/* Collapsible header */}
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={() => {
+          const newExpanded = !isExpanded;
+          setIsExpanded(newExpanded);
+          onExpandChange?.(newExpanded, schema.length);
+        }}
         className="w-full flex items-center justify-between text-[10px] text-neutral-400 hover:text-neutral-300 transition-colors py-0.5"
       >
         <span className="flex items-center gap-1">
@@ -144,7 +150,7 @@ export function ModelParameters({
 
       {/* Parameter inputs (when expanded) */}
       {isExpanded && (
-        <div className="mt-1 space-y-1.5 max-h-[160px] overflow-y-auto">
+        <div className="mt-1 space-y-1.5">
           {error ? (
             <span className="text-[9px] text-red-400">{error}</span>
           ) : isLoading ? (

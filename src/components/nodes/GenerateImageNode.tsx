@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState, useEffect, useMemo } from "react";
-import { Handle, Position, NodeProps, Node } from "@xyflow/react";
+import { Handle, Position, NodeProps, Node, useReactFlow } from "@xyflow/react";
 import { BaseNode } from "./BaseNode";
 import { ModelParameters } from "./ModelParameters";
 import { useWorkflowStore, saveNanoBananaDefaults } from "@/store/workflowStore";
@@ -208,6 +208,26 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
       updateNodeData(id, { parameters });
     },
     [id, updateNodeData]
+  );
+
+  // Handle parameters expand/collapse - resize node height
+  const { setNodes } = useReactFlow();
+  const handleParametersExpandChange = useCallback(
+    (expanded: boolean, parameterCount: number) => {
+      // Each parameter row is ~24px, plus some padding
+      const parameterHeight = expanded ? Math.max(parameterCount * 28 + 16, 60) : 0;
+      const baseHeight = 300; // Default node height
+      const newHeight = baseHeight + parameterHeight;
+
+      setNodes((nodes) =>
+        nodes.map((node) =>
+          node.id === id
+            ? { ...node, style: { ...node.style, height: newHeight } }
+            : node
+        )
+      );
+    },
+    [id, setNodes]
   );
 
   const handleClearImage = useCallback(() => {
@@ -538,6 +558,7 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
                 provider={currentProvider}
                 parameters={nodeData.parameters || {}}
                 onParametersChange={handleParametersChange}
+                onExpandChange={handleParametersExpandChange}
               />
             )}
           </>

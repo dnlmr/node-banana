@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState, useEffect, useMemo } from "react";
-import { Handle, Position, NodeProps, Node } from "@xyflow/react";
+import { Handle, Position, NodeProps, Node, useReactFlow } from "@xyflow/react";
 import { BaseNode } from "./BaseNode";
 import { ModelParameters } from "./ModelParameters";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -120,6 +120,26 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
       updateNodeData(id, { parameters });
     },
     [id, updateNodeData]
+  );
+
+  // Handle parameters expand/collapse - resize node height
+  const { setNodes } = useReactFlow();
+  const handleParametersExpandChange = useCallback(
+    (expanded: boolean, parameterCount: number) => {
+      // Each parameter row is ~24px, plus some padding
+      const parameterHeight = expanded ? Math.max(parameterCount * 28 + 16, 60) : 0;
+      const baseHeight = 300; // Default node height
+      const newHeight = baseHeight + parameterHeight;
+
+      setNodes((nodes) =>
+        nodes.map((node) =>
+          node.id === id
+            ? { ...node, style: { ...node.style, height: newHeight } }
+            : node
+        )
+      );
+    },
+    [id, setNodes]
   );
 
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
@@ -304,6 +324,7 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
             provider={currentProvider}
             parameters={nodeData.parameters || {}}
             onParametersChange={handleParametersChange}
+            onExpandChange={handleParametersExpandChange}
           />
         )}
       </div>
