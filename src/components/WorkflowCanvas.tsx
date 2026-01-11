@@ -319,8 +319,41 @@ export function WorkflowCanvas() {
 
       const { clientX, clientY } = event as MouseEvent;
       const fromHandleId = connectionState.fromHandle?.id || null;
-      const fromHandleType = (fromHandleId === "image" || fromHandleId === "text") ? fromHandleId : null;
+      const fromHandleType = getHandleType(fromHandleId); // Use getHandleType for dynamic handles
       const isFromSource = connectionState.fromHandle?.type === "source";
+
+      // Helper to find a compatible handle on a node by type
+      const findCompatibleHandle = (
+        node: Node,
+        handleType: "image" | "text",
+        needInput: boolean
+      ): string | null => {
+        // Check for dynamic inputSchema first
+        const nodeData = node.data as { inputSchema?: Array<{ name: string; type: string }> };
+        if (nodeData.inputSchema && nodeData.inputSchema.length > 0) {
+          if (needInput) {
+            // Find first input handle matching the type
+            const match = nodeData.inputSchema.find(i => i.type === handleType);
+            if (match) return match.name;
+          }
+          // Output is still "image" for generate nodes
+          return handleType === "image" ? "image" : null;
+        }
+
+        // Fall back to static handles
+        const staticHandles = getNodeHandles(node.type || "");
+        const handleList = needInput ? staticHandles.inputs : staticHandles.outputs;
+
+        // First try exact match
+        if (handleList.includes(handleType)) return handleType;
+
+        // Then check each handle's type
+        for (const h of handleList) {
+          if (getHandleType(h) === handleType) return h;
+        }
+
+        return null;
+      };
 
       // Check if we dropped on a node by looking for node elements under the cursor
       const elementsUnderCursor = document.elementsFromPoint(clientX, clientY);
@@ -337,22 +370,12 @@ export function WorkflowCanvas() {
           const targetNode = nodes.find((n) => n.id === targetNodeId);
 
           if (targetNode) {
-            const targetHandles = getNodeHandles(targetNode.type || "");
-
             // Find a compatible handle on the target node
-            let compatibleHandle: string | null = null;
-
-            if (isFromSource) {
-              // Dragging from output, need an input on target that matches type
-              if (targetHandles.inputs.includes(fromHandleType)) {
-                compatibleHandle = fromHandleType;
-              }
-            } else {
-              // Dragging from input, need an output on target that matches type
-              if (targetHandles.outputs.includes(fromHandleType)) {
-                compatibleHandle = fromHandleType;
-              }
-            }
+            const compatibleHandle = findCompatibleHandle(
+              targetNode,
+              fromHandleType,
+              isFromSource // need input if dragging from output
+            );
 
             if (compatibleHandle) {
               // Create the connection
@@ -391,7 +414,7 @@ export function WorkflowCanvas() {
         sourceHandleId: fromHandleId,
       });
     },
-    [screenToFlowPosition, nodes, getNodeHandles, handleConnect]
+    [screenToFlowPosition, nodes, handleConnect]
   );
 
   // Handle the splitGrid action - uses automated grid detection
@@ -530,16 +553,21 @@ export function WorkflowCanvas() {
       let sourceHandleIdForNewNode: string | null = null;
 
       // Map handle type to the correct handle ID based on node type
+      // Note: New nodes start with default handles (image, text) before a model is selected
       if (handleType === "image") {
         if (nodeType === "annotation" || nodeType === "output" || nodeType === "splitGrid") {
           targetHandleId = "image";
-        } else if (nodeType === "nanoBanana") {
+          // annotation also has an image output
+          if (nodeType === "annotation") {
+            sourceHandleIdForNewNode = "image";
+          }
+        } else if (nodeType === "nanoBanana" || nodeType === "generateVideo") {
           targetHandleId = "image";
         } else if (nodeType === "imageInput") {
           sourceHandleIdForNewNode = "image";
         }
       } else if (handleType === "text") {
-        if (nodeType === "nanoBanana" || nodeType === "llmGenerate") {
+        if (nodeType === "nanoBanana" || nodeType === "generateVideo" || nodeType === "llmGenerate") {
           targetHandleId = "text";
           // llmGenerate also has a text output
           if (nodeType === "llmGenerate") {
