@@ -210,13 +210,23 @@ Plans:
 
 #### Phase 17: Component Tests
 
-**Goal**: Add tests for key node components and UI interactions
+**Goal**: Add tests for all 34 React components covering nodes, toolbars, modals, and edges
 **Depends on**: Phase 16
 **Research**: Unlikely (established React Testing Library patterns)
-**Plans**: TBD
+**Plans**: 11 plans
 
 Plans:
-- [ ] 17-01: TBD (run /gsd:plan-phase 17 to break down)
+- [ ] 17-01: Core Nodes (BaseNode, PromptNode, ImageInputNode)
+- [ ] 17-02: Display Nodes (OutputNode, SplitGridNode, GroupNode)
+- [ ] 17-03: Generate Nodes (GenerateImageNode, GenerateVideoNode)
+- [ ] 17-04: Processing Nodes (LLMGenerateNode, AnnotationNode)
+- [ ] 17-05: Toolbars (Header, FloatingActionBar, MultiSelectToolbar)
+- [ ] 17-06: Canvas & Edges (WorkflowCanvas, EditableEdge, ReferenceEdge, EdgeToolbar)
+- [ ] 17-07: Menus & Notifications (ConnectionDropMenu, Toast, CostIndicator)
+- [ ] 17-08: Core Modals (ModelSearchDialog, ProjectSetupModal, CostDialog)
+- [ ] 17-09: Editor Modals (PromptEditorModal, SplitGridSettingsModal, AnnotationModal)
+- [ ] 17-10: Quickstart (WelcomeModal, QuickstartInitialView, QuickstartTemplatesView, PromptWorkflowView, QuickstartBackButton)
+- [ ] 17-11: Utilities (GlobalImageHistory, GroupsOverlay, ModelParameters)
 
 #### Phase 18: API Route Tests
 
@@ -271,7 +281,7 @@ Phases execute in numeric order: 1 → 2 → ... → 14 → 15 → 16 → 17 →
 | 14. Fix Drag-Connect Node Creation Bugs | v1.1 | 1/1 | Complete | 2026-01-12 |
 | 15. Test Infrastructure | v1.2 | 1/1 | Complete | 2026-01-12 |
 | 16. Store Modularization | v1.2 | 1/1 | Complete | 2026-01-12 |
-| 17. Component Tests | v1.2 | 0/? | Not started | - |
+| 17. Component Tests | v1.2 | 0/11 | Planned | - |
 | 18. API Route Tests | v1.2 | 0/? | Not started | - |
 | 19. Type Refactoring | v1.2 | 0/? | Not started | - |
 | 20. Integration Tests | v1.2 | 0/? | Not started | - |
