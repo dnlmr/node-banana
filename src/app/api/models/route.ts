@@ -320,9 +320,9 @@ export async function GET(
     ? (capabilitiesParam.split(",") as ModelCapability[])
     : null;
 
-  // Get API keys from headers
-  const replicateKey = request.headers.get("X-Replicate-Key");
-  const falKey = request.headers.get("X-Fal-Key");
+  // Get API keys from headers, falling back to env variables
+  const replicateKey = request.headers.get("X-Replicate-Key") || process.env.REPLICATE_API_KEY || null;
+  const falKey = request.headers.get("X-Fal-Key") || process.env.FAL_API_KEY || null;
 
   console.log(
     `[Models:${requestId}] Provider filter: ${providerFilter || "all"}, Search: ${searchQuery || "none"}, Refresh: ${refresh}`
@@ -357,7 +357,7 @@ export async function GET(
       {
         success: false,
         error:
-          "No providers available. Provide API keys via X-Replicate-Key or X-Fal-Key headers.",
+          "No providers available. Add REPLICATE_API_KEY or FAL_API_KEY to .env.local or configure in Settings.",
       },
       { status: 400 }
     );

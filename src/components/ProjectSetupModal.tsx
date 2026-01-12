@@ -416,60 +416,47 @@ export function ProjectSetupModal({
             {/* Replicate Provider */}
             <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-neutral-100">Replicate</span>
-                  <label className="relative inline-flex items-center cursor-pointer">
+                <span className="text-sm font-medium text-neutral-100">Replicate</span>
+                {envStatus?.replicate && !overrideActive.replicate ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-green-400">Configured via .env</span>
+                    <button
+                      type="button"
+                      onClick={() => setOverrideActive((prev) => ({ ...prev, replicate: true }))}
+                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
+                    >
+                      Override
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
                     <input
-                      type="checkbox"
-                      checked={localProviders.providers.replicate?.enabled || false}
-                      onChange={(e) => updateLocalProvider("replicate", { enabled: e.target.checked })}
-                      className="sr-only peer"
+                      type={showApiKey.replicate ? "text" : "password"}
+                      value={localProviders.providers.replicate?.apiKey || ""}
+                      onChange={(e) => updateLocalProvider("replicate", { apiKey: e.target.value || null })}
+                      placeholder="r8_..."
+                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
                     />
-                    <div className="w-8 h-4 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-                {localProviders.providers.replicate?.enabled && (
-                  envStatus?.replicate && !overrideActive.replicate ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-green-400">Configured via .env</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey((prev) => ({ ...prev, replicate: !prev.replicate }))}
+                      className="text-xs text-neutral-400 hover:text-neutral-200"
+                    >
+                      {showApiKey.replicate ? "Hide" : "Show"}
+                    </button>
+                    {envStatus?.replicate && (
                       <button
                         type="button"
-                        onClick={() => setOverrideActive((prev) => ({ ...prev, replicate: true }))}
-                        className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
+                        onClick={() => {
+                          setOverrideActive((prev) => ({ ...prev, replicate: false }));
+                          updateLocalProvider("replicate", { apiKey: null });
+                        }}
+                        className="text-xs text-neutral-500 hover:text-neutral-300"
                       >
-                        Override
+                        Cancel
                       </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type={showApiKey.replicate ? "text" : "password"}
-                        value={localProviders.providers.replicate?.apiKey || ""}
-                        onChange={(e) => updateLocalProvider("replicate", { apiKey: e.target.value || null })}
-                        placeholder="r8_..."
-                        className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowApiKey((prev) => ({ ...prev, replicate: !prev.replicate }))}
-                        className="text-xs text-neutral-400 hover:text-neutral-200"
-                      >
-                        {showApiKey.replicate ? "Hide" : "Show"}
-                      </button>
-                      {envStatus?.replicate && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOverrideActive((prev) => ({ ...prev, replicate: false }));
-                            updateLocalProvider("replicate", { apiKey: null });
-                          }}
-                          className="text-xs text-neutral-500 hover:text-neutral-300"
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </div>
-                  )
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -477,60 +464,47 @@ export function ProjectSetupModal({
             {/* fal.ai Provider */}
             <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-neutral-100">fal.ai</span>
-                  <label className="relative inline-flex items-center cursor-pointer">
+                <span className="text-sm font-medium text-neutral-100">fal.ai</span>
+                {envStatus?.fal && !overrideActive.fal ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-green-400">Configured via .env</span>
+                    <button
+                      type="button"
+                      onClick={() => setOverrideActive((prev) => ({ ...prev, fal: true }))}
+                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
+                    >
+                      Override
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
                     <input
-                      type="checkbox"
-                      checked={localProviders.providers.fal?.enabled || false}
-                      onChange={(e) => updateLocalProvider("fal", { enabled: e.target.checked })}
-                      className="sr-only peer"
+                      type={showApiKey.fal ? "text" : "password"}
+                      value={localProviders.providers.fal?.apiKey || ""}
+                      onChange={(e) => updateLocalProvider("fal", { apiKey: e.target.value || null })}
+                      placeholder="..."
+                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
                     />
-                    <div className="w-8 h-4 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
-                  </label>
-                </div>
-                {localProviders.providers.fal?.enabled && (
-                  envStatus?.fal && !overrideActive.fal ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-green-400">Configured via .env</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey((prev) => ({ ...prev, fal: !prev.fal }))}
+                      className="text-xs text-neutral-400 hover:text-neutral-200"
+                    >
+                      {showApiKey.fal ? "Hide" : "Show"}
+                    </button>
+                    {envStatus?.fal && (
                       <button
                         type="button"
-                        onClick={() => setOverrideActive((prev) => ({ ...prev, fal: true }))}
-                        className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
+                        onClick={() => {
+                          setOverrideActive((prev) => ({ ...prev, fal: false }));
+                          updateLocalProvider("fal", { apiKey: null });
+                        }}
+                        className="text-xs text-neutral-500 hover:text-neutral-300"
                       >
-                        Override
+                        Cancel
                       </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type={showApiKey.fal ? "text" : "password"}
-                        value={localProviders.providers.fal?.apiKey || ""}
-                        onChange={(e) => updateLocalProvider("fal", { apiKey: e.target.value || null })}
-                        placeholder="..."
-                        className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowApiKey((prev) => ({ ...prev, fal: !prev.fal }))}
-                        className="text-xs text-neutral-400 hover:text-neutral-200"
-                      >
-                        {showApiKey.fal ? "Hide" : "Show"}
-                      </button>
-                      {envStatus?.fal && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOverrideActive((prev) => ({ ...prev, fal: false }));
-                            updateLocalProvider("fal", { apiKey: null });
-                          }}
-                          className="text-xs text-neutral-500 hover:text-neutral-300"
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </div>
-                  )
+                    )}
+                  </div>
                 )}
               </div>
             </div>

@@ -901,13 +901,13 @@ export async function POST(request: NextRequest) {
 
     // Route to appropriate provider
     if (provider === "replicate") {
-      // Get Replicate API key from request headers
-      const replicateApiKey = request.headers.get("X-Replicate-API-Key");
+      // User-provided key takes precedence over env variable
+      const replicateApiKey = request.headers.get("X-Replicate-API-Key") || process.env.REPLICATE_API_KEY;
       if (!replicateApiKey) {
         return NextResponse.json<GenerateResponse>(
           {
             success: false,
-            error: "Replicate API key not provided. Include X-Replicate-API-Key header.",
+            error: "Replicate API key not configured. Add REPLICATE_API_KEY to .env.local or configure in Settings.",
           },
           { status: 401 }
         );
@@ -1002,8 +1002,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (provider === "fal") {
-      // Get fal.ai API key from request headers (optional - fal.ai works without key but rate limited)
-      const falApiKey = request.headers.get("X-Fal-API-Key");
+      // User-provided key takes precedence over env variable
+      const falApiKey = request.headers.get("X-Fal-API-Key") || process.env.FAL_API_KEY || null;
 
       // For fal.ai, keep Data URIs as-is since localhost URLs won't work
       // fal.ai accepts Data URIs directly

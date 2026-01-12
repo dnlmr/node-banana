@@ -448,19 +448,21 @@ export async function GET(
     let result: ExtractedSchema;
 
     if (provider === "replicate") {
-      const apiKey = request.headers.get("X-Replicate-Key");
+      // User-provided key takes precedence over env variable
+      const apiKey = request.headers.get("X-Replicate-Key") || process.env.REPLICATE_API_KEY;
       if (!apiKey) {
         return NextResponse.json<SchemaErrorResponse>(
           {
             success: false,
-            error: "Replicate API key required. Include X-Replicate-Key header.",
+            error: "Replicate API key required. Add REPLICATE_API_KEY to .env.local or configure in Settings.",
           },
           { status: 401 }
         );
       }
       result = await fetchReplicateSchema(decodedModelId, apiKey);
     } else {
-      const apiKey = request.headers.get("X-Fal-Key");
+      // User-provided key takes precedence over env variable
+      const apiKey = request.headers.get("X-Fal-Key") || process.env.FAL_API_KEY || null;
       result = await fetchFalSchema(decodedModelId, apiKey);
     }
 

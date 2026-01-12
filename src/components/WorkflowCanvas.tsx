@@ -57,53 +57,19 @@ const edgeTypes: EdgeTypes = {
 // Connection validation rules
 // - Image handles (green) can only connect to image handles
 // - Text handles (blue) can only connect to text handles
+// - Video handles can only connect to generateVideo or output nodes
 // Helper to determine handle type from handle ID
 // For dynamic handles, we use naming convention: image inputs contain "image", text inputs are "prompt" or "negative_prompt"
-const getHandleType = (handleId: string | null | undefined): "image" | "text" | null => {
+const getHandleType = (handleId: string | null | undefined): "image" | "text" | "video" | null => {
   if (!handleId) return null;
   // Standard handles
+  if (handleId === "video") return "video";
   if (handleId === "image" || handleId === "text") return handleId;
   // Dynamic handles - check naming patterns
+  if (handleId.includes("video")) return "video";
   if (handleId.includes("image") || handleId.includes("frame")) return "image";
   if (handleId === "prompt" || handleId === "negative_prompt" || handleId.includes("prompt")) return "text";
   return null;
-};
-
-// Connection validation: ensures type matching between source and target handles
-// - Image handles can connect to image handles
-// - Text handles can connect to text handles
-// - NanoBanana image input accepts multiple connections
-// - All other inputs accept only one connection
-const isValidConnection = (connection: Edge | Connection): boolean => {
-  const sourceHandle = connection.sourceHandle;
-  const targetHandle = connection.targetHandle;
-
-  const sourceType = getHandleType(sourceHandle);
-  const targetType = getHandleType(targetHandle);
-
-  // Strict type matching: image <-> image, text <-> text
-  if (sourceType === "image" && targetType !== "image") {
-    logger.warn('connection.validation', 'Connection validation failed: type mismatch', {
-      source: connection.source,
-      target: connection.target,
-      sourceHandle,
-      targetHandle,
-      reason: 'Cannot connect image handle to non-image handle',
-    });
-    return false;
-  }
-  if (sourceType === "text" && targetType !== "text") {
-    logger.warn('connection.validation', 'Connection validation failed: type mismatch', {
-      source: connection.source,
-      target: connection.target,
-      sourceHandle,
-      targetHandle,
-      reason: 'Cannot connect text handle to non-text handle',
-    });
-    return false;
-  }
-
-  return true;
 };
 
 // Define which handles each node type has
@@ -118,7 +84,7 @@ const getNodeHandles = (nodeType: string): { inputs: string[]; outputs: string[]
     case "nanoBanana":
       return { inputs: ["image", "text"], outputs: ["image"] };
     case "generateVideo":
-      return { inputs: ["image", "text"], outputs: ["image"] };
+      return { inputs: ["image", "text"], outputs: ["video"] };
     case "llmGenerate":
       return { inputs: ["text", "image"], outputs: ["text"] };
     case "splitGrid":
@@ -133,7 +99,7 @@ const getNodeHandles = (nodeType: string): { inputs: string[]; outputs: string[]
 interface ConnectionDropState {
   position: { x: number; y: number };
   flowPosition: { x: number; y: number };
-  handleType: "image" | "text" | null;
+  handleType: "image" | "text" | "video" | null;
   connectionType: "source" | "target";
   sourceNodeId: string | null;
   sourceHandleId: string | null;
@@ -264,6 +230,41 @@ export function WorkflowCanvas() {
     [groups, nodes, setNodeGroupId]
   );
 
+  // Connection validation - checks if a connection is valid based on handle types and node types
+  // Defined inside component to have access to nodes array for video validation
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge): boolean => {
+      const sourceType = getHandleType(connection.sourceHandle);
+      const targetType = getHandleType(connection.targetHandle);
+
+      // If we can't determine types, allow the connection
+      if (!sourceType || !targetType) return true;
+
+      // Video connections have special rules
+      if (sourceType === "video") {
+        // Video source can ONLY connect to:
+        // 1. generateVideo nodes (for video-to-video)
+        // 2. output nodes (for display)
+        const targetNode = nodes.find((n) => n.id === connection.target);
+        if (!targetNode) return false;
+
+        const targetNodeType = targetNode.type;
+        if (targetNodeType === "generateVideo" || targetNodeType === "output") {
+          // For output node, we allow video even though its handle is typed as "image"
+          // because output node can display both images and videos
+          return true;
+        }
+        // Video cannot connect to other node types
+        return false;
+      }
+
+      // Standard type matching for image and text
+      // Image handles connect to image handles, text handles connect to text handles
+      return sourceType === targetType;
+    },
+    [nodes]
+  );
+
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (!isValidConnection(connection)) return;
@@ -325,7 +326,7 @@ export function WorkflowCanvas() {
       // Helper to find a compatible handle on a node by type
       const findCompatibleHandle = (
         node: Node,
-        handleType: "image" | "text",
+        handleType: "image" | "text" | "video",
         needInput: boolean
       ): string | null => {
         // Check for dynamic inputSchema first
@@ -336,7 +337,8 @@ export function WorkflowCanvas() {
             const match = nodeData.inputSchema.find(i => i.type === handleType);
             if (match) return match.name;
           }
-          // Output is still "image" for generate nodes
+          // Output handle - check for video or image type
+          if (handleType === "video") return "video";
           return handleType === "image" ? "image" : null;
         }
 
@@ -346,6 +348,11 @@ export function WorkflowCanvas() {
 
         // First try exact match
         if (handleList.includes(handleType)) return handleType;
+
+        // For video output connecting to output node, allow "image" input (output node accepts both)
+        if (handleType === "video" && needInput && node.type === "output") {
+          return "image";
+        }
 
         // Then check each handle's type
         for (const h of handleList) {

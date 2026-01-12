@@ -134,53 +134,59 @@ export function Header() {
                 <span className="text-sm text-neutral-300">{workflowName}</span>
                 <span className="text-neutral-600">|</span>
                 <CostIndicator />
-                <button
-                  onClick={() => canSave ? saveToFile() : handleOpenSettings()}
-                  disabled={isSaving}
-                  className="relative p-1 text-neutral-400 hover:text-neutral-200 transition-colors disabled:opacity-50"
-                  title={isSaving ? "Saving..." : canSave ? "Save project" : "Configure save location"}
-                >
-                  <svg
-                    className="w-4 h-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth={1.5}
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"
-                    />
-                  </svg>
-                  {hasUnsavedChanges && !isSaving && (
-                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />
-                  )}
-                </button>
-                {saveDirectoryPath && (
+
+                {/* File operations group */}
+                <div className="flex items-center gap-0.5 ml-2 pl-2 border-l border-neutral-700/50">
                   <button
-                    onClick={handleOpenDirectory}
-                    className="p-1 text-neutral-400 hover:text-neutral-200 transition-colors"
-                    title="Open Project Folder"
+                    onClick={() => canSave ? saveToFile() : handleOpenSettings()}
+                    disabled={isSaving}
+                    className="relative p-1.5 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 rounded transition-colors disabled:opacity-50"
+                    title={isSaving ? "Saving..." : canSave ? "Save project" : "Configure save location"}
                   >
                     <svg
                       className="w-4 h-4"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
-                      strokeWidth={2}
+                      strokeWidth={1.5}
                     >
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                        d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"
                       />
                     </svg>
+                    {hasUnsavedChanges && !isSaving && (
+                      <span className="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-red-500 ring-2 ring-neutral-900" />
+                    )}
                   </button>
-                )}
+                  {saveDirectoryPath && (
+                    <button
+                      onClick={handleOpenDirectory}
+                      className="p-1.5 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 rounded transition-colors"
+                      title="Open Project Folder"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                {/* Settings - separated */}
                 <button
                   onClick={handleOpenSettings}
-                  className="p-1 text-neutral-400 hover:text-neutral-200 transition-colors"
+                  className="p-1.5 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 rounded transition-colors ml-1"
                   title="Project settings"
                 >
                   <svg
