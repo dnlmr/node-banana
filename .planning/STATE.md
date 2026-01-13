@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-01-09)
 
 ## Current Position
 
-Phase: 22 of 23 (Generate Node Dynamic Input Tests)
+Phase: 21 of 23 (Fix Image Input & Deduplication)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-01-13 - Completed 22-01-PLAN.md
+Last activity: 2026-01-13 - Completed 21-01-PLAN.md
 
 Progress: █████████░ 96%
 
@@ -130,6 +130,6 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-01-13
-Stopped at: Phase 22 complete
+Stopped at: Phase 21 complete
 Resume file: None
 Next action: Plan Phase 23 (run /gsd:plan-phase 23)

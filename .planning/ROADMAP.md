@@ -247,10 +247,11 @@ Plans:
 **Goal**: Split types/index.ts into domain-specific type files (nodes, providers, workflow)
 **Depends on**: Phase 18
 **Research**: Unlikely (internal refactoring)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 19-01: TBD (run /gsd:plan-phase 19 to break down)
+- [ ] 19-01: Extract node and annotation types
+- [ ] 19-02: Extract provider, workflow, API, and model types
 
 #### Phase 20: Integration Tests
 
@@ -276,7 +277,7 @@ Plans:
 3. Generated images should be prepended with prompt details like generated videos
 
 Plans:
-- [ ] 21-01: Unify MD5 hashing for image deduplication
+- [x] 21-01: Unify MD5 hashing for image deduplication
 
 #### Phase 22: Generate Node Dynamic Input Tests
 
@@ -335,8 +336,8 @@ Phases execute in numeric order: 1 → 2 → ... → 14 → 15 → 16 → 17 →
 | 16. Store Modularization | v1.2 | 1/1 | Complete | 2026-01-12 |
 | 17. Component Tests | v1.2 | 11/11 | Complete | 2026-01-13 |
 | 18. API Route Tests | v1.2 | 5/5 | Complete | 2026-01-13 |
-| 19. Type Refactoring | v1.2 | 0/? | Not started | - |
+| 19. Type Refactoring | v1.2 | 0/2 | Planned | - |
 | 20. Integration Tests | v1.2 | 0/? | Not started | - |
-| 21. Fix Image Input & Deduplication | v1.2 | 0/1 | Planned | - |
+| 21. Fix Image Input & Deduplication | v1.2 | 1/1 | Complete | 2026-01-13 |
 | 22. Generate Node Dynamic Input Tests | v1.2 | 1/1 | Complete | 2026-01-13 |
 | 23. Model Browser Improvements | v1.2 | 0/? | Not started | - |
