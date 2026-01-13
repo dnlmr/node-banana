@@ -12,7 +12,7 @@ None
 
 - ✅ **v1.0 Multi-Provider Support** - Phases 1-6 (shipped 2026-01-11)
 - ✅ **v1.1 Improvements** - Phases 7-14 (shipped 2026-01-12)
-- 🚧 **v1.2 Improvements** - Phases 15-23 (in progress)
+- 🚧 **v1.2 Improvements** - Phases 15-24 (in progress)
 
 ## Phases
 
@@ -185,7 +185,7 @@ Plans:
 
 ### 🚧 v1.2 Improvements (In Progress)
 
-**Milestone Goal:** Add automated testing across the application and modularize large monolithic files for better maintainability
+**Milestone Goal:** Add automated testing across the application, modularize large monolithic files for better maintainability, and improve cost tracking for multi-provider support
 
 #### Phase 15: Test Infrastructure
 
@@ -261,8 +261,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 20-01: Store integration tests (getConnectedInputs, validateWorkflow, topological sort)
-- [ ] 20-02: Workflow execution tests (data flow, error handling, connection validation)
+- [x] 20-01: Store integration tests (getConnectedInputs, validateWorkflow, topological sort)
+- [x] 20-02: Workflow execution tests (data flow, error handling, connection validation)
 
 #### Phase 21: Fix Image Input & Deduplication Issues
 
@@ -312,10 +312,43 @@ Plans:
 Plans:
 - [x] 23-01: Recently used models, icon-based provider filter, Gemini models in browse
 
+#### Phase 24: Improved Cost Summary
+
+**Goal**: Expand cost tracking to include fal.ai models (via their pricing API), video generation nodes, and graceful handling for Replicate (no pricing API available)
+**Depends on**: Phase 23
+**Research**: Complete (see research notes below)
+**Plans**: 3 plans
+
+**Research Notes:**
+- fal.ai has a pricing API: `GET /v1/models/pricing?endpoint_id=model1,model2` returns `{ prices: [{ endpoint_id, unit_price, unit, currency }] }`
+- Replicate does NOT expose pricing via API (open GitHub issue, unresolved). Prediction response has `metrics.predict_time` but no hardware/cost info.
+- `ProviderModel` type already has `pricing?: { type, amount, currency }` field at `src/lib/providers/types.ts:69-74`
+
+**UX Decision: Provider-Grouped with Uncertainty Section**
+- Two sections: "Known Costs" (Gemini + fal.ai) and "Pricing Unavailable" (Replicate)
+- Known costs show total at section header, breakdown by provider with icons
+- fal.ai items show billing unit from API (e.g., "per image", "per 5s video")
+- Replicate section includes help text: "Pricing varies by hardware and runtime. Check replicate.com"
+- Incurred cost only tracks Gemini & fal.ai (Replicate excluded with note)
+- Empty provider sections hidden
+
+**Features:**
+1. Fetch fal.ai model pricing via their pricing API and populate `ProviderModel.pricing`
+2. Track generateVideo nodes in cost predictions (currently ignored)
+3. For Replicate models: display "pricing unavailable" gracefully in dedicated section
+4. Update CostDialog with two-section layout: Known Costs (Gemini, fal.ai) and Pricing Unavailable (Replicate)
+5. Show billing units for fal.ai models (per image, per second of video, etc.)
+6. Incurred cost excludes Replicate with explanatory note
+
+Plans:
+- [ ] 24-01: fal.ai pricing API integration and ProviderModel.pricing population
+- [ ] 24-02: Expand costCalculator to handle video nodes and external providers
+- [ ] 24-03: Update CostDialog UI for multi-provider breakdown
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → ... → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23
+Phases execute in numeric order: 1 → 2 → ... → 14 → 15 → 16 → 17 → 18 → 19 → 20 → 21 → 22 → 23 → 24
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -338,7 +371,8 @@ Phases execute in numeric order: 1 → 2 → ... → 14 → 15 → 16 → 17 →
 | 17. Component Tests | v1.2 | 11/11 | Complete | 2026-01-13 |
 | 18. API Route Tests | v1.2 | 5/5 | Complete | 2026-01-13 |
 | 19. Type Refactoring | v1.2 | 2/2 | Complete | 2026-01-13 |
-| 20. Integration Tests | v1.2 | 1/2 | In progress | - |
+| 20. Integration Tests | v1.2 | 2/2 | Complete | 2026-01-13 |
 | 21. Fix Image Input & Deduplication | v1.2 | 1/1 | Complete | 2026-01-13 |
 | 22. Generate Node Dynamic Input Tests | v1.2 | 1/1 | Complete | 2026-01-13 |
 | 23. Model Browser Improvements | v1.2 | 1/1 | Complete | 2026-01-13 |
+| 24. Improved Cost Summary | v1.2 | 0/3 | Not started | - |

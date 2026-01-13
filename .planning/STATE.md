@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-01-09)
 
 ## Current Position
 
-Phase: 20 of 23 (Integration Tests)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-01-13 - Completed 20-01-PLAN.md
+Phase: 20 of 24 (Integration Tests)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-01-13 - Completed 20-02-PLAN.md
 
 Progress: █████████░ 96%
 
@@ -46,7 +46,7 @@ Progress: █████████░ 96%
 | 19. Type Refactoring | 2/2 | 16 min | 8 min |
 | 22. Generate Node Dynamic Input Tests | 1/1 | 20 min | 20 min |
 | 23. Model Browser Improvements | 1/1 | 5 min | 5 min |
-| 20. Integration Tests | 1/2 | 9 min | 9 min |
+| 20. Integration Tests | 2/2 | 11 min | 5.5 min |
 
 **Recent Trend:**
 - Last 5 plans: 8 min, 8 min, 2 min, 5 min, 9 min
@@ -116,6 +116,9 @@ Recent decisions affecting current work:
 - Max 8 recent models stored in localStorage, 4 displayed in UI
 - Gemini models hardcoded in /api/models (not fetched from external API)
 - Green color theme for Gemini provider (bg-green-500/20 text-green-300)
+- Cost dialog: two-section layout (Known Costs vs Pricing Unavailable) grouping by provider
+- fal.ai pricing via API, Replicate excluded from cost tracking (no API available)
+- Incurred cost only tracks providers with known pricing (Gemini, fal.ai)
 
 ### Deferred Issues
 
@@ -136,10 +139,11 @@ Recent decisions affecting current work:
 - Phase 21 added: Fix Gemini Pro image input handling and image deduplication issues
 - Phase 22 added: Generate node dynamic input validation and API call tests
 - Phase 23 added: Model browser improvements (recently used, icon dropdown, Gemini models in list)
+- Phase 24 added: Improved cost summary (fal.ai pricing API, video node tracking, multi-provider support)
 
 ## Session Continuity
 
 Last session: 2026-01-13
-Stopped at: Completed 20-01-PLAN.md (store integration tests)
+Stopped at: Completed 20-02-PLAN.md (workflow execution tests)
 Resume file: None
-Next action: Execute 20-02-PLAN.md (workflow execution tests)
+Next action: Plan Phase 24 (Improved Cost Summary)
