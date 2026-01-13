@@ -429,4 +429,280 @@ describe("workflowStore integration tests", () => {
       });
     });
   });
+
+  describe("validateWorkflow", () => {
+    describe("Empty workflow", () => {
+      it("should return invalid with 'Workflow is empty' error", () => {
+        useWorkflowStore.setState({
+          nodes: [],
+          edges: [],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain("Workflow is empty");
+      });
+    });
+
+    describe("nanoBanana node validation", () => {
+      it("should return error when nanoBanana node missing text input", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("nanoBanana-1", "nanoBanana", {}),
+          ],
+          edges: [],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain('Generate node "nanoBanana-1" missing text input');
+      });
+
+      it("should return valid when text input is connected", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("prompt-1", "prompt", { prompt: "test" }),
+            createTestNode("nanoBanana-1", "nanoBanana", {}),
+          ],
+          edges: [createTestEdge("prompt-1", "nanoBanana-1", "text", "text")],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(true);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it("should not require image input (optional)", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("prompt-1", "prompt", { prompt: "test" }),
+            createTestNode("nanoBanana-1", "nanoBanana", {}),
+          ],
+          edges: [createTestEdge("prompt-1", "nanoBanana-1", "text", "text")],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        // Should be valid without image input
+        expect(result.valid).toBe(true);
+      });
+
+      it("should validate multiple nanoBanana nodes independently", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("prompt-1", "prompt", { prompt: "test" }),
+            createTestNode("nanoBanana-1", "nanoBanana", {}),
+            createTestNode("nanoBanana-2", "nanoBanana", {}), // No text input
+          ],
+          edges: [createTestEdge("prompt-1", "nanoBanana-1", "text", "text")],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain('Generate node "nanoBanana-2" missing text input');
+        expect(result.errors).not.toContain('Generate node "nanoBanana-1" missing text input');
+      });
+    });
+
+    describe("annotation node validation", () => {
+      it("should return error when no image connected and no sourceImage", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("annotation-1", "annotation", { sourceImage: null }),
+          ],
+          edges: [],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain('Annotation node "annotation-1" missing image input');
+      });
+
+      it("should return valid when image is connected", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("imageInput-1", "imageInput", { image: "data:image/png;base64,test" }),
+            createTestNode("annotation-1", "annotation", { sourceImage: null }),
+          ],
+          edges: [createTestEdge("imageInput-1", "annotation-1", "image", "image")],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(true);
+      });
+
+      it("should return valid when sourceImage is present (manual load)", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("annotation-1", "annotation", {
+              sourceImage: "data:image/png;base64,manuallyLoadedImage",
+            }),
+          ],
+          edges: [],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(true);
+      });
+    });
+
+    describe("output node validation", () => {
+      it("should return error when output node has no image input", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("output-1", "output", {}),
+          ],
+          edges: [],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain('Output node "output-1" missing image input');
+      });
+
+      it("should return valid when output node has image connected", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("imageInput-1", "imageInput", { image: "data:image/png;base64,test" }),
+            createTestNode("output-1", "output", {}),
+          ],
+          edges: [createTestEdge("imageInput-1", "output-1", "image", "image")],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(true);
+      });
+    });
+
+    describe("Valid workflow scenarios", () => {
+      it("should validate simple prompt -> nanoBanana -> output chain", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("prompt-1", "prompt", { prompt: "test prompt" }),
+            createTestNode("nanoBanana-1", "nanoBanana", {}),
+            createTestNode("output-1", "output", {}),
+          ],
+          edges: [
+            createTestEdge("prompt-1", "nanoBanana-1", "text", "text"),
+            createTestEdge("nanoBanana-1", "output-1", "image", "image"),
+          ],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(true);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it("should validate complex workflow with multiple node types", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("imageInput-1", "imageInput", { image: "data:image/png;base64,test" }),
+            createTestNode("prompt-1", "prompt", { prompt: "describe this" }),
+            createTestNode("llmGenerate-1", "llmGenerate", {}),
+            createTestNode("nanoBanana-1", "nanoBanana", {}),
+            createTestNode("annotation-1", "annotation", { sourceImage: null }),
+            createTestNode("output-1", "output", {}),
+          ],
+          edges: [
+            createTestEdge("imageInput-1", "llmGenerate-1", "image", "image"),
+            createTestEdge("prompt-1", "llmGenerate-1", "text", "text"),
+            createTestEdge("llmGenerate-1", "nanoBanana-1", "text", "text"),
+            createTestEdge("nanoBanana-1", "annotation-1", "image", "image"),
+            createTestEdge("annotation-1", "output-1", "image", "image"),
+          ],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(true);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it("should validate workflow with groups (groups don't affect validation)", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            { ...createTestNode("prompt-1", "prompt", { prompt: "test" }), groupId: "group-1" },
+            { ...createTestNode("nanoBanana-1", "nanoBanana", {}), groupId: "group-1" },
+          ],
+          edges: [createTestEdge("prompt-1", "nanoBanana-1", "text", "text")],
+          groups: {
+            "group-1": {
+              id: "group-1",
+              name: "Test Group",
+              color: "neutral",
+              position: { x: 0, y: 0 },
+              size: { width: 400, height: 400 },
+            },
+          },
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(true);
+      });
+
+      it("should allow nodes that don't require validation (imageInput, prompt)", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("imageInput-1", "imageInput", { image: null }),
+            createTestNode("prompt-1", "prompt", { prompt: "" }),
+          ],
+          edges: [],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        // These nodes don't have validation rules, so workflow is valid
+        expect(result.valid).toBe(true);
+      });
+    });
+
+    describe("Multiple validation errors", () => {
+      it("should report all validation errors, not just the first", () => {
+        useWorkflowStore.setState({
+          nodes: [
+            createTestNode("nanoBanana-1", "nanoBanana", {}),
+            createTestNode("nanoBanana-2", "nanoBanana", {}),
+            createTestNode("annotation-1", "annotation", { sourceImage: null }),
+            createTestNode("output-1", "output", {}),
+          ],
+          edges: [],
+        });
+
+        const store = useWorkflowStore.getState();
+        const result = store.validateWorkflow();
+
+        expect(result.valid).toBe(false);
+        expect(result.errors.length).toBeGreaterThanOrEqual(4);
+        expect(result.errors).toContain('Generate node "nanoBanana-1" missing text input');
+        expect(result.errors).toContain('Generate node "nanoBanana-2" missing text input');
+        expect(result.errors).toContain('Annotation node "annotation-1" missing image input');
+        expect(result.errors).toContain('Output node "output-1" missing image input');
+      });
+    });
+  });
 });
