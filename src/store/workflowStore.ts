@@ -25,6 +25,7 @@ import {
   GroupColor,
   ProviderType,
   ProviderSettings,
+  RecentModel,
 } from "@/types";
 import { useToast } from "@/components/Toast";
 import { calculateGenerationCost } from "@/utils/costCalculator";
@@ -38,6 +39,9 @@ import {
   getProviderSettings,
   saveProviderSettings,
   defaultProviderSettings,
+  getRecentModels,
+  saveRecentModels,
+  MAX_RECENT_MODELS,
 } from "./utils/localStorage";
 import {
   createDefaultNodeData,
@@ -179,6 +183,12 @@ interface WorkflowStore {
 
   // Model search dialog actions
   setModelSearchOpen: (open: boolean, provider?: ProviderType | null) => void;
+
+  // Recent models state
+  recentModels: RecentModel[];
+
+  // Recent models actions
+  trackModelUsage: (model: { provider: ProviderType; modelId: string; displayName: string }) => void;
 }
 
 let nodeIdCounter = 0;
@@ -223,6 +233,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   // Model search dialog initial state
   modelSearchOpen: false,
   modelSearchProvider: null,
+
+  // Recent models initial state
+  recentModels: getRecentModels(),
 
   setEdgeStyle: (style: EdgeStyle) => {
     set({ edgeStyle: style });
@@ -2543,5 +2556,24 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       modelSearchOpen: open,
       modelSearchProvider: provider ?? null,
     });
+  },
+
+  trackModelUsage: (model: { provider: ProviderType; modelId: string; displayName: string }) => {
+    const current = get().recentModels;
+    // Remove existing entry for same modelId if present
+    const filtered = current.filter((m) => m.modelId !== model.modelId);
+    // Prepend new entry with current timestamp
+    const updated: RecentModel[] = [
+      {
+        provider: model.provider,
+        modelId: model.modelId,
+        displayName: model.displayName,
+        timestamp: Date.now(),
+      },
+      ...filtered,
+    ].slice(0, MAX_RECENT_MODELS);
+    // Save to localStorage and update state
+    saveRecentModels(updated);
+    set({ recentModels: updated });
   },
 }));
