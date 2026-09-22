@@ -1,4 +1,5 @@
 import { create, StateCreator } from "zustand";
+import { getComfyRouterKey } from "@/lib/providers/comfyRouterKey";
 import { useShallow } from "zustand/shallow";
 import {
   Connection,
@@ -3292,6 +3293,7 @@ export function useProviderApiKeys() {
       kieApiKey: state.providerSettings.providers.kie?.apiKey ?? null,
       wavespeedApiKey: state.providerSettings.providers.wavespeed?.apiKey ?? null,
       openaiApiKey: state.providerSettings.providers.openai?.apiKey ?? null,
+      comfyApiKey: getComfyRouterKey(state.providerSettings),
       // Provider enabled states (for conditional UI)
       replicateEnabled: state.providerSettings.providers.replicate?.enabled ?? false,
       kieEnabled: state.providerSettings.providers.kie?.enabled ?? false,
