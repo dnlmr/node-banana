@@ -125,9 +125,15 @@ export async function pollGenerateTask(
     // Reset on successful response
     consecutiveErrors = 0;
 
-    // Still polling — task not done yet
+    // Still polling — task not done yet. A server-suggested wait (Retry-After)
+    // wins over the local ramp, bounded only by the time left before timeout.
     if (result.polling) {
-      interval = Math.min(interval + INTERVAL_STEP, MAX_INTERVAL);
+      const suggested = result.retryAfterMs;
+      if (typeof suggested === "number" && suggested > 0) {
+        interval = Math.min(suggested, Math.max(0, MAX_POLL_TIME - (Date.now() - startTime)));
+      } else {
+        interval = Math.min(interval + INTERVAL_STEP, MAX_INTERVAL);
+      }
       continue;
     }
 

@@ -25,6 +25,7 @@ const providerApiKeys = {
   wavespeedApiKey: null as string | null,
   openaiApiKey: null as string | null,
   comfyApiKey: null as string | null,
+  comfyEnabled: true,
   replicateEnabled: true,
   kieEnabled: false,
 };

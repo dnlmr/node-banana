@@ -58,7 +58,7 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
   const adaptiveOutputImage = useAdaptiveImageSrc(data.outputImage, id);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   // Use stable selector for API keys to prevent unnecessary re-fetches
-  const { replicateApiKey, falApiKey, kieApiKey, openaiApiKey, comfyApiKey, replicateEnabled, kieEnabled, openaiEnabled } = useProviderApiKeys();
+  const { replicateApiKey, falApiKey, kieApiKey, openaiApiKey, comfyApiKey, comfyEnabled, replicateEnabled, kieEnabled, openaiEnabled } = useProviderApiKeys();
   const [externalModels, setExternalModels] = useState<ProviderModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelsFetchError, setModelsFetchError] = useState<string | null>(null);
@@ -104,11 +104,11 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
       providers.push({ id: "openai", name: "OpenAI" });
     }
     // Add ComfyUI (Comfy Router) if a key is available (its own or the Comfy Cloud key)
-    if (comfyApiKey) {
+    if (comfyEnabled && comfyApiKey) {
       providers.push({ id: "comfy", name: "ComfyUI" });
     }
     return providers;
-  }, [replicateEnabled, replicateApiKey, kieEnabled, kieApiKey, openaiEnabled, openaiApiKey, comfyApiKey]);
+  }, [replicateEnabled, replicateApiKey, kieEnabled, kieApiKey, openaiEnabled, openaiApiKey, comfyEnabled, comfyApiKey]);
 
   // Migrate legacy data: derive selectedModel from model field if missing
   useEffect(() => {

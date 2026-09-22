@@ -54,7 +54,7 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
   const nodeData = data;
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   // Use stable selector for API keys to prevent unnecessary re-fetches
-  const { geminiApiKey, replicateApiKey, falApiKey, kieApiKey, comfyApiKey, replicateEnabled, kieEnabled } = useProviderApiKeys();
+  const { geminiApiKey, replicateApiKey, falApiKey, kieApiKey, comfyApiKey, comfyEnabled, replicateEnabled, kieEnabled } = useProviderApiKeys();
   const [externalModels, setExternalModels] = useState<ProviderModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelsFetchError, setModelsFetchError] = useState<string | null>(null);
@@ -100,11 +100,11 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
       providers.push({ id: "kie", name: "Kie.ai" });
     }
     // Add ComfyUI (Comfy Router) if a key is available (its own or the Comfy Cloud key)
-    if (comfyApiKey) {
+    if (comfyEnabled && comfyApiKey) {
       providers.push({ id: "comfy", name: "ComfyUI" });
     }
     return providers;
-  }, [geminiApiKey, replicateEnabled, replicateApiKey, kieEnabled, kieApiKey, comfyApiKey]);
+  }, [geminiApiKey, replicateEnabled, replicateApiKey, kieEnabled, kieApiKey, comfyEnabled, comfyApiKey]);
 
   // Fetch models from external providers when provider changes
   const fetchModels = useCallback(async () => {

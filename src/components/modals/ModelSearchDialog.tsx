@@ -191,7 +191,7 @@ export function ModelSearchDialog({
     trackModelUsage,
   } = useWorkflowStore();
   // Use stable selector for API keys to prevent unnecessary re-fetches
-  const { replicateApiKey, falApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey } = useProviderApiKeys();
+  const { replicateApiKey, falApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey, comfyEnabled } = useProviderApiKeys();
   const { screenToFlowPosition } = useReactFlow();
 
   // State
@@ -516,13 +516,13 @@ export function ModelSearchDialog({
     if (kieApiKey) providers.add("kie");
     if (wavespeedApiKey) providers.add("wavespeed");
     if (openaiApiKey) providers.add("openai");
-    if (comfyApiKey) providers.add("comfy");
+    if (comfyEnabled && comfyApiKey) providers.add("comfy");
     // Server-side keys (from env vars, reported by /api/models)
     for (const p of serverAvailableProviders) {
       providers.add(p as ProviderType);
     }
     return providers;
-  }, [replicateApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey, serverAvailableProviders]);
+  }, [replicateApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey, comfyEnabled, serverAvailableProviders]);
 
   // Reset provider filter if current selection becomes unavailable
   useEffect(() => {

@@ -66,6 +66,7 @@ export async function POST(request: NextRequest) {
           pollModelId: modelId,
           pollModelName: modelName,
           pollMediaType: mediaType,
+          ...(pollResult.retryAfterMs ? { retryAfterMs: pollResult.retryAfterMs } : {}),
         });
       }
 

@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { buildComfyRouterBody, readComfyRouterResult } from "../comfy";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { buildComfyRouterBody, fetchComfyMediaResult, parseRetryAfter, readComfyRouterResult } from "../comfy";
 import type { GenerationInput } from "@/lib/providers/types";
 
 /**
@@ -319,5 +319,69 @@ describe("readComfyRouterResult", () => {
     expect(() =>
       readComfyRouterResult("wanVideo", { output: { task_status: "FAILED", message: "quota exceeded" } })
     ).toThrow("Wan: quota exceeded");
+  });
+});
+
+describe("parseRetryAfter", () => {
+  it("reads delta-seconds", () => {
+    expect(parseRetryAfter("3")).toBe(3000);
+    expect(parseRetryAfter(" 1.5 ")).toBe(1500);
+  });
+
+  it("reads an HTTP-date relative to now", () => {
+    const now = Date.parse("Tue, 22 Sep 2026 10:00:00 GMT");
+    expect(parseRetryAfter("Tue, 22 Sep 2026 10:00:05 GMT", now)).toBe(5000);
+  });
+
+  it("ignores absent, zero, past and junk values", () => {
+    expect(parseRetryAfter(null)).toBeUndefined();
+    expect(parseRetryAfter("0")).toBeUndefined();
+    expect(parseRetryAfter("Tue, 22 Sep 2026 09:00:00 GMT", Date.parse("Tue, 22 Sep 2026 10:00:00 GMT"))).toBeUndefined();
+    expect(parseRetryAfter("soon")).toBeUndefined();
+  });
+});
+
+describe("fetchComfyMediaResult download bounds", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const KLING_VIDEO = { data: { task_status: "succeed", task_result: { videos: [{ url: "https://cdn.example.com/out.bin" }] } } };
+
+  function collectThen(media: Response, result: unknown = { status: "Ready", result: { sample: "https://cdn.example.com/out.bin" } }) {
+    const collect = new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(collect).mockResolvedValueOnce(media) as unknown as typeof fetch;
+  }
+
+  it("inlines an image", async () => {
+    collectThen(new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "Content-Type": "image/png", "Content-Length": "3" } }));
+    const out = await fetchComfyMediaResult("t", "key", "bfl/flux-2-pro", "req", "image");
+    expect(out.success).toBe(true);
+    expect(out.outputs?.[0]?.data).toBe(`data:image/png;base64,${Buffer.from([1, 2, 3]).toString("base64")}`);
+  });
+
+  it("returns the URL for a video above the inline limit without reading it", async () => {
+    const body = new ReadableStream({ pull(controller) { controller.enqueue(new Uint8Array(1024)); } });
+    const cancel = vi.spyOn(ReadableStream.prototype, "cancel");
+    collectThen(new Response(body, { status: 200, headers: { "Content-Type": "video/mp4", "Content-Length": String(30 * 1024 * 1024) } }), KLING_VIDEO);
+    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req", "video");
+    expect(out.success).toBe(true);
+    expect(out.outputs?.[0]).toEqual({ type: "video", data: "", url: "https://cdn.example.com/out.bin" });
+    expect(cancel).toHaveBeenCalled();
+    cancel.mockRestore();
+  });
+
+  it("stops reading an unsized video once it passes the inline limit", async () => {
+    let served = 0;
+    const chunk = new Uint8Array(1024 * 1024);
+    const body = new ReadableStream({ pull(controller) { served += 1; controller.enqueue(chunk); } });
+    collectThen(new Response(body, { status: 200, headers: { "Content-Type": "video/mp4" } }), KLING_VIDEO);
+    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req", "video");
+    expect(out.outputs?.[0]).toEqual({ type: "video", data: "", url: "https://cdn.example.com/out.bin" });
+    expect(served).toBeLessThan(30);
   });
 });

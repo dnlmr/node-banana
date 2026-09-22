@@ -94,6 +94,14 @@ describe("/api/generate/poll route", () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
+    it("should pass the Router's Retry-After through as retryAfterMs", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ status: "IN_QUEUE", queue_position: 4 }, 200, { "Retry-After": "7" }));
+      const response = await POST(createMockPostRequest(comfyPoll, COMFY_HEADERS));
+      const data = await response.json();
+      expect(data.polling).toBe(true);
+      expect(data.retryAfterMs).toBe(7000);
+    });
+
     it("should return the polling envelope while the task is processing", async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ status: "IN_PROGRESS", queue_position: 2 }));
 

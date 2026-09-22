@@ -319,6 +319,20 @@ export async function submitComfyTask(
   return { taskId: submitted.request_id };
 }
 
+/** `Retry-After` as milliseconds: delta-seconds or an HTTP-date; undefined when absent or unusable. */
+export function parseRetryAfter(header: string | null, now: number = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const trimmed = header.trim();
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return seconds > 0 ? Math.round(seconds * 1000) : undefined;
+  }
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return undefined;
+  const delta = at - now;
+  return delta > 0 ? delta : undefined;
+}
+
 export type ComfyTaskStatus =
   | { status: "processing"; retryAfterMs?: number }
   | { status: "failed"; error: string }
@@ -344,9 +358,8 @@ export async function checkComfyTaskOnce(
     if (status.error_type) return { status: "failed", error: `Comfy Router: ${status.error_type}` };
     return { status: "completed" };
   }
-  const retryAfter = Number(response.headers.get("Retry-After"));
   console.log(`[API:${requestId}] Comfy Router ${taskId}: ${status.status ?? "?"}${status.queue_position ? ` (queue ${status.queue_position})` : ""}`);
-  return { status: "processing", retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined };
+  return { status: "processing", retryAfterMs: parseRetryAfter(response.headers.get("Retry-After")) };
 }
 
 /* ------------------------------------------------------------------ results */
@@ -511,7 +524,41 @@ export function readComfyRouterResult(family: ComfyRouterFamily, result: Json): 
   }
 }
 
-/** Download an output URL and inline it; large files come back as URLs. */
+/**
+ * Read a body up to `limit` bytes. Past the limit the stream is cancelled
+ * and `null` comes back, so a large file never sits in memory.
+ */
+async function readBounded(response: Response, limit: number): Promise<Buffer | null> {
+  const declared = Number(response.headers.get("content-length") || 0);
+  if (declared > limit) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!response.body) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return buffer.byteLength > limit ? null : buffer;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Download an output and inline it as a data URL. Images are always
+ * inlined, because the image response carries no URL field; videos above
+ * the inline limit come back as their URL instead, as with Kie.
+ */
 async function materialise(
   requestId: string,
   found: Found,
@@ -523,17 +570,22 @@ async function materialise(
   if (!check.valid) throw new Error(`Invalid media URL: ${check.error}`);
 
   const response = await fetch(found.source, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok) throw new Error(`Failed to fetch output: ${response.status}`);
-  const declared = Number(response.headers.get("content-length") || 0);
-  if (declared > MAX_MEDIA_SIZE) throw new Error(`Media too large: ${(declared / 1048576).toFixed(0)}MB > 500MB limit`);
-
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_MEDIA_SIZE) throw new Error(`Media too large: ${(buffer.byteLength / 1048576).toFixed(0)}MB > 500MB limit`);
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Failed to fetch output: ${response.status}`);
+  }
   const contentType = found.mimeType || response.headers.get("content-type")?.split(";")[0] || (type === "video" ? "video/mp4" : "image/png");
-  console.log(`[API:${requestId}] Comfy Router output ${contentType}, ${(buffer.byteLength / 1048576).toFixed(2)}MB`);
 
-  if (buffer.byteLength > INLINE_LIMIT) return { type, data: "", url: found.source };
-  return { type, data: `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`, url: found.source };
+  const buffer = await readBounded(response, type === "video" ? INLINE_LIMIT : MAX_MEDIA_SIZE);
+  if (!buffer) {
+    if (type === "video") {
+      console.log(`[API:${requestId}] Comfy Router video above ${INLINE_LIMIT / 1048576}MB, returning its URL`);
+      return { type, data: "", url: found.source };
+    }
+    throw new Error(`Media too large: over the ${MAX_MEDIA_SIZE / 1048576}MB limit`);
+  }
+  console.log(`[API:${requestId}] Comfy Router output ${contentType}, ${(buffer.byteLength / 1048576).toFixed(2)}MB`);
+  return { type, data: `data:${contentType};base64,${buffer.toString("base64")}`, url: found.source };
 }
 
 /** Collect a completed run and turn it into the app's output. */
