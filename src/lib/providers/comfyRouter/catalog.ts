@@ -110,7 +110,7 @@ export interface ResolvedRouterModel {
  * the Router publishes per model, falling back to the binding's list.
  */
 export function servingProviders(doc: OpenApi, binding: RouterBinding): string[] {
-  const alternates = (doc as { "x-comfy-router-alt-providers"?: Array<{ provider?: string }> })["x-comfy-router-alt-providers"];
+  const alternates = doc["x-comfy-router-alt-providers"];
   if (Array.isArray(alternates) && alternates.length) {
     return ["comfy", ...alternates.map((entry) => entry.provider).filter((name): name is string => typeof name === "string" && name !== "comfy")];
   }

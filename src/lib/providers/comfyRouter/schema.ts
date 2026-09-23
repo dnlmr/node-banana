@@ -15,6 +15,8 @@ export type OpenApi = {
   paths?: Record<string, Record<string, OpenApiOperation>>;
   components?: { schemas?: Record<string, JsonSchema> };
   info?: { version?: string };
+  /** Who else can serve the model, besides Comfy. */
+  "x-comfy-router-alt-providers"?: Array<{ provider?: string }>;
 };
 
 interface OpenApiOperation {

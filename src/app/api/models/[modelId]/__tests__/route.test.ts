@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { primeRouterSchema } from "@/lib/providers/comfyRouter/catalog";
+import type { JsonSchema, OpenApi } from "@/lib/providers/comfyRouter/schema";
 import { NextRequest } from "next/server";
 
 // Mock the route module to test internal functions
@@ -890,7 +891,7 @@ describe("/api/models/[modelId] schema endpoint", () => {
 
   describe("Comfy Router provider", () => {
     /** The smallest published schema: one request body with these properties. */
-    function doc(id: string, properties: Record<string, unknown>, required: string[] = ["prompt"]) {
+    function doc(id: string, properties: Record<string, JsonSchema>, required: string[] = ["prompt"]): OpenApi {
       return {
         paths: { [`/v2/models/${id}`]: { post: { requestBody: { content: { "application/json": { schema: { type: "object", required, properties } } } } } } },
       };
