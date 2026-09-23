@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [1.10.0] - 2026-09-23
+## [1.10.0] - 2026-09-24
 
 The ComfyUI provider release. One Comfy key now runs the partner models Comfy
 hosts, through Comfy Router, alongside the other providers.
@@ -14,20 +14,27 @@ hosts, through Comfy Router, alongside the other providers.
 ### Added
 
 - **ComfyUI as a model provider** — A `comfy` provider, shown as ComfyUI, backed by [Comfy Router](https://docs.comfy.org/development/comfy-router/quickstart). Enter a key from platform.comfy.org in Settings → Providers, or leave it empty and the Comfy Cloud key from the ComfyUI tab is used; `COMFY_API_KEY` works for `.env` setups too.
-- **38 models under one key** — Image: FLUX.2 Pro and Max, FLUX Kontext Pro and Max, FLUX 1.1 Pro and Ultra, GPT Image 2 and 1.5, Nano Banana Pro, Nano Banana 2 and Nano Banana via Vertex, Seedream 5.0 and 4.5, Grok Imagine Image 2.0 and 1, Ideogram v4, Recraft V4, Qwen Image 3.0, Kling Image O1. Video: Seedance 2.5, 2.0, 2.0 Fast and 1.5 Pro, Kling V3, V3 Omni, V2.6 and 3.0 Turbo, Veo 3.1, 3.1 Fast and 3, Grok Imagine Video 1.5, Runway Gen-4 Turbo, LTX 2.5 Pro and Fast, MiniMax H3, Wan 2.7 text and image to video, Luma Ray 2. Each shows in the model browser with its parameters and image handles.
+- **159 image, video, audio and 3D models under one key** — Every media model the Router publishes a schema for, across 72 partner request formats: Black Forest Labs (FLUX.2, Kontext, Fill, Expand, Canny, Depth, Erase, try-on, FLUX 3 video), OpenAI GPT Image, Gemini and Imagen on Vertex, Veo, xAI Grok Imagine, ByteDance Seedream and Seedance, Kling (text, omni, avatar, lip-sync), Wan and HappyHorse, Qwen Image, Recraft, Ideogram, Krea, Luma, Runway, LTX, MiniMax, Moonvalley, Bria image and video edits, Freepik enhancers, Meshy 3D, HeyGen and ByteDance voices, and more. The browser lists every one the Router currently serves.
+- **Settings from the Router's own schemas** — Each model's controls (values, ranges, defaults, descriptions) come from the schema the Router validates requests against, fetched live and cached, so they cannot drift from what the Router accepts.
+- **Every input a model takes** — Masks, last frames, reference and garment images, video and audio inputs get their own handles. Media a partner only accepts as a URL is uploaded to Comfy storage first.
 - **Queued runs** — Every Comfy Router job goes through the Router queue with an idempotency key and is polled the way Kie jobs are, so long video generations survive connection limits. The Router's `Retry-After` hint now sets the poll interval, capped at 60 seconds.
 
 ### Changed
 
 - **Poller honours server hints** — The client poller used by async providers waits as long as the server suggests before its own 3 to 8 second ramp, bounded by the overall timeout.
-- **Large outputs stream to a bound** — Video results above 20MB are returned as a URL without being buffered; images are always inlined.
+- **Large outputs stream to a bound** — Video and audio results above 20MB are returned as a URL without being buffered; images are always inlined; 3D models come back as their URL.
 
 ### Notes
 
-Comfy Router returns each partner's native response, so the app carries its own
-catalog of supported models with a request builder and result reader per model
-family. Adding a model of an existing family is one catalog entry; the schemas
-for every Router model are published at docs.comfy.org/router-schemas.
+Comfy Router returns each partner's native response, so each request format is
+described once, as data (`src/lib/providers/comfyRouter/families.json`): a
+request template, the media each handle carries and how it is encoded, and
+where the output or the partner's error sits in the response. A schema check
+validates every bound model's request against the published schema, and
+`npm run comfy:router-sync` reports Router models that are new since the last
+sync. Text models and provider-hosted aliases without a published schema are
+not offered; some partners (ElevenLabs on some accounts) must be enabled for
+the Comfy account before they run.
 
 ## [1.9.0] - 2026-08-06
 
