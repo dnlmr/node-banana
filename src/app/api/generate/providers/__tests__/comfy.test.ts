@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { fetchComfyMediaResult, parseRetryAfter, prepareRouterInput, readRouterResult, servingProvider, submitComfyTask } from "../comfy";
-import { nodeParameters, primeRouterSchema } from "@/lib/providers/comfyRouter/catalog";
+import { nodeParameters, primeRouterSchema, servingProviders } from "@/lib/providers/comfyRouter/catalog";
 import { routerBinding, type RouterBinding } from "@/lib/providers/comfyRouter/families";
 import { buildRouterBody } from "@/lib/providers/comfyRouter/request";
 import type { DerivedParam } from "@/lib/providers/comfyRouter/schema";
@@ -302,17 +302,26 @@ describe("serving provider", () => {
 
   const nanoBananaPro = () => binding("vertexai/gemini-3-pro-image");
 
-  it("offers the model's providers as its first setting, Comfy by default", () => {
-    const [first] = nodeParameters([], nanoBananaPro());
-    expect(first).toMatchObject({ name: "model_provider", enum: ["comfy", "fal", "runware", "wavespeed"], default: "comfy" });
-    expect(nodeParameters([], binding("bfl/flux-2-pro"))).toEqual([]);
+
+  it("reads the providers from the schema's x-comfy-router-alt-providers, falling back to the binding", () => {
+    const doc = { "x-comfy-router-alt-providers": [{ provider: "fal" }, { provider: "wavespeed" }] };
+    expect(servingProviders(doc, nanoBananaPro())).toEqual(["comfy", "fal", "wavespeed"]);
+    expect(servingProviders({}, nanoBananaPro())).toEqual(["comfy", "fal", "runware", "wavespeed"]);
+    expect(servingProviders({}, binding("bfl/flux-2-pro"))).toEqual(["comfy"]);
+  });
+
+  it("offers the providers as the first setting, Comfy by default", () => {
+    const [first] = nodeParameters([], ["comfy", "fal"]);
+    expect(first).toMatchObject({ name: "model_provider", enum: ["comfy", "fal"], default: "comfy" });
+    expect(nodeParameters([], ["comfy"])).toEqual([]);
   });
 
   it("asks for an alternate only when one is picked and offered", () => {
-    expect(servingProvider(nanoBananaPro(), "fal")).toBe("fal");
-    expect(servingProvider(nanoBananaPro(), "comfy")).toBeNull();
-    expect(servingProvider(nanoBananaPro(), "higgsfield")).toBeNull();
-    expect(servingProvider(binding("bfl/flux-2-pro"), "fal")).toBeNull();
+    const providers = ["comfy", "fal", "runware", "wavespeed"];
+    expect(servingProvider(providers, "fal")).toBe("fal");
+    expect(servingProvider(providers, "comfy")).toBeNull();
+    expect(servingProvider(providers, "higgsfield")).toBeNull();
+    expect(servingProvider(["comfy"], "fal")).toBeNull();
   });
 
   it("submits to ?model_provider= and keeps the setting out of the body", async () => {

@@ -131,9 +131,9 @@ function modelPath(modelId: string): string {
  * Anything not in the model's list is ignored rather than sent, so a stale
  * setting (a model that lost an alternate) falls back to the default.
  */
-export function servingProvider(binding: RouterBinding, value: unknown): string | null {
-  if (typeof value !== "string" || binding.providers.length < 2) return null;
-  if (value === binding.providers[0] || !binding.providers.includes(value)) return null;
+export function servingProvider(providers: string[], value: unknown): string | null {
+  if (typeof value !== "string" || providers.length < 2) return null;
+  if (value === providers[0] || !providers.includes(value)) return null;
   return value;
 }
 
@@ -145,13 +145,13 @@ export async function submitComfyTask(
 ): Promise<{ taskId: string }> {
   const resolved = await resolveRouterModel(input.model.id, apiKey);
   if (!resolved) throw new Error(`${input.model.id} is not a Comfy Router model this app can run`);
-  const { binding, params } = resolved;
+  const { binding, params, providers } = resolved;
 
   const prepared = await prepareRouterInput(binding, input, apiKey);
   const missing = missingInputs(binding, prepared);
   if (missing) throw new Error(missing);
   const body = buildRouterBody(binding, params, prepared);
-  const provider = servingProvider(binding, input.parameters?.[ROUTER_PROVIDER_PARAM]);
+  const provider = servingProvider(providers, input.parameters?.[ROUTER_PROVIDER_PARAM]);
   console.log(`[API:${requestId}] Comfy Router submit ${binding.id} (${binding.family})${provider ? ` via ${provider}` : ""}`);
 
   const response = await fetch(`${modelPath(binding.id)}/requests${provider ? `?model_provider=${encodeURIComponent(provider)}` : ""}`, {
@@ -161,10 +161,19 @@ export async function submitComfyTask(
     signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
   });
 
-  if (!response.ok) throw new Error(await routerErrorMessage(response));
+  if (!response.ok) {
+    const message = await routerErrorMessage(response);
+    // The Router's refusal names no field; through an alternate provider the
+    // usual cause is a setting that provider does not take.
+    if (provider && /invalid_input/.test(message)) {
+      throw new Error(`${message}. Not every setting is available through ${provider}; try the comfy provider or fewer settings.`);
+    }
+    throw new Error(message);
+  }
 
   const submitted = (await response.json()) as { request_id?: string };
   if (!submitted.request_id) throw new Error("Comfy Router returned no request id");
+  console.log(`[API:${requestId}] Comfy Router queued ${binding.id} as ${submitted.request_id}`);
   return { taskId: submitted.request_id };
 }
 

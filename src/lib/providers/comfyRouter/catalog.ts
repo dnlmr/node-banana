@@ -101,13 +101,27 @@ export function primeRouterSchema(id: string, doc: OpenApi): void {
 export interface ResolvedRouterModel {
   binding: RouterBinding;
   params: DerivedParam[];
+  /** Who can serve it, default ("comfy") first; one entry when there is no choice. */
+  providers: string[];
+}
+
+/**
+ * Serving providers from the schema's `x-comfy-router-alt-providers`, which
+ * the Router publishes per model, falling back to the binding's list.
+ */
+export function servingProviders(doc: OpenApi, binding: RouterBinding): string[] {
+  const alternates = (doc as { "x-comfy-router-alt-providers"?: Array<{ provider?: string }> })["x-comfy-router-alt-providers"];
+  if (Array.isArray(alternates) && alternates.length) {
+    return ["comfy", ...alternates.map((entry) => entry.provider).filter((name): name is string => typeof name === "string" && name !== "comfy")];
+  }
+  return binding.providers.length ? binding.providers : ["comfy"];
 }
 
 export async function resolveRouterModel(id: string, apiKey: string | null): Promise<ResolvedRouterModel | null> {
   const binding = routerBinding(id);
   if (!binding) return null;
   const doc = await getRouterSchema(id, apiKey);
-  return { binding, params: deriveParams(doc, binding.params, binding.paramOverrides) };
+  return { binding, params: deriveParams(doc, binding.params, binding.paramOverrides), providers: servingProviders(doc, binding) };
 }
 
 /** The setting that picks who serves a model; not part of the request body. */
@@ -117,16 +131,16 @@ export const ROUTER_PROVIDER_PARAM = "model_provider";
  * Node settings: what the user can change (fixed values are sent, not
  * shown), led by the serving provider for models that have more than one.
  */
-export function nodeParameters(params: DerivedParam[], binding?: RouterBinding): ModelParameter[] {
+export function nodeParameters(params: DerivedParam[], providers: string[] = []): ModelParameter[] {
   const settings: ModelParameter[] = params
     .filter((param) => param.fixed === undefined)
     .map(({ at: _at, fixed: _fixed, ...param }) => param);
-  if (binding && binding.providers.length > 1) {
+  if (providers.length > 1) {
     settings.unshift({
       name: ROUTER_PROVIDER_PARAM,
       type: "string",
-      enum: binding.providers,
-      default: binding.providers[0],
+      enum: providers,
+      default: providers[0],
       description: "Who runs the model. comfy routes to its maker; the others run the same model from the same settings.",
     });
   }
@@ -174,5 +188,5 @@ export async function comfyRouterNodeSchema(
 ): Promise<{ parameters: ModelParameter[]; inputs: ModelInput[] } | null> {
   const resolved = await resolveRouterModel(id, apiKey);
   if (!resolved) return null;
-  return { parameters: nodeParameters(resolved.params, resolved.binding), inputs: nodeInputs(resolved.binding) };
+  return { parameters: nodeParameters(resolved.params, resolved.providers), inputs: nodeInputs(resolved.binding) };
 }
