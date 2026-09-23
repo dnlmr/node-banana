@@ -203,13 +203,17 @@ If the model uses different endpoints than `/api/v1/jobs/createTask` and `/api/v
 
 ## Adding Comfy Router Models
 
-Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~220 partner models behind one Comfy key. Its catalog endpoint lists only ids and every model keeps its partner's native request and response shape, so the app curates its own list. Provider id is `comfy`, shown as "ComfyUI"; the key falls back to the Comfy Cloud key from the ComfyUI settings.
+Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~240 partner models behind one Comfy key and forwards each partner's native request and response. Provider id is `comfy`, shown as "ComfyUI"; the key falls back to the Comfy Cloud key from the ComfyUI settings.
 
-- **Catalog:** `src/lib/providers/comfyRouter.ts` — one entry per model (`id` is the Router id with its slash, e.g. `bfl/flux-2-pro`), its `family`, capabilities, `parameters` and `inputs`. The registry and schema routes read straight from it.
-- **Wire format per family:** `src/app/api/generate/providers/comfy.ts` — `buildComfyRouterBody(family, input)` and `readComfyRouterResult(family, result)`. A new model of an existing family is a catalog entry only. A new family needs a case in both functions.
-- **Schemas:** every Router model's input/output schema is published at `https://docs.comfy.org/router-schemas/{provider}/{model}.json` (no key needed). Check image fields there: some take raw base64 (`bfl`, `veo`, Gemini `inlineData`), some data URIs (`openai`, `runway`, `xai`, `minimax`), some URLs only (`luma`, `wan` images) — those last stay text-only.
-- **Transport:** always the queue (`POST …/requests` → poll `…/requests/{id}/status` respecting `Retry-After` → `GET …/requests/{id}`), with an `Idempotency-Key` per submit. The generate route returns the polling envelope with `pollProvider: "comfy"` and `/api/generate/poll` finishes the run.
-- **Tests:** `src/app/api/generate/providers/__tests__/comfy.test.ts` covers the body builders and result readers per family; add a case for any family you touch.
+Discovery and settings are live; wire formats are data:
+
+- **Which models exist:** `GET /v2/models` (paginated, needs the key), cached ten minutes. The browser offers every *bound* model the Router currently serves.
+- **Settings:** each model's published schema — `GET /v2/models/{id}/openapi.json` with the key, or `https://docs.comfy.org/router-schemas/{id}.json` without — cached six hours. `schema.ts` turns the request schema into the node's parameters (types, enums, ranges, defaults, descriptions); nothing about a setting is typed by hand unless the schema is looser than the partner.
+- **Wire formats:** `src/lib/providers/comfyRouter/families.json` — one *family* per partner request format: a request template (`body`), the media handles it fills and how each is encoded (`base64`, `dataUrl`, or `url` = uploaded to Comfy storage first), where its settings live in the schema (`params.at`/`exclude`), per-setting `paramOverrides` (enum, default, value), and where the output or the partner's error sits in the response (`result.media`/`errors`). The binding language is documented at the top of `template.ts`. Models the app cannot drive are listed under `excluded` with the reason.
+- **New model of a known format:** add it to that family's `models` (id, name, description, capabilities, any per-model overrides). **New format:** add a family.
+- **Checks:** `npm run comfy:router-sync` downloads every schema into `.scratch/comfy-router-schemas` and lists Router models that are neither bound nor excluded. Then `npx vitest run src/lib/providers/comfyRouter/__tests__/routerSchemas.test.ts` validates the smallest and fullest request of every bound model against its schema (Ajv) and checks each result path exists in the response schema. `src/app/api/generate/providers/__tests__/comfy.test.ts` pins bodies and result readings for the main formats.
+- **Transport:** always the queue (`POST …/requests` → poll `…/requests/{id}/status` respecting `Retry-After` → `GET …/requests/{id}`), with an `Idempotency-Key` per submit — synchronous partners (OpenAI, Qwen) work through it too. The generate route returns the polling envelope with `pollProvider: "comfy"` and `/api/generate/poll` finishes the run. Binary answers (ElevenLabs) become audio; 3D models return as their URL.
+- **Masks:** partners disagree. OpenAI edits where the mask is transparent; FLUX Fill and Bria edit where it is white.
 
 ## API Routes
 

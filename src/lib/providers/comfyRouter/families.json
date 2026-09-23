@@ -245,14 +245,6 @@
      "type": "text",
      "required": true,
      "label": "Prompt"
-    },
-    {
-     "name": "image",
-     "type": "image",
-     "required": false,
-     "label": "Reference images",
-     "max": 4,
-     "encoding": "url"
     }
    ],
    "params": {
@@ -272,15 +264,7 @@
    "body": {
     "prompt": "{{prompt}}",
     "generation_type": "image",
-    "$params": true,
-    "image_ref": {
-     "$each": "input.image",
-     "max": 4,
-     "item": {
-      "url": "{{item}}",
-      "weight": 0.85
-     }
-    }
+    "$params": true
    },
    "result": {
     "media": [
@@ -306,23 +290,19 @@
      "name": "Photon",
      "description": "Luma's Photon image model: generates an image from a text prompt, optionally guided by reference images.",
      "capabilities": [
-      "text-to-image",
-      "image-to-image"
-     ],
-     "uploads": true
+      "text-to-image"
+     ]
     },
     {
      "id": "luma/photon-flash-1",
      "name": "Photon Flash",
      "description": "A faster, lower-cost version of Luma Photon that generates an image from text, optionally guided by reference images.",
      "capabilities": [
-      "text-to-image",
-      "image-to-image"
-     ],
-     "uploads": true
+      "text-to-image"
+     ]
     }
    ],
-   "notes": "Only exposed param is aspect_ratio (default 16:9). Luma documents up to 4 image_ref entries; style_ref, character_ref (identity0.images) and modify_image_ref (edit an image) are also available but not mapped. `model` must NOT be sent."
+   "notes": "Only exposed param is aspect_ratio (default 16:9). Luma documents up to 4 image_ref entries; style_ref, character_ref (identity0.images) and modify_image_ref (edit an image) are also available but not mapped. `model` must NOT be sent. Reference images (image_ref) are not bound: a live run with a Comfy-storage URL came back invalid_input (2026-09-24), so Photon is text to image until Luma's URL requirement is known."
   },
   {
    "family": "lumaUni",
