@@ -18,7 +18,7 @@ import { ROUTER_PROVIDER_PARAM, resolveRouterModel } from "@/lib/providers/comfy
 import type { RouterBinding, RouterOutput } from "@/lib/providers/comfyRouter/families";
 import { encodeMedia } from "@/lib/providers/comfyRouter/media";
 import { buildRouterBody, missingInputs, type RouterRequestInput } from "@/lib/providers/comfyRouter/request";
-import { findMedia, resultError, type ComfyMediaValue, type FoundMedia, type Json } from "@/lib/providers/comfyRouter/template";
+import { findMedia, findMediaAnywhere, resultError, type ComfyMediaValue, type FoundMedia, type Json } from "@/lib/providers/comfyRouter/template";
 import { routerBinding } from "@/lib/providers/comfyRouter/families";
 import { validateMediaUrl } from "@/utils/urlValidation";
 
@@ -289,7 +289,7 @@ function outputType(output: RouterOutput): OutputType {
 export function readRouterResult(binding: RouterBinding, result: Json): FoundMedia {
   const error = resultError(result, binding.result.errors);
   if (error) throw new Error(`${binding.name}: ${error}`);
-  const found = findMedia(result, binding.result);
+  const found = findMedia(result, binding.result) ?? findMediaAnywhere(result, binding.output);
   if (found) return found;
   throw new Error(`No ${binding.output === "3d" ? "3D model" : binding.output} in the ${binding.name} result`);
 }

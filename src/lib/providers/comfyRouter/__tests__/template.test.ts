@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findMedia, renderTemplate, resultError, type TemplateContext } from "../template";
+import { findMedia, findMediaAnywhere, renderTemplate, resultError, type TemplateContext } from "../template";
 
 const png = (n: number) => ({ base64: `B${n}`, dataUrl: `data:image/png;base64,B${n}`, url: `https://cdn/u${n}.png`, mime: "image/png" });
 
@@ -138,5 +138,18 @@ describe("resultError", () => {
 
   it("drops a trailing separator when the reason is absent", () => {
     expect(resultError({ data: { task_status: "failed" } }, rules)).toBe("Kling");
+  });
+});
+
+describe("findMediaAnywhere", () => {
+  it("finds an output under an alternate provider's own shape", () => {
+    const higgsfield = { data: { task_id: "x", task_status: "succeed", task_result: { videos: [{ url: "https://cdn.example.com/a/out.mp4" }] } } };
+    expect(findMediaAnywhere(higgsfield, "video")?.source).toBe("https://cdn.example.com/a/out.mp4");
+  });
+
+  it("skips echoed inputs and URLs of the wrong kind", () => {
+    const result = { input: { image_url: "https://x/in.png" }, first_frame: "https://x/f.png", thumbnail: "https://x/t.jpg", output: { url: "https://x/o.png" } };
+    expect(findMediaAnywhere(result, "image")?.source).toBe("https://x/o.png");
+    expect(findMediaAnywhere({ output: { url: "https://x/o.png" } }, "video")).toBeNull();
   });
 });

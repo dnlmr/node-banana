@@ -365,3 +365,39 @@ export function findMedia(result: unknown, spec: ResultSpec): FoundMedia | null 
   }
   return null;
 }
+
+const OUTPUT_KEYS = /^(url|uri|urls|video|video_url|videourl|image|image_url|imageurl|images|videos|sample|output|outputs|result|results|audio|audio_url|model_url|glb|download_url|file_url|assets)$/i;
+const INPUT_KEYS = /(input|prompt|reference|ref|source|first_frame|last_frame|mask|init|start|end_image|image_prompt|keyframe)/i;
+const EXTENSIONS: Record<string, RegExp> = {
+  image: /\.(png|jpe?g|webp|gif|avif|svg)(\?|$)/i,
+  video: /\.(mp4|mov|webm|m4v)(\?|$)/i,
+  audio: /\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i,
+  "3d": /\.(glb|gltf|fbx|obj|usdz)(\?|$)/i,
+};
+
+/**
+ * Last resort when none of a family's paths match: the first output-looking
+ * URL anywhere in the result. An alternate serving provider can answer in
+ * its own shape (Kling 3.0 Turbo served by Higgsfield comes back in classic
+ * Kling form), so this looks under output-sounding keys only, never under
+ * keys that echo inputs, and wants a file extension of the right kind.
+ */
+export function findMediaAnywhere(result: unknown, output: keyof typeof EXTENSIONS): FoundMedia | null {
+  const wanted = EXTENSIONS[output];
+  const seen = new Set<unknown>();
+  const visit = (node: unknown, key: string, depth: number): FoundMedia | null => {
+    if (depth > 12 || node === null || typeof node !== "object" || seen.has(node)) {
+      if (typeof node === "string" && /^https:\/\//.test(node) && OUTPUT_KEYS.test(key) && wanted?.test(node)) return { source: node };
+      return null;
+    }
+    seen.add(node);
+    const entries: Array<[string, unknown]> = Array.isArray(node) ? node.map((item) => [key, item]) : Object.entries(node as Json);
+    for (const [childKey, child] of entries) {
+      if (INPUT_KEYS.test(childKey)) continue;
+      const found = visit(child, childKey, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(result, "", 0);
+}

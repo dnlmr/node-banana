@@ -295,6 +295,11 @@ describe("fetchComfyMediaResult", () => {
 });
 
 describe("serving provider", () => {
+  it("reads Kling 3.0 Turbo served by Higgsfield, which answers in classic Kling form", () => {
+    const result = { data: { task_id: "t", task_status: "succeed", task_result: { videos: [{ url: "https://cdn.example.com/k.mp4" }] } }, request_id: "t" };
+    expect(readRouterResult(binding("kling/kling-3.0-turbo"), result).source).toBe("https://cdn.example.com/k.mp4");
+  });
+
   const nanoBananaPro = () => binding("vertexai/gemini-3-pro-image");
 
   it("offers the model's providers as its first setting, Comfy by default", () => {

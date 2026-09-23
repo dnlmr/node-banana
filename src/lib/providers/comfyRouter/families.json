@@ -4103,7 +4103,8 @@
    "result": {
     "media": [
      "data[0].outputs[*].url",
-     "data[0].outputs[*].watermark_url"
+     "data[0].outputs[*].watermark_url",
+     "data.task_result.videos[*].url"
     ],
     "errors": [
      {
