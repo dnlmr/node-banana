@@ -324,6 +324,27 @@ describe("serving provider", () => {
     expect(servingProvider(["comfy"], "fal")).toBeNull();
   });
 
+  it("sends data-URL media by URL through an alternate provider, raw base64 stays", async () => {
+    const original = global.fetch;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).endsWith("/customers/storage")) return new Response(JSON.stringify({ upload_url: "https://up/x", download_url: "https://cdn.comfy/x.png" }));
+      return new Response("", { status: 200 });
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const seedance = binding("byteplus/dreamina-seedance-2-0-260128");
+      const viaHiggsfield = await prepareRouterInput(seedance, makeInput({ images: [PNG_URL] }), "key", "higgsfield");
+      const body = buildRouterBody(seedance, [], viaHiggsfield);
+      expect((body.content as Array<Record<string, unknown>>)[1]).toMatchObject({ image_url: { url: "https://cdn.comfy/x.png" }, role: "first_frame" });
+      const gemini = binding("vertexai/gemini-3-pro-image");
+      const viaFal = await prepareRouterInput(gemini, makeInput({ images: [PNG_URL] }), "key", "fal");
+      const parts = (buildRouterBody(gemini, [], viaFal).contents as Array<{ parts: unknown[] }>)[0]!.parts;
+      expect(parts[1]).toEqual({ inlineData: { mimeType: "image/png", data: PNG_B64 } });
+    } finally {
+      global.fetch = original;
+    }
+  });
+
   it("submits to ?model_provider= and keeps the setting out of the body", async () => {
     primeRouterSchema("kling/kling-v3", {
       paths: { "/v2/models/kling/kling-v3": { post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { prompt: { type: "string" }, duration: { type: "string" } } } } } } } } },

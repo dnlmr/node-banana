@@ -70,14 +70,28 @@ function wantsDuration(binding: RouterBinding, handle: string): boolean {
   return JSON.stringify(binding.body).includes(`input.${handle}[0].duration`);
 }
 
-/** Everything the template needs, with media encoded (and uploaded) per handle. */
-export async function prepareRouterInput(binding: RouterBinding, input: GenerationInput, apiKey: string): Promise<RouterRequestInput> {
+/**
+ * Everything the template needs, with media encoded (and uploaded) per handle.
+ * Through an alternate provider, media the model would take inline as a data
+ * URL go up as Comfy storage URLs instead: Seedance served by Higgsfield
+ * refuses a data-URL first frame and accepts the same image by URL. Raw
+ * base64 fields (Gemini's inlineData, Veo's bytes) cannot take a URL and stay.
+ */
+export async function prepareRouterInput(
+  binding: RouterBinding,
+  input: GenerationInput,
+  apiKey: string,
+  provider: string | null = null
+): Promise<RouterRequestInput> {
   const raw = mediaByHandle(binding, input);
   const media: Record<string, ComfyMediaValue[]> = {};
+  const encodings: Record<string, "base64" | "dataUrl" | "url"> = {};
   for (const handle of binding.inputs) {
     const values = raw[handle.name];
     if (!values?.length) continue;
-    const encoding = handle.encoding ?? "dataUrl";
+    const declared = handle.encoding ?? "dataUrl";
+    const encoding = provider && declared === "dataUrl" ? "url" : declared;
+    if (encoding !== declared) encodings[handle.name] = encoding;
     media[handle.name] = await Promise.all(
       values.map((value) => encodeMedia(value, encoding, apiKey, { needsDuration: wantsDuration(binding, handle.name) }))
     );
@@ -88,6 +102,7 @@ export async function prepareRouterInput(binding: RouterBinding, input: Generati
     negativePrompt: negative,
     parameters: input.parameters,
     media,
+    encodings,
   };
 }
 
@@ -147,11 +162,11 @@ export async function submitComfyTask(
   if (!resolved) throw new Error(`${input.model.id} is not a Comfy Router model this app can run`);
   const { binding, params, providers } = resolved;
 
-  const prepared = await prepareRouterInput(binding, input, apiKey);
+  const provider = servingProvider(providers, input.parameters?.[ROUTER_PROVIDER_PARAM]);
+  const prepared = await prepareRouterInput(binding, input, apiKey, provider);
   const missing = missingInputs(binding, prepared);
   if (missing) throw new Error(missing);
   const body = buildRouterBody(binding, params, prepared);
-  const provider = servingProvider(providers, input.parameters?.[ROUTER_PROVIDER_PARAM]);
   console.log(`[API:${requestId}] Comfy Router submit ${binding.id} (${binding.family})${provider ? ` via ${provider}` : ""}`);
 
   const response = await fetch(`${modelPath(binding.id)}/requests${provider ? `?model_provider=${encodeURIComponent(provider)}` : ""}`, {

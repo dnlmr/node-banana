@@ -18,6 +18,8 @@ export interface RouterRequestInput {
   parameters?: Record<string, unknown>;
   /** Encoded media per handle name. */
   media: Record<string, ComfyMediaValue[]>;
+  /** Per-handle encodings that replace the binding's (media sent by URL for an alternate provider). */
+  encodings?: Record<string, MediaEncoding>;
   randomSeed?: () => number;
 }
 
@@ -78,7 +80,8 @@ export function buildRouterBody(binding: RouterBinding, derived: DerivedParam[],
   const spreadParams = derived.filter((param) => param.at === container).map((param) => param.name);
   const encodings: Record<string, MediaEncoding> = {};
   for (const handle of binding.inputs) {
-    if (handle.encoding) encodings[handle.name] = handle.encoding;
+    const encoding = input.encodings?.[handle.name] ?? handle.encoding;
+    if (encoding) encodings[handle.name] = encoding;
   }
   // Each handle takes at most its declared number of values.
   const media: Record<string, ComfyMediaValue[]> = {};
