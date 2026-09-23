@@ -224,6 +224,12 @@ export async function checkComfyTaskOnce(
   });
 
   if (response.status === 410) return { status: "failed", error: "Comfy Router result expired" };
+  // A busy or briefly unavailable Router is not a failed run: keep polling.
+  if (response.status === 429 || response.status >= 500) {
+    await response.body?.cancel().catch(() => undefined);
+    console.log(`[API:${requestId}] Comfy Router ${taskId}: status check ${response.status}, will retry`);
+    return { status: "processing", retryAfterMs: parseRetryAfter(response.headers.get("Retry-After")) };
+  }
   if (!response.ok) return { status: "failed", error: await routerErrorMessage(response) };
 
   const status = (await response.json()) as { status?: string; error_type?: string; queue_position?: number };

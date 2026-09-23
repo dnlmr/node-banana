@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { fetchComfyMediaResult, parseRetryAfter, prepareRouterInput, readRouterResult, servingProvider, submitComfyTask } from "../comfy";
+import { checkComfyTaskOnce, fetchComfyMediaResult, parseRetryAfter, prepareRouterInput, readRouterResult, servingProvider, submitComfyTask } from "../comfy";
 import { nodeParameters, primeRouterSchema, servingProviders } from "@/lib/providers/comfyRouter/catalog";
 import { routerBinding, type RouterBinding } from "@/lib/providers/comfyRouter/families";
 import { buildRouterBody } from "@/lib/providers/comfyRouter/request";
@@ -359,6 +359,22 @@ describe("serving provider", () => {
       const body = JSON.parse(String(init.body));
       expect(body).not.toHaveProperty("model_provider");
       expect(body.duration).toBe("5");
+    } finally {
+      global.fetch = original;
+    }
+  });
+});
+
+describe("checkComfyTaskOnce", () => {
+  it("keeps polling through a transient 503 or 429 from the status route", async () => {
+    const original = global.fetch;
+    try {
+      for (const status of [503, 429]) {
+        global.fetch = vi.fn().mockResolvedValue(new Response("busy", { status, headers: { "Retry-After": "4" } })) as unknown as typeof fetch;
+        expect(await checkComfyTaskOnce("t", "key", "kling/kling-v3", "r1")).toEqual({ status: "processing", retryAfterMs: 4000 });
+      }
+      global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "nope" }), { status: 404 })) as unknown as typeof fetch;
+      expect((await checkComfyTaskOnce("t", "key", "kling/kling-v3", "r1")).status).toBe("failed");
     } finally {
       global.fetch = original;
     }
