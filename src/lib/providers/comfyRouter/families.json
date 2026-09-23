@@ -197,7 +197,12 @@
       "text-to-video",
       "image-to-video"
      ],
-     "uploads": true
+     "uploads": true,
+     "paramOverrides": {
+      "loop": {
+       "default": false
+      }
+     }
     },
     {
      "id": "luma/ray-flash-2",
@@ -1119,7 +1124,8 @@
     "$params": true
    },
    "result": {
-    "binary": true
+    "binary": true,
+    "media": []
    },
    "models": [
     {
@@ -1182,7 +1188,8 @@
     }
    },
    "result": {
-    "binary": true
+    "binary": true,
+    "media": []
    },
    "models": [
     {
@@ -1489,7 +1496,22 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "aspect_ratio": {
+       "enum": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "3:2",
+        "2:3",
+        "21:9",
+        "9:21"
+       ]
+      }
+     }
     },
     {
      "id": "bfl/flux-kontext-max",
@@ -1498,7 +1520,22 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "aspect_ratio": {
+       "enum": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "3:2",
+        "2:3",
+        "21:9",
+        "9:21"
+       ]
+      }
+     }
     }
    ],
    "notes": "input_image accepts base64 or an http(s) URL; images 2-4 are BFL's experimental multi-reference. aspect_ratio is a free string between 21:9 and 9:21 (no enum) - the UI should offer the usual ratios; when omitted BFL uses the input image's ratio (or 1:1). Router polls BFL itself and returns the terminal get_result document; `result.sample` is a Comfy-hosted signed URL (up to 24h, can be as short as ~1h on replay, or BFL's own ~10 min image / ~2h video URL if re-hosting failed) - download it at once. `status` is forwarded in BFL's own spelling and compared case-insensitively by Router, so the error rule lists Ready/ready/READY; a failed task arrives as a Router error (provider_failed), not as this body."
@@ -1626,7 +1663,22 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "aspect_ratio": {
+       "enum": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "3:2",
+        "2:3",
+        "21:9",
+        "9:21"
+       ]
+      }
+     }
     }
    ],
    "notes": "image_prompt_strength (0-1, default 0.1) only matters with an image prompt; it is harmless without one. aspect_ratio is a free string between 21:9 and 9:21 (default 16:9). Router polls BFL itself and returns the terminal get_result document; `result.sample` is a Comfy-hosted signed URL (up to 24h, can be as short as ~1h on replay, or BFL's own ~10 min image / ~2h video URL if re-hosting failed) - download it at once. `status` is forwarded in BFL's own spelling and compared case-insensitively by Router, so the error rule lists Ready/ready/READY; a failed task arrives as a Router error (provider_failed), not as this body."
@@ -3439,6 +3491,9 @@
         "1080p"
        ],
        "default": "720p"
+      },
+      "ratio": {
+       "default": "adaptive"
       }
      }
     },
@@ -3476,6 +3531,9 @@
         "720p"
        ],
        "default": "720p"
+      },
+      "ratio": {
+       "default": "adaptive"
       }
      }
     },
@@ -3513,6 +3571,9 @@
         "720p"
        ],
        "default": "720p"
+      },
+      "ratio": {
+       "default": "adaptive"
       }
      }
     },
@@ -3551,6 +3612,9 @@
         "720p"
        ],
        "default": "720p"
+      },
+      "ratio": {
+       "default": "adaptive"
       }
      }
     },
@@ -3589,6 +3653,9 @@
         "1080p"
        ],
        "default": "720p"
+      },
+      "ratio": {
+       "default": "adaptive"
       }
      }
     },
@@ -3628,6 +3695,9 @@
         "1080p"
        ],
        "default": "1080p"
+      },
+      "ratio": {
+       "default": "adaptive"
       }
      }
     },
@@ -3667,6 +3737,9 @@
         "1080p"
        ],
        "default": "1080p"
+      },
+      "ratio": {
+       "default": "adaptive"
       }
      },
      "inputs": [
@@ -3813,7 +3886,7 @@
       "notIn": [
        "succeed"
       ],
-      "message": "Kling task {value}"
+      "message": "Kling task {value}: {@data.task_status_msg}"
      }
     ]
    },
@@ -3964,7 +4037,7 @@
       "notIn": [
        "succeed"
       ],
-      "message": "Kling task {value}"
+      "message": "Kling task {value}: {@data.task_status_msg}"
      }
     ]
    },
@@ -4125,7 +4198,7 @@
       "notIn": [
        "succeed"
       ],
-      "message": "Kling task {value}"
+      "message": "Kling task {value}: {@data.task_status_msg}"
      }
     ]
    },
@@ -4203,7 +4276,7 @@
       "notIn": [
        "succeed"
       ],
-      "message": "Kling task {value}"
+      "message": "Kling task {value}: {@data.task_status_msg}"
      }
     ]
    },
@@ -4277,7 +4350,7 @@
       "notIn": [
        "succeed"
       ],
-      "message": "Kling task {value}"
+      "message": "Kling task {value}: {@data.task_status_msg}"
      }
     ]
    },
@@ -4364,7 +4437,27 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "quality": {
+       "enum": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+       ],
+       "default": "medium"
+      },
+      "size": {
+       "enum": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+       ],
+       "default": "auto"
+      }
+     }
     },
     {
      "id": "openai/gpt-image-1.5",
@@ -4373,7 +4466,30 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "size": {
+       "enum": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+       ],
+       "default": "auto"
+      },
+      "quality": {
+       "default": "medium",
+       "enum": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+       ]
+      },
+      "background": {
+       "default": "opaque"
+      }
+     }
     },
     {
      "id": "openai/gpt-image-2",
@@ -4382,7 +4498,30 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "size": {
+       "enum": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+       ],
+       "default": "auto"
+      },
+      "quality": {
+       "default": "medium",
+       "enum": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+       ]
+      },
+      "background": {
+       "default": "opaque"
+      }
+     }
     },
     {
      "id": "openai/gpt-image-2.5-flare",
@@ -4391,7 +4530,27 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "quality": {
+       "enum": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+       ],
+       "default": "medium"
+      },
+      "size": {
+       "enum": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+       ],
+       "default": "auto"
+      }
+     }
     },
     {
      "id": "openai/gpt-image-2.5-sunburst",
@@ -4400,7 +4559,27 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "quality": {
+       "enum": [
+        "auto",
+        "low",
+        "medium",
+        "high"
+       ],
+       "default": "medium"
+      },
+      "size": {
+       "enum": [
+        "auto",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536"
+       ],
+       "default": "auto"
+      }
+     }
     }
    ],
    "notes": "One schema for all five ids, apart from descriptions. Sending `image` switches Router from generation to the edit operation, and the body leaves it out when no image is connected. `image` takes a data URI or a signed Comfy-asset https URL. data URIs are used because arbitrary https hosts are refused. Only png, webp and jpeg are accepted, with at most 25 MiB per image and 64 MiB per request. `mask` must be a PNG with an alpha channel, under 4 MiB, the same size as the first image. Router removes it when there is no image. `output_format` is fixed to png and `output_compression` is hidden, because the result reader cannot map the response's `output_format` ('png') to a mime type. The OpenAI-served response is always inline `data[].b64_json`. The fal, Runware or WaveSpeed fallback for gpt-image-2 returns `data[].url` only, hence the second media path. Exposed params: size (free string, e.g. 1024x1024, 1536x1024, 1024x1536, auto), quality, background (transparent/opaque), moderation (auto/low). The shared `quality` enum lists low, medium, high, xhigh, max, standard, hd and auto. standard and hd are DALL-E values, and xhigh/max are probably only valid on the 2.x ids, so the app should offer low, medium, high and auto by default. Which ids accept xhigh/max is not stated in the schema. gpt-image-1 sizes are limited to the three fixed sizes plus auto. The schema does not constrain this. The call is sync/direct-return with no queue handle."
@@ -4476,7 +4655,37 @@
      "description": "Recraft V4 text-to-image model for illustration and realistic raster images.",
      "capabilities": [
       "text-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "size": {
+       "enum": [
+        "1024x1024",
+        "1365x1024",
+        "1024x1365",
+        "1536x1024",
+        "1024x1536",
+        "1820x1024",
+        "1024x1820",
+        "1024x2048",
+        "2048x1024",
+        "1434x1024",
+        "1024x1434",
+        "1024x1280",
+        "1280x1024",
+        "1024x1707",
+        "1707x1024"
+       ],
+       "default": "1024x1024"
+      },
+      "style": {
+       "enum": [
+        "realistic_image",
+        "digital_illustration",
+        "vector_illustration"
+       ],
+       "default": "realistic_image"
+      }
+     }
     },
     {
      "id": "recraft/recraftv4_pro",
@@ -4897,7 +5106,7 @@
    },
    "result": {
     "media": [
-     "candidates[0].content.parts[*].inlineData.data|base64:@candidates[0].content.parts[*].inlineData.mimeType",
+     "candidates[0].content.parts[*].inlineData.data|base64:@.mimeType",
      "candidates[0].content.parts[*].fileData.fileUri"
     ],
     "errors": [
@@ -4928,7 +5137,32 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "aspectRatio": {
+       "enum": [
+        "1:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "21:9"
+       ],
+       "default": "1:1"
+      },
+      "imageSize": {
+       "enum": [
+        "1K",
+        "2K",
+        "4K"
+       ],
+       "default": "1K"
+      }
+     }
     },
     {
      "id": "vertexai/gemini-3.1-flash-image",
@@ -4937,7 +5171,32 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "aspectRatio": {
+       "enum": [
+        "1:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "21:9"
+       ],
+       "default": "1:1"
+      },
+      "imageSize": {
+       "enum": [
+        "1K",
+        "2K",
+        "4K"
+       ],
+       "default": "1K"
+      }
+     }
     },
     {
      "id": "vertexai/gemini-3.1-flash-lite-image",
@@ -4984,7 +5243,24 @@
        "max": 3,
        "encoding": "base64"
       }
-     ]
+     ],
+     "paramOverrides": {
+      "aspectRatio": {
+       "enum": [
+        "1:1",
+        "2:3",
+        "3:2",
+        "3:4",
+        "4:3",
+        "4:5",
+        "5:4",
+        "9:16",
+        "16:9",
+        "21:9"
+       ],
+       "default": "1:1"
+      }
+     }
     }
    ],
    "notes": "Same Vertex generateContent wire format as the hand-verified geminiImage family. aspectRatio and imageSize are free strings in the schema (no enum): the UI should offer 1:1 2:3 3:2 3:4 4:3 4:5 5:4 9:16 16:9 21:9 and 1K/2K/4K (3-pro-image, 3.1-flash-image); 2.5-flash-image is 1K only so imageSize is excluded there; 3.1-flash-lite-image sizes unverified. Inline images: raw base64 + inlineData.mimeType, which must be in the GeminiMimeType enum (png/jpeg/webp/heic/heif OK; gif is not). Image count max (14 / 3) comes from Google's docs, not the schema. uploadImagesToStorage is left unset so images come back as inlineData base64; fileData.fileUri path is only a fallback. A response may contain a text part before the image part, hence parts[*]. If thinking output were ever returned with includeThoughts, a thought image could match first; we never set thinkingConfig."
@@ -5142,7 +5418,7 @@
       "message": "Veo: {value}"
      },
      {
-      "path": "response.raiMediaFilteredReasons[0]",
+      "path": "response.raiMediaFilteredReasons",
       "message": "Veo filtered the output: {value}"
      }
     ]
@@ -5155,7 +5431,26 @@
      "capabilities": [
       "text-to-video",
       "image-to-video"
-     ]
+     ],
+     "paramOverrides": {
+      "aspectRatio": {
+       "default": "16:9"
+      },
+      "durationSeconds": {
+       "enum": [
+        4,
+        6,
+        8
+       ],
+       "default": 8
+      },
+      "resolution": {
+       "default": "720p"
+      },
+      "generateAudio": {
+       "default": true
+      }
+     }
     },
     {
      "id": "veo/veo-3.1-fast-generate-001",
@@ -5164,7 +5459,30 @@
      "capabilities": [
       "text-to-video",
       "image-to-video"
-     ]
+     ],
+     "paramOverrides": {
+      "aspectRatio": {
+       "default": "16:9"
+      },
+      "durationSeconds": {
+       "enum": [
+        4,
+        6,
+        8
+       ],
+       "default": 8
+      },
+      "resolution": {
+       "default": "720p",
+       "enum": [
+        "720p",
+        "1080p"
+       ]
+      },
+      "generateAudio": {
+       "default": true
+      }
+     }
     },
     {
      "id": "veo/veo-3.1-lite-generate-001",
@@ -5173,7 +5491,17 @@
      "capabilities": [
       "text-to-video",
       "image-to-video"
-     ]
+     ],
+     "paramOverrides": {
+      "durationSeconds": {
+       "enum": [
+        4,
+        6,
+        8
+       ],
+       "default": 8
+      }
+     }
     },
     {
      "id": "veo/veo-3.0-generate-001",
@@ -5198,7 +5526,30 @@
        "max": 1,
        "encoding": "base64"
       }
-     ]
+     ],
+     "paramOverrides": {
+      "aspectRatio": {
+       "default": "16:9"
+      },
+      "durationSeconds": {
+       "enum": [
+        4,
+        6,
+        8
+       ],
+       "default": 8
+      },
+      "resolution": {
+       "default": "720p",
+       "enum": [
+        "720p",
+        "1080p"
+       ]
+      },
+      "generateAudio": {
+       "default": true
+      }
+     }
     },
     {
      "id": "veo/veo-3.0-fast-generate-001",
@@ -5223,7 +5574,24 @@
        "max": 1,
        "encoding": "base64"
       }
-     ]
+     ],
+     "paramOverrides": {
+      "resolution": {
+       "enum": [
+        "720p",
+        "1080p"
+       ],
+       "default": "720p"
+      },
+      "durationSeconds": {
+       "enum": [
+        4,
+        6,
+        8
+       ],
+       "default": 8
+      }
+     }
     }
    ],
    "notes": "Matches the hand-verified veo family. All five Veo 3.x schemas are byte-identical; per-model limits are NOT in the schema: durationSeconds is a free number (Veo 3/3.1 accept 4, 6, 8), resolution enum lists 4k but only veo-3.1-generate-001 is known to do 4k (fast/lite/3.0: 720p/1080p). The schema description claims lastFrame works on 'Veo 3.0+', but the hand-verified catalog omits it for 3.0/3.0-fast, so those models override inputs to drop last_frame. Image mimeType enum is image/jpeg|image/png only: a webp/gif first or last frame will be rejected unless the interpreter transcodes. enhancePrompt excluded (Veo 3 does not allow disabling it), fps excluded (fixed 24), task excluded (Vertex infers it). Not exposed: referenceImages (up to 3 asset refs on 3.1, mutually exclusive with a first frame), video extend/edit via instances[].video and mask, and instances[].cameraControl (lives inside the instances array, which params.at cannot address). gcsUri is normally a signed https URL; it is a gs:// URI only on BYOK or custom storageUri, which the app never sets - the interpreter should still reject a gs:// value as 'no output'. Only veo-2.0 uses the legacy route; its schema lacks lastFrame/resolution/generateAudio and allows personGeneration ALLOW/BLOCK."
@@ -5302,7 +5670,12 @@
      "description": "xAI's Grok Imagine Image 2.0, with low and medium quality price tiers.",
      "capabilities": [
       "text-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "quality": {
+       "default": "medium"
+      }
+     }
     }
    ],
    "notes": "Matches the hand-verified grokImage family. Text-to-image only: this /v1/images/generations route has no image input (xAI editing is a separate endpoint not in the schema). The four schemas are identical and the body carries no 'model' field (Router selects the model from the path, as the verified family relies on). quality only matters for grok-imagine-image-2.0 (low/medium price tier; 'high' is in the enum but not documented as a tier) - other models ignore it, so the UI could hide it there. Router coerces response_format to url and re-hosts; b64_json fallback defaults to image/jpeg when mime_type is missing."
@@ -5804,7 +6177,20 @@
        "required": false,
        "label": "Negative prompt"
       }
-     ]
+     ],
+     "paramOverrides": {
+      "ratio": {
+       "default": "16:9"
+      },
+      "resolution": {
+       "default": "720P"
+      },
+      "duration": {
+       "minimum": 2,
+       "maximum": 15,
+       "default": 5
+      }
+     }
     },
     {
      "id": "wan/wan2.7-i2v",
@@ -5872,7 +6258,17 @@
        "max": 1,
        "encoding": "url"
       }
-     ]
+     ],
+     "paramOverrides": {
+      "resolution": {
+       "default": "720P"
+      },
+      "duration": {
+       "minimum": 2,
+       "maximum": 15,
+       "default": 5
+      }
+     }
     },
     {
      "id": "wan/wan3.0-video",
@@ -6607,7 +7003,20 @@
      "capabilities": [
       "text-to-image",
       "image-to-image"
-     ]
+     ],
+     "paramOverrides": {
+      "size": {
+       "enum": [
+        "1328*1328",
+        "1024*1024",
+        "1664*928",
+        "928*1664",
+        "1472*1104",
+        "1104*1472"
+       ],
+       "default": "1328*1328"
+      }
+     }
     },
     {
      "id": "qwen/qwen-image-3.0-pro",

@@ -17,7 +17,6 @@ vi.mock("@/lib/providers/cache", () => ({
 }));
 
 import { GET } from "../route";
-import { COMFY_ROUTER_MODELS } from "@/lib/providers/comfyRouter";
 
 // Store original env and fetch
 const originalEnv = { ...process.env };
@@ -969,13 +968,26 @@ describe("/api/models route", () => {
   });
 
   describe("Comfy Router provider", () => {
+    // The Router's live list: three bound models and one the app does not drive.
+    const LIVE = ["bfl/flux-2-pro", "bfl/flux-2-max", "veo/veo-3.1-generate-001", "anthropic/claude-opus-5"];
+
     beforeEach(() => {
       // The key is resolved from the header, then either Comfy env var
       delete process.env.COMFY_API_KEY;
       delete process.env.COMFY_CLOUD_API_KEY;
+      mockFetch.mockImplementation((url: string) => {
+        if (String(url).startsWith("https://api.comfy.org/v2/models")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ data: LIVE.map((id) => ({ id })), has_more: false, next_cursor: null }),
+          });
+        }
+        return Promise.reject(new Error(`unexpected fetch ${url}`));
+      });
     });
 
-    it("GET: provider=comfy with the header returns the curated catalog", async () => {
+    it("GET: provider=comfy offers the bound models the Router serves", async () => {
       const request = createMockGetRequest(
         { provider: "comfy" },
         { "X-Comfy-Router-Key": "test-comfy-key" }
@@ -985,16 +997,12 @@ describe("/api/models route", () => {
 
       expect(response.status).toBe(200);
       expect(data.success).toBe(true);
-      expect(data.models).toHaveLength(COMFY_ROUTER_MODELS.length);
+      expect(data.models.map((m: { id: string }) => m.id).sort()).toEqual(["bfl/flux-2-max", "bfl/flux-2-pro", "veo/veo-3.1-generate-001"]);
       expect(data.models.every((m: { provider: string }) => m.provider === "comfy")).toBe(true);
-      expect(data.providers.comfy).toEqual({
-        success: true,
-        count: COMFY_ROUTER_MODELS.length,
-        cached: true,
-      });
+      expect(data.providers.comfy).toEqual({ success: true, count: 3, cached: true });
       expect(data.availableProviders).toContain("comfy");
-      // The catalog is static; no external call is made
-      expect(mockFetch).not.toHaveBeenCalled();
+      // The list is read with the user's key
+      expect(mockFetch.mock.calls[0][1].headers["X-API-Key"]).toBe("test-comfy-key");
     });
 
     it("GET: provider=comfy without any key returns 400", async () => {
@@ -1016,10 +1024,8 @@ describe("/api/models route", () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      expect(data.models.length).toBeGreaterThan(0);
-      expect(data.models.length).toBeLessThan(COMFY_ROUTER_MODELS.length);
-      expect(data.models.every((m: { id: string }) => m.id.startsWith("bfl/"))).toBe(true);
-      expect(data.providers.comfy.count).toBe(data.models.length);
+      expect(data.models.map((m: { id: string }) => m.id).sort()).toEqual(["bfl/flux-2-max", "bfl/flux-2-pro"]);
+      expect(data.providers.comfy.count).toBe(2);
     });
 
     it("GET: comfy models join the aggregate when COMFY_CLOUD_API_KEY is set", async () => {
@@ -1029,10 +1035,10 @@ describe("/api/models route", () => {
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      // 8 gemini models (always included) + the Comfy Router catalog
-      expect(data.models).toHaveLength(8 + COMFY_ROUTER_MODELS.length);
+      // 8 gemini models (always included) + the three bound Router models
+      expect(data.models).toHaveLength(8 + 3);
       expect(data.providers.gemini.count).toBe(8);
-      expect(data.providers.comfy.count).toBe(COMFY_ROUTER_MODELS.length);
+      expect(data.providers.comfy.count).toBe(3);
       expect(data.availableProviders).toEqual(expect.arrayContaining(["gemini", "comfy"]));
     });
   });

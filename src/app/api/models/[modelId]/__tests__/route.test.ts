@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { primeRouterSchema } from "@/lib/providers/comfyRouter/catalog";
 import { NextRequest } from "next/server";
 
 // Mock the route module to test internal functions
@@ -888,7 +889,42 @@ describe("/api/models/[modelId] schema endpoint", () => {
   });
 
   describe("Comfy Router provider", () => {
-    it("should return the curated schema for a URL-encoded Comfy Router id", async () => {
+    /** The smallest published schema: one request body with these properties. */
+    function doc(id: string, properties: Record<string, unknown>, required: string[] = ["prompt"]) {
+      return {
+        paths: { [`/v2/models/${id}`]: { post: { requestBody: { content: { "application/json": { schema: { type: "object", required, properties } } } } } } },
+      };
+    }
+
+    beforeEach(() => {
+      primeRouterSchema(
+        "bfl/flux-2-pro",
+        doc("bfl/flux-2-pro", {
+          prompt: { type: "string" },
+          input_image: { type: "string" },
+          width: { type: "integer", minimum: 256, maximum: 2048, default: 1024 },
+          height: { type: "integer", minimum: 256, maximum: 2048, default: 1024 },
+          output_format: { type: "string", enum: ["jpeg", "png"], default: "jpeg" },
+          seed: { type: "integer", description: "Seed for reproducibility." },
+        })
+      );
+      primeRouterSchema(
+        "veo/veo-3.1-generate-001",
+        doc("veo/veo-3.1-generate-001", {
+          instances: { type: "array" },
+          parameters: {
+            type: "object",
+            properties: {
+              aspectRatio: { type: "string", enum: ["16:9", "9:16"] },
+              durationSeconds: { type: "integer" },
+              resolution: { type: "string", enum: ["720p", "1080p", "4k"] },
+            },
+          },
+        }, ["instances"])
+      );
+    });
+
+    it("should serve settings from the published schema for a URL-encoded id", async () => {
       const request = createMockSchemaRequest("bfl/flux-2-pro", "comfy");
       const response = await GET(request, { params: Promise.resolve({ modelId: "bfl%2Fflux-2-pro" }) });
       const data = await response.json();
@@ -896,21 +932,22 @@ describe("/api/models/[modelId] schema endpoint", () => {
       expect(response.status).toBe(200);
       expect(data.success).toBe(true);
 
+      const width = data.parameters.find((p: { name: string }) => p.name === "width");
+      expect(width).toMatchObject({ type: "integer", minimum: 256, maximum: 2048, default: 1024 });
+      // Media and prompt fields are handles, not settings
       const parameterNames = data.parameters.map((p: { name: string }) => p.name);
-      expect(parameterNames).toEqual(
-        expect.arrayContaining(["width", "height", "output_format", "prompt_upsampling", "safety_tolerance", "seed"])
-      );
+      expect(parameterNames).toEqual(["width", "height", "output_format", "seed"]);
 
       const promptInput = data.inputs.find((i: { name: string }) => i.name === "prompt");
       expect(promptInput).toMatchObject({ type: "text", required: true });
       const imageInput = data.inputs.find((i: { name: string }) => i.name === "image");
       expect(imageInput).toMatchObject({ type: "image", required: false, isArray: true });
 
-      // Static catalog: no provider API call, no key needed
+      // Served from the schema cache
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("should return 404 for an id that is not in the Comfy Router catalog", async () => {
+    it("should return 404 for an id the app cannot drive", async () => {
       const request = createMockSchemaRequest("nobody/no-such-model", "comfy");
       const response = await GET(request, { params: Promise.resolve({ modelId: "nobody%2Fno-such-model" }) });
       const data = await response.json();
@@ -919,14 +956,15 @@ describe("/api/models/[modelId] schema endpoint", () => {
       expect(data).toEqual({ success: false, error: "Unknown Comfy Router model" });
     });
 
-    it("should serve a video model's inputs, including the last frame", async () => {
+    it("should serve a video model's handles and narrow its settings", async () => {
       const request = createMockSchemaRequest("veo/veo-3.1-generate-001", "comfy");
       const response = await GET(request, { params: Promise.resolve({ modelId: "veo%2Fveo-3.1-generate-001" }) });
       const data = await response.json();
 
       expect(response.status).toBe(200);
-      const inputNames = data.inputs.map((i: { name: string }) => i.name);
-      expect(inputNames).toEqual(["prompt", "image", "last_frame"]);
+      expect(data.inputs.map((i: { name: string }) => i.name)).toEqual(["prompt", "image", "last_frame"]);
+      // The schema's free integer is narrowed to the durations Veo renders
+      expect(data.parameters.find((p: { name: string }) => p.name === "durationSeconds")).toMatchObject({ enum: [4, 6, 8], default: 8 });
     });
   });
 });

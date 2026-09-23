@@ -1,30 +1,39 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { buildComfyRouterBody, fetchComfyMediaResult, parseRetryAfter, readComfyRouterResult } from "../comfy";
+import { fetchComfyMediaResult, parseRetryAfter, prepareRouterInput, readRouterResult } from "../comfy";
+import { routerBinding, type RouterBinding } from "@/lib/providers/comfyRouter/families";
+import { buildRouterBody } from "@/lib/providers/comfyRouter/request";
+import type { DerivedParam } from "@/lib/providers/comfyRouter/schema";
 import type { GenerationInput } from "@/lib/providers/types";
 
 /**
- * Tests for the Comfy Router family builders and readers.
+ * The Comfy Router provider end to end, below the network: node input →
+ * encoded media → request body, and native result → found asset.
  *
- * The Router forwards each partner's native wire format, so every family
- * shapes the request and reads the result differently. These pin down the
- * image encoding each partner expects and the result path each returns.
+ * Every partner has its own wire format (families.json). These pin down,
+ * for the formats the app shipped with, the image encoding each partner
+ * expects and the result path each returns, so a change to a binding shows
+ * up here as well as in the schema suite.
  */
 
 const PNG_B64 = "iVBORw0KGgo=";
 const PNG_URL = `data:image/png;base64,${PNG_B64}`;
 const JPG_B64 = "/9j/4AAQSkZJRg==";
 const JPG_URL = `data:image/jpeg;base64,${JPG_B64}`;
-const HTTP_URL = "https://example.com/ref.png";
+
+function binding(id: string): RouterBinding {
+  const found = routerBinding(id);
+  if (!found) throw new Error(`no binding for ${id}`);
+  return found;
+}
+
+/** Settings the test sends, placed where the family's schema keeps them. */
+function params(b: RouterBinding, names: string[]): DerivedParam[] {
+  return names.map((name) => ({ name, type: "string", at: b.params.at ?? "" }));
+}
 
 function makeInput(overrides: Partial<GenerationInput> = {}): GenerationInput {
   return {
-    model: {
-      id: "bfl/flux-2-pro",
-      name: "FLUX.2 Pro",
-      description: null,
-      provider: "comfy",
-      capabilities: ["text-to-image"],
-    },
+    model: { id: "bfl/flux-2-pro", name: "FLUX.2 Pro", description: null, provider: "comfy", capabilities: ["text-to-image"] },
     prompt: "a photo of a cat",
     images: [],
     parameters: {},
@@ -32,293 +41,162 @@ function makeInput(overrides: Partial<GenerationInput> = {}): GenerationInput {
   };
 }
 
-describe("buildComfyRouterBody", () => {
-  describe("flux2", () => {
-    it("strips data URLs to raw base64 into input_image and input_image_2", () => {
-      const body = buildComfyRouterBody(
-        "flux2",
-        makeInput({
-          images: [PNG_URL, JPG_URL],
-          parameters: { width: 1024, height: 768, seed: 7, output_format: "" },
-        })
-      );
+async function bodyFor(id: string, input: Partial<GenerationInput>, settings: string[] = []) {
+  const b = binding(id);
+  const prepared = await prepareRouterInput(b, makeInput(input), "key");
+  return buildRouterBody(b, params(b, settings), { ...prepared, randomSeed: () => 1234 });
+}
 
-      expect(body).toMatchObject({
-        prompt: "a photo of a cat",
-        width: 1024,
-        height: 768,
-        seed: 7,
-        input_image: PNG_B64,
-        input_image_2: JPG_B64,
-      });
-      // Empty parameters are dropped rather than sent
-      expect(body).not.toHaveProperty("output_format");
-      // Numbering starts at input_image, then _2, never _1
-      expect(body).not.toHaveProperty("input_image_1");
-      expect(body).not.toHaveProperty("input_image_3");
-    });
-
-    it("keeps http URLs as-is and dedupes across images and the image dynamic input", () => {
-      const body = buildComfyRouterBody(
-        "flux2",
-        makeInput({
-          images: [PNG_URL],
-          dynamicInputs: { image: [PNG_URL, HTTP_URL] },
-        })
-      );
-
-      expect(body.input_image).toBe(PNG_B64);
-      expect(body.input_image_2).toBe(HTTP_URL);
-      expect(body).not.toHaveProperty("input_image_3");
-    });
-
-    it("sends no image fields for text to image", () => {
-      const body = buildComfyRouterBody("flux2", makeInput());
-      expect(body).toEqual({ prompt: "a photo of a cat" });
-    });
+describe("Router request bodies", () => {
+  it("FLUX.2: raw base64 into input_image, input_image_2; empty settings dropped", async () => {
+    const body = await bodyFor(
+      "bfl/flux-2-pro",
+      { images: [PNG_URL, JPG_URL], parameters: { width: 1024, height: 768, seed: 7, output_format: "" } },
+      ["width", "height", "seed", "output_format"]
+    );
+    expect(body).toEqual({ prompt: "a photo of a cat", input_image: PNG_B64, input_image_2: JPG_B64, width: 1024, height: 768, seed: 7 });
   });
 
-  describe("gptImage", () => {
-    it("keeps data URLs and sends a single image as a string", () => {
-      const body = buildComfyRouterBody(
-        "gptImage",
-        makeInput({ images: [PNG_URL], parameters: { size: "1024x1024", quality: "high" } })
-      );
-
-      expect(body).toEqual({
-        prompt: "a photo of a cat",
-        n: 1,
-        size: "1024x1024",
-        quality: "high",
-        image: PNG_URL,
-      });
-    });
-
-    it("sends several images as an array of data URLs", () => {
-      const body = buildComfyRouterBody("gptImage", makeInput({ images: [PNG_URL, JPG_URL] }));
-      expect(body.image).toEqual([PNG_URL, JPG_URL]);
-    });
-
-    it("omits the image field without references", () => {
-      const body = buildComfyRouterBody("gptImage", makeInput());
-      expect(body).not.toHaveProperty("image");
-    });
+  it("FLUX.2: no image fields for text to image", async () => {
+    expect(await bodyFor("bfl/flux-2-pro", {})).toEqual({ prompt: "a photo of a cat" });
   });
 
-  describe("geminiImage", () => {
-    it("builds inlineData parts and asks for TEXT and IMAGE modalities", () => {
-      const body = buildComfyRouterBody(
-        "geminiImage",
-        makeInput({ images: [PNG_URL, JPG_URL], parameters: { aspectRatio: "16:9", imageSize: "2K" } })
-      );
+  it("named handles win over the images list, so a mask is never also a reference", async () => {
+    const body = await bodyFor("openai/gpt-image-1.5", {
+      images: [PNG_URL, JPG_URL],
+      dynamicInputs: { image: PNG_URL, mask: JPG_URL },
+    });
+    expect(body.image).toEqual([PNG_URL]);
+    expect(body.mask).toBe(JPG_URL);
+  });
 
-      expect(body).toEqual({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: "a photo of a cat" },
-              { inlineData: { mimeType: "image/png", data: PNG_B64 } },
-              { inlineData: { mimeType: "image/jpeg", data: JPG_B64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseModalities: ["TEXT", "IMAGE"],
-          imageConfig: { aspectRatio: "16:9", imageSize: "2K" },
+  it("GPT Image: data URLs, one output, png", async () => {
+    const body = await bodyFor("openai/gpt-image-1.5", { images: [PNG_URL], parameters: { size: "1024x1024", quality: "high" } }, ["size", "quality"]);
+    expect(body).toEqual({ prompt: "a photo of a cat", n: 1, output_format: "png", image: [PNG_URL], size: "1024x1024", quality: "high" });
+    expect(await bodyFor("openai/gpt-image-1.5", {})).not.toHaveProperty("image");
+  });
+
+  it("Gemini image: inlineData parts, settings inside imageConfig", async () => {
+    const body = await bodyFor(
+      "vertexai/gemini-3-pro-image",
+      { images: [PNG_URL, JPG_URL], parameters: { aspectRatio: "16:9", imageSize: "2K" } },
+      ["aspectRatio", "imageSize"]
+    );
+    const contents = body.contents as Array<{ parts: unknown[] }>;
+    expect(contents[0]!.parts).toEqual([
+      { text: "a photo of a cat" },
+      { inlineData: { mimeType: "image/png", data: PNG_B64 } },
+      { inlineData: { mimeType: "image/jpeg", data: JPG_B64 } },
+    ]);
+    expect(body.generationConfig).toMatchObject({ imageConfig: { aspectRatio: "16:9", imageSize: "2K" } });
+  });
+
+  it("Seedance: first and last frame with content roles, no watermark", async () => {
+    const body = await bodyFor(
+      "byteplus/dreamina-seedance-2-0-260128",
+      { images: [PNG_URL], dynamicInputs: { last_frame: JPG_URL }, parameters: { duration: 5, ratio: "adaptive" } },
+      ["duration", "ratio"]
+    );
+    expect(body.content).toEqual([
+      { type: "text", text: "a photo of a cat" },
+      { type: "image_url", image_url: { url: PNG_URL }, role: "first_frame" },
+      { type: "image_url", image_url: { url: JPG_URL }, role: "last_frame" },
+    ]);
+    expect(body).toMatchObject({ watermark: false, duration: 5, ratio: "adaptive" });
+    expect((await bodyFor("byteplus/dreamina-seedance-2-0-260128", {})).content).toEqual([{ type: "text", text: "a photo of a cat" }]);
+  });
+
+  it("Veo: frames as bytesBase64Encoded with their mime type, settings under parameters", async () => {
+    const body = await bodyFor(
+      "veo/veo-3.1-generate-001",
+      { images: [PNG_URL], dynamicInputs: { last_frame: JPG_URL }, parameters: { aspectRatio: "16:9", durationSeconds: 8 } },
+      ["aspectRatio", "durationSeconds"]
+    );
+    expect(body).toEqual({
+      instances: [
+        {
+          prompt: "a photo of a cat",
+          image: { bytesBase64Encoded: PNG_B64, mimeType: "image/png" },
+          lastFrame: { bytesBase64Encoded: JPG_B64, mimeType: "image/jpeg" },
         },
-      });
-    });
-
-    it("leaves imageConfig out when no image parameters are set and skips http references", () => {
-      const body = buildComfyRouterBody("geminiImage", makeInput({ images: [HTTP_URL] }));
-
-      expect(body.generationConfig).toEqual({ responseModalities: ["TEXT", "IMAGE"] });
-      const contents = body.contents as Array<{ parts: unknown[] }>;
-      expect(contents[0]!.parts).toEqual([{ text: "a photo of a cat" }]);
+      ],
+      parameters: { aspectRatio: "16:9", durationSeconds: 8, sampleCount: 1, personGeneration: "allow_adult" },
     });
   });
 
-  describe("seedance", () => {
-    it("labels the first and last frame with content roles", () => {
-      const body = buildComfyRouterBody(
-        "seedance",
-        makeInput({
-          images: [PNG_URL],
-          dynamicInputs: { last_frame: JPG_URL },
-          parameters: { duration: 5, ratio: "adaptive", generate_audio: true, seed: -1 },
-        })
-      );
-
-      expect(body.content).toEqual([
-        { type: "text", text: "a photo of a cat" },
-        { type: "image_url", image_url: { url: PNG_URL }, role: "first_frame" },
-        { type: "image_url", image_url: { url: JPG_URL }, role: "last_frame" },
-      ]);
-      expect(body).toMatchObject({ watermark: false, duration: 5, ratio: "adaptive", generate_audio: true, seed: -1 });
-    });
-
-    it("sends only the text part for text to video", () => {
-      const body = buildComfyRouterBody("seedance", makeInput());
-      expect(body.content).toEqual([{ type: "text", text: "a photo of a cat" }]);
-    });
+  it("Runway Gen-4 Turbo: first frame as promptImage with a seed", async () => {
+    const body = await bodyFor("runway/gen4_turbo", { images: [PNG_URL], parameters: { duration: 10, ratio: "720:1280" } }, ["duration", "ratio"]);
+    expect(body).toEqual({ promptText: "a photo of a cat", promptImage: PNG_URL, seed: 1234, duration: 10, ratio: "720:1280" });
   });
 
-  describe("veo", () => {
-    it("sends frames as bytesBase64Encoded with their mime type", () => {
-      const body = buildComfyRouterBody(
-        "veo",
-        makeInput({
-          images: [PNG_URL],
-          dynamicInputs: { last_frame: JPG_URL },
-          parameters: { aspectRatio: "16:9", durationSeconds: 8, generateAudio: true },
-        })
-      );
-
-      expect(body).toEqual({
-        instances: [
-          {
-            prompt: "a photo of a cat",
-            image: { bytesBase64Encoded: PNG_B64, mimeType: "image/png" },
-            lastFrame: { bytesBase64Encoded: JPG_B64, mimeType: "image/jpeg" },
-          },
-        ],
-        parameters: {
-          sampleCount: 1,
-          personGeneration: "allow_adult",
-          aspectRatio: "16:9",
-          durationSeconds: 8,
-          generateAudio: true,
-        },
-      });
-    });
-
-    it("skips an http first frame, since Veo takes bytes only", () => {
-      const body = buildComfyRouterBody("veo", makeInput({ images: [HTTP_URL] }));
-      expect(body.instances).toEqual([{ prompt: "a photo of a cat" }]);
-    });
+  it("Kling: negative prompt from its own handle, no watermark", async () => {
+    const body = await bodyFor("kling/kling-v3", { dynamicInputs: { negative_prompt: "blurry" } });
+    expect(body).toEqual({ prompt: "a photo of a cat", negative_prompt: "blurry", watermark_info: { enabled: false } });
   });
 
-  describe("runwayGen4", () => {
-    it("sends the first frame as promptImage with a fresh seed and defaults", () => {
-      const body = buildComfyRouterBody("runwayGen4", makeInput({ images: [PNG_URL] }));
-
-      expect(body.promptText).toBe("a photo of a cat");
-      expect(body.promptImage).toBe(PNG_URL);
-      expect(body.duration).toBe(5);
-      expect(body.ratio).toBe("1280:720");
-      expect(typeof body.seed).toBe("number");
-      expect(Number.isInteger(body.seed)).toBe(true);
-      expect(body.seed as number).toBeGreaterThanOrEqual(0);
-      expect(body.seed as number).toBeLessThan(4294967295);
-    });
-
-    it("forwards duration and ratio and leaves promptImage undefined without a frame", () => {
-      const body = buildComfyRouterBody(
-        "runwayGen4",
-        makeInput({ parameters: { duration: 10, ratio: "720:1280" } })
-      );
-
-      expect(body.promptImage).toBeUndefined();
-      expect(body.duration).toBe(10);
-      expect(body.ratio).toBe("720:1280");
-    });
+  it("downloads an http input for a partner that takes bytes", async () => {
+    const original = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "image/jpeg" } })) as unknown as typeof fetch;
+    try {
+      const body = await bodyFor("bfl/flux-2-pro", { images: ["https://example.com/ref.jpg"] });
+      expect(body.input_image).toBe(Buffer.from([1, 2, 3]).toString("base64"));
+    } finally {
+      global.fetch = original;
+    }
   });
 });
 
-describe("readComfyRouterResult", () => {
-  it("flux: reads result.sample", () => {
-    const found = readComfyRouterResult("flux2", {
-      status: "Ready",
-      result: { sample: "https://example.com/a.png" },
+describe("readRouterResult", () => {
+  it("FLUX: result.sample, or the BFL status", () => {
+    expect(readRouterResult(binding("bfl/flux-2-pro"), { status: "Ready", result: { sample: "https://example.com/a.png" } })).toMatchObject({
+      source: "https://example.com/a.png",
     });
-    expect(found).toEqual({ source: "https://example.com/a.png" });
-  });
-
-  it("flux: throws with the BFL status when there is no sample", () => {
-    expect(() => readComfyRouterResult("flux2", { status: "Content Moderated", result: null })).toThrow(
+    expect(() => readRouterResult(binding("bfl/flux-2-pro"), { status: "Content Moderated", result: null })).toThrow(
       "Black Forest Labs: Content Moderated"
     );
-    expect(() => readComfyRouterResult("fluxKontext", { status: "Ready", result: {} })).toThrow(
-      "No image in the FLUX result"
+    expect(() => readRouterResult(binding("bfl/flux-kontext-pro"), { status: "Ready", result: {} })).toThrow("No image in the FLUX Kontext Pro result");
+  });
+
+  it("GPT Image: b64_json as a png data URL", () => {
+    expect(readRouterResult(binding("openai/gpt-image-1.5"), { data: [{ b64_json: "abc" }] }).source).toBe("data:image/png;base64,abc");
+  });
+
+  it("Gemini: the first inlineData part, with its own mime type", () => {
+    const result = { candidates: [{ content: { parts: [{ text: "Here you go" }, { inlineData: { mimeType: "image/jpeg", data: "xyz" } }] } }] };
+    expect(readRouterResult(binding("vertexai/gemini-3-pro-image"), result).source).toBe("data:image/jpeg;base64,xyz");
+    expect(() => readRouterResult(binding("vertexai/gemini-3-pro-image"), { candidates: [], promptFeedback: { blockReason: "SAFETY" } })).toThrow(
+      "Blocked: SAFETY"
     );
   });
 
-  it("gptImage: turns b64_json into a data URL in the output format", () => {
-    expect(readComfyRouterResult("gptImage", { data: [{ b64_json: "abc" }], output_format: "webp" })).toEqual({
-      source: "data:image/webp;base64,abc",
-    });
-    expect(readComfyRouterResult("gptImage", { data: [{ b64_json: "abc" }] })).toEqual({
-      source: "data:image/png;base64,abc",
-    });
-    expect(() => readComfyRouterResult("gptImage", { data: [] })).toThrow("No image in the GPT Image result");
-  });
-
-  it("gemini: reads the first inlineData part", () => {
-    const found = readComfyRouterResult("geminiImage", {
-      candidates: [
-        {
-          content: {
-            parts: [{ text: "Here you go" }, { inlineData: { mimeType: "image/jpeg", data: "xyz" } }],
-          },
-        },
-      ],
-    });
-    expect(found).toEqual({ source: "data:image/jpeg;base64,xyz" });
-  });
-
-  it("gemini: surfaces the block reason when nothing came back", () => {
+  it("Kling: the partner's reason on failure, the first URL on success", () => {
     expect(() =>
-      readComfyRouterResult("geminiImage", { candidates: [], promptFeedback: { blockReason: "SAFETY" } })
-    ).toThrow("Blocked: SAFETY");
-  });
-
-  it("kling: throws with task_status_msg when the task failed", () => {
-    expect(() =>
-      readComfyRouterResult("klingText", {
-        data: { task_status: "failed", task_status_msg: "prompt rejected by moderation" },
-      })
-    ).toThrow("Kling: prompt rejected by moderation");
-  });
-
-  it("kling: reads the first video or image URL", () => {
+      readRouterResult(binding("kling/kling-v3"), { data: { task_status: "failed", task_status_msg: "prompt rejected by moderation" } })
+    ).toThrow("Kling task failed: prompt rejected by moderation");
     expect(
-      readComfyRouterResult("klingText", {
-        data: { task_status: "succeed", task_result: { videos: [{ url: "https://example.com/v.mp4" }] } },
-      })
-    ).toEqual({ source: "https://example.com/v.mp4" });
-    expect(
-      readComfyRouterResult("klingImage", {
-        data: { task_status: "succeed", task_result: { images: [{ url: "https://example.com/i.png" }] } },
-      })
-    ).toEqual({ source: "https://example.com/i.png" });
+      readRouterResult(binding("kling/kling-v3"), { data: { task_status: "succeed", task_result: { videos: [{ url: "https://example.com/v.mp4" }] } } })
+        .source
+    ).toBe("https://example.com/v.mp4");
   });
 
-  it("veo: throws with the filter reasons when the output was filtered", () => {
+  it("Veo: every filter reason, or the inline video", () => {
     expect(() =>
-      readComfyRouterResult("veo", {
+      readRouterResult(binding("veo/veo-3.1-generate-001"), {
         response: { videos: [], raiMediaFilteredCount: 1, raiMediaFilteredReasons: ["violence", "celebrity"] },
       })
     ).toThrow("Veo filtered the output: violence, celebrity");
+    expect(
+      readRouterResult(binding("veo/veo-3.1-generate-001"), { response: { videos: [{ bytesBase64Encoded: "AAAA", mimeType: "video/mp4" }] } }).source
+    ).toBe("data:video/mp4;base64,AAAA");
   });
 
-  it("veo: inlines bytesBase64Encoded with the declared mime type", () => {
-    expect(
-      readComfyRouterResult("veo", {
-        response: { videos: [{ bytesBase64Encoded: "AAAA", mimeType: "video/mp4" }] },
-      })
-    ).toEqual({ source: "data:video/mp4;base64,AAAA", mimeType: "video/mp4" });
-  });
-
-  it("wan: reads output.video_url and surfaces failures", () => {
-    expect(
-      readComfyRouterResult("wanVideo", {
-        output: { task_status: "SUCCEEDED", video_url: "https://example.com/w.mp4" },
-      })
-    ).toEqual({ source: "https://example.com/w.mp4" });
-    expect(() =>
-      readComfyRouterResult("wanVideo", { output: { task_status: "FAILED", message: "quota exceeded" } })
-    ).toThrow("Wan: quota exceeded");
+  it("Wan: output.video_url, and the failure message", () => {
+    expect(readRouterResult(binding("wan/wan2.7-t2v"), { output: { task_status: "SUCCEEDED", video_url: "https://example.com/w.mp4" } }).source).toBe(
+      "https://example.com/w.mp4"
+    );
+    expect(() => readRouterResult(binding("wan/wan2.7-t2v"), { output: { task_status: "FAILED", message: "quota exceeded" } })).toThrow(
+      "Wan: quota exceeded"
+    );
   });
 });
 
@@ -341,7 +219,7 @@ describe("parseRetryAfter", () => {
   });
 });
 
-describe("fetchComfyMediaResult download bounds", () => {
+describe("fetchComfyMediaResult", () => {
   const originalFetch = global.fetch;
   afterEach(() => {
     global.fetch = originalFetch;
@@ -350,16 +228,13 @@ describe("fetchComfyMediaResult download bounds", () => {
   const KLING_VIDEO = { data: { task_status: "succeed", task_result: { videos: [{ url: "https://cdn.example.com/out.bin" }] } } };
 
   function collectThen(media: Response, result: unknown = { status: "Ready", result: { sample: "https://cdn.example.com/out.bin" } }) {
-    const collect = new Response(JSON.stringify(result), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    const collect = new Response(JSON.stringify(result), { status: 200, headers: { "Content-Type": "application/json" } });
     global.fetch = vi.fn().mockResolvedValueOnce(collect).mockResolvedValueOnce(media) as unknown as typeof fetch;
   }
 
   it("inlines an image", async () => {
     collectThen(new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "Content-Type": "image/png", "Content-Length": "3" } }));
-    const out = await fetchComfyMediaResult("t", "key", "bfl/flux-2-pro", "req", "image");
+    const out = await fetchComfyMediaResult("t", "key", "bfl/flux-2-pro", "req");
     expect(out.success).toBe(true);
     expect(out.outputs?.[0]?.data).toBe(`data:image/png;base64,${Buffer.from([1, 2, 3]).toString("base64")}`);
   });
@@ -368,8 +243,7 @@ describe("fetchComfyMediaResult download bounds", () => {
     const body = new ReadableStream({ pull(controller) { controller.enqueue(new Uint8Array(1024)); } });
     const cancel = vi.spyOn(ReadableStream.prototype, "cancel");
     collectThen(new Response(body, { status: 200, headers: { "Content-Type": "video/mp4", "Content-Length": String(30 * 1024 * 1024) } }), KLING_VIDEO);
-    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req", "video");
-    expect(out.success).toBe(true);
+    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req");
     expect(out.outputs?.[0]).toEqual({ type: "video", data: "", url: "https://cdn.example.com/out.bin" });
     expect(cancel).toHaveBeenCalled();
     cancel.mockRestore();
@@ -380,8 +254,41 @@ describe("fetchComfyMediaResult download bounds", () => {
     const chunk = new Uint8Array(1024 * 1024);
     const body = new ReadableStream({ pull(controller) { served += 1; controller.enqueue(chunk); } });
     collectThen(new Response(body, { status: 200, headers: { "Content-Type": "video/mp4" } }), KLING_VIDEO);
-    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req", "video");
+    const out = await fetchComfyMediaResult("t", "key", "kling/kling-v3", "req");
     expect(out.outputs?.[0]).toEqual({ type: "video", data: "", url: "https://cdn.example.com/out.bin" });
     expect(served).toBeLessThan(30);
+  });
+
+  it("returns a binary partner's bytes as audio", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(new Uint8Array([9, 9]), { status: 200, headers: { "Content-Type": "audio/mpeg" } })
+    ) as unknown as typeof fetch;
+    const out = await fetchComfyMediaResult("t", "key", "elevenlabs/eleven_sfx_v2", "req");
+    expect(out.outputs?.[0]).toEqual({ type: "audio", data: `data:audio/mpeg;base64,${Buffer.from([9, 9]).toString("base64")}` });
+  });
+
+  it("returns a 3D model as its URL", async () => {
+    const meshy = binding("meshy/meshy-6");
+    const path = meshy.result.media![0]!.split("|")[0]!.replace(/\[\*\]/g, "[0]");
+    const result: Record<string, unknown> = {};
+    // Build the smallest result document that holds a URL at the binding's first path.
+    let node: Record<string, unknown> = result;
+    const parts = path.split(".");
+    parts.forEach((part, index) => {
+      const [, key, idx] = /^([^[]+)(?:\[(\d+)\])?$/.exec(part)!;
+      const last = index === parts.length - 1;
+      const value = last ? "https://cdn.example.com/model.glb" : {};
+      if (idx !== undefined) {
+        node[key!] = [value];
+      } else {
+        node[key!] = value;
+      }
+      if (!last) node = (idx !== undefined ? (node[key!] as unknown[])[0] : node[key!]) as Record<string, unknown>;
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: "SUCCEEDED", ...result }), { status: 200, headers: { "Content-Type": "application/json" } })
+    ) as unknown as typeof fetch;
+    const out = await fetchComfyMediaResult("t", "key", "meshy/meshy-6", "req");
+    expect(out.outputs?.[0]).toEqual({ type: "3d", data: "", url: "https://cdn.example.com/model.glb" });
   });
 });

@@ -74,6 +74,16 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
   // Inline parameters infrastructure
   const { inlineParametersEnabled } = useInlineParameters();
   const showLabels = useShowHandleLabels(selected);
+  // Comfy Router models can declare several image inputs (a mask, a garment);
+  // the first uses the fixed "image" handle and the rest get their own. Other
+  // providers keep the node's static image and prompt handles.
+  const imageSchemaInputs = useMemo(
+    () =>
+      nodeData.selectedModel?.provider === "comfy"
+        ? (nodeData.inputSchema ?? []).filter((input) => input.type === "image")
+        : [],
+    [nodeData.inputSchema, nodeData.selectedModel?.provider]
+  );
 
   // Register browse callback for floating header button
   useEffect(() => {
@@ -585,8 +595,26 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
         data-handletype="image"
         isConnectable={true}
       />
-      {/* Image label */}
-      <HandleLabel label="Image" side="target" color="var(--handle-color-image)" top="calc(35% - 18px)" visible={showLabels} />
+      {/* Image label: the model's name for its first image input when it has one */}
+      <HandleLabel label={imageSchemaInputs[0]?.label ?? "Image"} side="target" color="var(--handle-color-image)" top="calc(35% - 18px)" visible={showLabels} />
+      {/* Further image inputs the model declares (a mask, a garment), between the image and the prompt.
+          `image-N` maps to the Nth image input in connectedInputs. */}
+      {imageSchemaInputs.slice(1).map((input, index, extra) => {
+        const top = `${35 + ((index + 1) * 30) / (extra.length + 1)}%`;
+        return (
+          <React.Fragment key={input.name}>
+            <Handle
+              type="target"
+              position={Position.Left}
+              id={`image-${index + 1}`}
+              style={{ top, zIndex: 10 }}
+              data-handletype="image"
+              isConnectable={true}
+            />
+            <HandleLabel label={input.label} side="target" color="var(--handle-color-image)" top={`calc(${top} - 18px)`} visible={showLabels} />
+          </React.Fragment>
+        );
+      })}
       <Handle
         type="target"
         position={Position.Left}

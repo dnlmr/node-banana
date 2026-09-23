@@ -70,7 +70,7 @@ const LLM_MODELS: Record<LLMProvider, { value: LLMModelType; label: string }[]> 
 };
 
 // Image/video/audio/3d generation capabilities
-const VIDEO_CAPABILITIES: ModelCapability[] = ["text-to-video", "image-to-video"];
+const VIDEO_CAPABILITIES: ModelCapability[] = ["text-to-video", "image-to-video", "video-to-video"];
 const AUDIO_CAPABILITIES: ModelCapability[] = ["text-to-audio"];
 const MODEL_3D_CAPABILITIES: ModelCapability[] = ["text-to-3d", "image-to-3d"];
 

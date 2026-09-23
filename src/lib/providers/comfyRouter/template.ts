@@ -323,7 +323,9 @@ function interpolate(message: string, value: string, result: unknown): string {
 /** First error rule that fires, as a message; null when the result looks fine. */
 export function resultError(result: unknown, rules: ResultErrorRule[] = []): string | null {
   for (const rule of rules) {
-    const value = valueAt(result, rule.path);
+    const raw = valueAt(result, rule.path);
+    // A list of reasons reads as one line.
+    const value = Array.isArray(raw) ? raw.filter(present).join(", ") : raw;
     if (!present(value)) continue;
     const text = String(value);
     const fires = rule.notIn ? !rule.notIn.includes(text) : rule.in ? rule.in.includes(text) : true;

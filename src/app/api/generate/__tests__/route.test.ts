@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { primeRouterSchema } from "@/lib/providers/comfyRouter/catalog";
 import { NextRequest } from "next/server";
 
 // Use vi.hoisted to define mocks that work with hoisted vi.mock
@@ -3222,7 +3223,26 @@ describe("/api/generate route", () => {
       mockFetch.mockReset();
       // The key is resolved from the header, then either Comfy env var
       delete process.env.COMFY_API_KEY;
-      delete process.env.COMFY_CLOUD_API_KEY;
+      delete process.env.COMFY_CLOUD_API_KEY;      // Settings come from the model's published schema; serve a small one from the cache
+      primeRouterSchema("bfl/flux-2-pro", {
+        paths: {
+          "/v2/models/bfl/flux-2-pro": {
+            post: {
+              requestBody: {
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["prompt"],
+                      properties: { prompt: { type: "string" }, width: { type: "integer" }, height: { type: "integer" } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
     });
 
     afterEach(() => {

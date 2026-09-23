@@ -41,7 +41,7 @@ import {
   setCachedWaveSpeedSchemas,
   WaveSpeedApiSchema,
 } from "@/lib/providers/cache";
-import { comfyRouterProviderModels } from "@/lib/providers/comfyRouter";
+import { comfyRouterProviderModels } from "@/lib/providers/comfyRouter/catalog";
 import { COMFY_ROUTER_HEADER, resolveComfyRouterKey } from "../generate/providers/comfy";
 
 // API base URLs
@@ -1325,7 +1325,7 @@ export async function GET(
         );
       }
     } else if (providerFilter === "comfy") {
-      // Only Comfy Router requested - curated catalog, no external API call needed
+      // Only Comfy Router requested - the bound models the Router serves
       if (comfyKey) {
         includeComfy = true;
       } else {
@@ -1388,7 +1388,7 @@ export async function GET(
     providerResults["gemini"] = {
       success: true,
       count: geminiModels.length,
-      cached: true, // Hardcoded models are effectively "cached"
+      cached: true, // Served from the in-memory Router list
     };
     anyFromCache = true;
   }
@@ -1425,10 +1425,10 @@ export async function GET(
     anyFromCache = true;
   }
 
-  // Add Comfy Router models if included (curated catalog, no API call needed)
+  // Add Comfy Router models if included: every bound model the Router serves (list cached ten minutes)
   if (includeComfy) {
     // Filter by search query if provided
-    let comfyModels = comfyRouterProviderModels();
+    let comfyModels = await comfyRouterProviderModels(comfyKey);
     if (searchQuery) {
       comfyModels = filterModelsBySearch(comfyModels, searchQuery);
     }
