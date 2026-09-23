@@ -42,6 +42,13 @@ export interface RouterModelEntry {
   paramOverrides?: Record<string, ParamOverride>;
   body?: unknown;
   result?: ResultSpec;
+  /**
+   * Who can serve the model, first being the default. "comfy" is Comfy's own
+   * routing to the model's maker; the others (fal, Higgsfield, Runware,
+   * WaveSpeed) run the same model and take the same request, chosen with
+   * `?model_provider=` on the submit.
+   */
+  providers?: string[];
 }
 
 export interface RouterFamily {
@@ -72,6 +79,8 @@ export interface RouterBinding {
   paramOverrides: Record<string, ParamOverride>;
   body: unknown;
   result: ResultSpec;
+  /** Serving providers, default first; empty when the model has one. */
+  providers: string[];
 }
 
 const FAMILIES = (data as unknown as { families: RouterFamily[] }).families;
@@ -102,6 +111,7 @@ function bind(family: RouterFamily, model: RouterModelEntry): RouterBinding {
     paramOverrides: mergeOverrides(family.paramOverrides, model.paramOverrides),
     body: model.body ?? family.body,
     result: model.result ?? family.result,
+    providers: model.providers ?? [],
   };
 }
 

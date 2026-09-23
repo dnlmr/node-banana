@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { fetchComfyMediaResult, parseRetryAfter, prepareRouterInput, readRouterResult } from "../comfy";
+import { fetchComfyMediaResult, parseRetryAfter, prepareRouterInput, readRouterResult, servingProvider, submitComfyTask } from "../comfy";
+import { nodeParameters, primeRouterSchema } from "@/lib/providers/comfyRouter/catalog";
 import { routerBinding, type RouterBinding } from "@/lib/providers/comfyRouter/families";
 import { buildRouterBody } from "@/lib/providers/comfyRouter/request";
 import type { DerivedParam } from "@/lib/providers/comfyRouter/schema";
@@ -290,5 +291,41 @@ describe("fetchComfyMediaResult", () => {
     ) as unknown as typeof fetch;
     const out = await fetchComfyMediaResult("t", "key", "meshy/meshy-6", "req");
     expect(out.outputs?.[0]).toEqual({ type: "3d", data: "", url: "https://cdn.example.com/model.glb" });
+  });
+});
+
+describe("serving provider", () => {
+  const nanoBananaPro = () => binding("vertexai/gemini-3-pro-image");
+
+  it("offers the model's providers as its first setting, Comfy by default", () => {
+    const [first] = nodeParameters([], nanoBananaPro());
+    expect(first).toMatchObject({ name: "model_provider", enum: ["comfy", "fal", "runware", "wavespeed"], default: "comfy" });
+    expect(nodeParameters([], binding("bfl/flux-2-pro"))).toEqual([]);
+  });
+
+  it("asks for an alternate only when one is picked and offered", () => {
+    expect(servingProvider(nanoBananaPro(), "fal")).toBe("fal");
+    expect(servingProvider(nanoBananaPro(), "comfy")).toBeNull();
+    expect(servingProvider(nanoBananaPro(), "higgsfield")).toBeNull();
+    expect(servingProvider(binding("bfl/flux-2-pro"), "fal")).toBeNull();
+  });
+
+  it("submits to ?model_provider= and keeps the setting out of the body", async () => {
+    primeRouterSchema("kling/kling-v3", {
+      paths: { "/v2/models/kling/kling-v3": { post: { requestBody: { content: { "application/json": { schema: { type: "object", properties: { prompt: { type: "string" }, duration: { type: "string" } } } } } } } } },
+    });
+    const original = global.fetch;
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ request_id: "r1" }), { status: 202 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await submitComfyTask("t", "key", makeInput({ model: { ...makeInput().model, id: "kling/kling-v3" }, parameters: { model_provider: "higgsfield", duration: "5" } }));
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.comfy.org/v2/models/kling/kling-v3/requests?model_provider=higgsfield");
+      const body = JSON.parse(String(init.body));
+      expect(body).not.toHaveProperty("model_provider");
+      expect(body.duration).toBe("5");
+    } finally {
+      global.fetch = original;
+    }
   });
 });

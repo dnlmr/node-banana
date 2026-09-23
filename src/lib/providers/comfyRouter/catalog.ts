@@ -110,11 +110,27 @@ export async function resolveRouterModel(id: string, apiKey: string | null): Pro
   return { binding, params: deriveParams(doc, binding.params, binding.paramOverrides) };
 }
 
-/** Node settings: what the user can change (fixed values are sent, not shown). */
-export function nodeParameters(params: DerivedParam[]): ModelParameter[] {
-  return params
+/** The setting that picks who serves a model; not part of the request body. */
+export const ROUTER_PROVIDER_PARAM = "model_provider";
+
+/**
+ * Node settings: what the user can change (fixed values are sent, not
+ * shown), led by the serving provider for models that have more than one.
+ */
+export function nodeParameters(params: DerivedParam[], binding?: RouterBinding): ModelParameter[] {
+  const settings: ModelParameter[] = params
     .filter((param) => param.fixed === undefined)
     .map(({ at: _at, fixed: _fixed, ...param }) => param);
+  if (binding && binding.providers.length > 1) {
+    settings.unshift({
+      name: ROUTER_PROVIDER_PARAM,
+      type: "string",
+      enum: binding.providers,
+      default: binding.providers[0],
+      description: "Who runs the model. comfy routes to its maker; the others run the same model from the same settings.",
+    });
+  }
+  return settings;
 }
 
 /** Node handles, from the binding's media and text inputs. */
@@ -158,5 +174,5 @@ export async function comfyRouterNodeSchema(
 ): Promise<{ parameters: ModelParameter[]; inputs: ModelInput[] } | null> {
   const resolved = await resolveRouterModel(id, apiKey);
   if (!resolved) return null;
-  return { parameters: nodeParameters(resolved.params), inputs: nodeInputs(resolved.binding) };
+  return { parameters: nodeParameters(resolved.params, resolved.binding), inputs: nodeInputs(resolved.binding) };
 }

@@ -3475,7 +3475,14 @@
       "ratio": {
        "default": "adaptive"
       }
-     }
+     },
+     "providers": [
+      "comfy",
+      "fal",
+      "higgsfield",
+      "runware",
+      "wavespeed"
+     ]
     },
     {
      "id": "byteplus/dreamina-seedance-2-0-260128",
@@ -3515,7 +3522,14 @@
       "ratio": {
        "default": "adaptive"
       }
-     }
+     },
+     "providers": [
+      "comfy",
+      "fal",
+      "higgsfield",
+      "runware",
+      "wavespeed"
+     ]
     },
     {
      "id": "byteplus/dreamina-seedance-2-0-fast-260128",
@@ -3877,6 +3891,10 @@
      "description": "Kling 3.0 text-to-video, 3 to 15 seconds with optional generated sound.",
      "capabilities": [
       "text-to-video"
+     ],
+     "providers": [
+      "comfy",
+      "higgsfield"
      ]
     },
     {
@@ -4111,6 +4129,10 @@
      "description": "Kling's fast 3.0 text-to-video tier, 3 to 15 seconds at 720p or 1080p.",
      "capabilities": [
       "text-to-video"
+     ],
+     "providers": [
+      "comfy",
+      "higgsfield"
      ]
     }
    ],
@@ -4501,7 +4523,13 @@
       "background": {
        "default": "opaque"
       }
-     }
+     },
+     "providers": [
+      "comfy",
+      "fal",
+      "runware",
+      "wavespeed"
+     ]
     },
     {
      "id": "openai/gpt-image-2.5-flare",
@@ -4530,7 +4558,13 @@
        ],
        "default": "auto"
       }
-     }
+     },
+     "providers": [
+      "comfy",
+      "fal",
+      "runware",
+      "wavespeed"
+     ]
     },
     {
      "id": "openai/gpt-image-2.5-sunburst",
@@ -4559,7 +4593,13 @@
        ],
        "default": "auto"
       }
-     }
+     },
+     "providers": [
+      "comfy",
+      "fal",
+      "runware",
+      "wavespeed"
+     ]
     }
    ],
    "notes": "One schema for all five ids, apart from descriptions. Sending `image` switches Router from generation to the edit operation, and the body leaves it out when no image is connected. `image` takes a data URI or a signed Comfy-asset https URL. data URIs are used because arbitrary https hosts are refused. Only png, webp and jpeg are accepted, with at most 25 MiB per image and 64 MiB per request. `mask` must be a PNG with an alpha channel, under 4 MiB, the same size as the first image. Router removes it when there is no image. `output_format` is fixed to png and `output_compression` is hidden, because the result reader cannot map the response's `output_format` ('png') to a mime type. The OpenAI-served response is always inline `data[].b64_json`. The fal, Runware or WaveSpeed fallback for gpt-image-2 returns `data[].url` only, hence the second media path. Exposed params: size (free string, e.g. 1024x1024, 1536x1024, 1024x1536, auto), quality, background (transparent/opaque), moderation (auto/low). The shared `quality` enum lists low, medium, high, xhigh, max, standard, hd and auto. standard and hd are DALL-E values, and xhigh/max are probably only valid on the 2.x ids, so the app should offer low, medium, high and auto by default. Which ids accept xhigh/max is not stated in the schema. gpt-image-1 sizes are limited to the three fixed sizes plus auto. The schema does not constrain this. The call is sync/direct-return with no queue handle."
@@ -5142,7 +5182,13 @@
        ],
        "default": "1K"
       }
-     }
+     },
+     "providers": [
+      "comfy",
+      "fal",
+      "runware",
+      "wavespeed"
+     ]
     },
     {
      "id": "vertexai/gemini-3.1-flash-image",
@@ -5176,7 +5222,13 @@
        ],
        "default": "1K"
       }
-     }
+     },
+     "providers": [
+      "comfy",
+      "fal",
+      "runware",
+      "wavespeed"
+     ]
     },
     {
      "id": "vertexai/gemini-3.1-flash-lite-image",
@@ -6258,7 +6310,11 @@
       "text-to-video",
       "image-to-video"
      ],
-     "uploads": true
+     "uploads": true,
+     "providers": [
+      "comfy",
+      "higgsfield"
+     ]
     },
     {
      "id": "wan/wan3.0-video-prime",

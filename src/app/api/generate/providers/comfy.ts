@@ -14,7 +14,7 @@ import { randomUUID } from "crypto";
 
 import type { GenerationInput, GenerationOutput } from "@/lib/providers/types";
 import { COMFY_ROUTER_BASE_URL } from "@/lib/providers/comfyRouter";
-import { resolveRouterModel } from "@/lib/providers/comfyRouter/catalog";
+import { ROUTER_PROVIDER_PARAM, resolveRouterModel } from "@/lib/providers/comfyRouter/catalog";
 import type { RouterBinding, RouterOutput } from "@/lib/providers/comfyRouter/families";
 import { encodeMedia } from "@/lib/providers/comfyRouter/media";
 import { buildRouterBody, missingInputs, type RouterRequestInput } from "@/lib/providers/comfyRouter/request";
@@ -126,6 +126,17 @@ function modelPath(modelId: string): string {
   return `${COMFY_ROUTER_BASE_URL}/v2/models/${encodeURIComponent(provider ?? "")}/${encodeURIComponent(rest.join("/"))}`;
 }
 
+/**
+ * The provider to ask for, when the user picked one other than the default.
+ * Anything not in the model's list is ignored rather than sent, so a stale
+ * setting (a model that lost an alternate) falls back to the default.
+ */
+export function servingProvider(binding: RouterBinding, value: unknown): string | null {
+  if (typeof value !== "string" || binding.providers.length < 2) return null;
+  if (value === binding.providers[0] || !binding.providers.includes(value)) return null;
+  return value;
+}
+
 /** Queue a run. Returns the Router request id, which the poll route carries. */
 export async function submitComfyTask(
   requestId: string,
@@ -140,9 +151,10 @@ export async function submitComfyTask(
   const missing = missingInputs(binding, prepared);
   if (missing) throw new Error(missing);
   const body = buildRouterBody(binding, params, prepared);
-  console.log(`[API:${requestId}] Comfy Router submit ${binding.id} (${binding.family})`);
+  const provider = servingProvider(binding, input.parameters?.[ROUTER_PROVIDER_PARAM]);
+  console.log(`[API:${requestId}] Comfy Router submit ${binding.id} (${binding.family})${provider ? ` via ${provider}` : ""}`);
 
-  const response = await fetch(`${modelPath(binding.id)}/requests`, {
+  const response = await fetch(`${modelPath(binding.id)}/requests${provider ? `?model_provider=${encodeURIComponent(provider)}` : ""}`, {
     method: "POST",
     headers: headers(apiKey, { "Idempotency-Key": randomUUID() }),
     body: JSON.stringify(body),
