@@ -129,10 +129,16 @@ export function flatten(doc: OpenApi, input: JsonSchema | undefined, depth = 0):
   if (union?.length && !schema.properties) {
     const branches = union.map((branch) => flatten(doc, branch, depth + 1));
     const real = branches.filter((branch) => branch.type !== "null");
-    const pick = real.find((branch) => branch.type === "object" || branch.properties) ?? real[0];
+    // Prefer the branch that is the shape: an object, then a range ("-1 or 4..15"
+    // is a range with a sentinel), then the widest list of values.
+    const pick =
+      real.find((branch) => branch.type === "object" || branch.properties) ??
+      real.find((branch) => branch.minimum !== undefined || branch.maximum !== undefined) ??
+      [...real].sort((a, b) => (b.enum?.length ?? 0) - (a.enum?.length ?? 0))[0];
     if (pick) {
       const enums = real.every((branch) => branch.enum) ? real.flatMap((branch) => branch.enum ?? []) : undefined;
       schema = {
+        type: schema.type,
         ...pick,
         description: schema.description ?? pick.description,
         default: schema.default ?? pick.default,
