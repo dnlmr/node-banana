@@ -21,7 +21,6 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronsRight,
-  Cpu,
   Eye,
   EyeOff,
   FastForward,
@@ -124,8 +123,8 @@ const SparkleIcon = () => <Sparkles {...ICON} />;
 const OutputIcon = () => <SquareArrowOutUpRight {...ICON} />;
 /** All nodes: one of every kind. */
 const NodesIcon = () => <Shapes {...ICON} />;
-/** All models: the thing doing the compute. */
-const ModelsIcon = () => <Cpu {...ICON} />;
+/** All models: a box of models. The 3D item in the Generate menu uses the same cube. */
+const ModelsIcon = () => <Box {...ICON} />;
 /** 3D generation. */
 const CubeIcon = () => <Box {...ICON} />;
 const LlmIcon = () => <MessageSquareText {...ICON} />;
