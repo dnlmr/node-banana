@@ -9,6 +9,7 @@
  * provider info so JSON round-trips cleanly).
  */
 
+import { Select } from "@/components/ui/Controls";
 import { useState, useEffect } from "react";
 import { Dialog, DialogBody, DialogButton, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -78,31 +79,23 @@ export function LLMFallbackPopover({ nodeId, onClose }: LLMFallbackPopoverProps)
         <DialogTitle compact>Select fallback LLM</DialogTitle>
       </DialogHeader>
       <DialogBody compact>
-        <label className="block text-xs text-neutral-400 mb-1">Provider</label>
-        <select
+        <label htmlFor="llm-fallback-provider" className="block text-xs text-neutral-400 mb-1">Provider</label>
+        <Select
+          id="llm-fallback-provider"
           value={provider}
-          onChange={(e) => setProvider(e.target.value as LLMProvider)}
-          className="w-full mb-3 px-2 py-1.5 text-sm bg-well border border-card-border rounded-well text-neutral-200 focus:outline-none focus:ring-1 focus:ring-neutral-600"
-        >
-          {LLM_PROVIDER_OPTIONS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
+          options={LLM_PROVIDER_OPTIONS}
+          onChange={(next) => setProvider(next as LLMProvider)}
+          className="mb-3"
+        />
 
-        <label className="block text-xs text-neutral-400 mb-1">Model</label>
-        <select
+        <label htmlFor="llm-fallback-model" className="block text-xs text-neutral-400 mb-1">Model</label>
+        <Select
+          id="llm-fallback-model"
           value={model}
-          onChange={(e) => setModel(e.target.value as LLMModelType)}
-          className="w-full mb-1 px-2 py-1.5 text-sm bg-well border border-card-border rounded-well text-neutral-200 focus:outline-none focus:ring-1 focus:ring-neutral-600"
-        >
-          {modelOptions.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
+          options={modelOptions}
+          onChange={(next) => setModel(next as LLMModelType)}
+          className="mb-1"
+        />
 
       </DialogBody>
       <DialogFooter compact className="justify-between">

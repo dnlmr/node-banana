@@ -71,12 +71,16 @@ describe("SelectField", () => {
         emptyLabel="Default"
       />
     );
-    const select = screen.getByLabelText("Ratio") as HTMLSelectElement;
-    expect(select.value).toBe("16:9");
-    expect(screen.getByText("Default")).toBeInTheDocument();
-    expect(screen.getByText("Portrait")).toBeInTheDocument();
-    fireEvent.change(select, { target: { value: "9:16" } });
+    const trigger = screen.getByLabelText("Ratio");
+    expect(trigger).toHaveAttribute("role", "combobox");
+    expect(trigger).toHaveAttribute("data-value", "16:9");
+    expect(trigger).toHaveTextContent("16:9");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("option", { name: "Default" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Portrait" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "Portrait" }));
     expect(onChange).toHaveBeenCalledWith("9:16");
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 
   it("forwards data-tutorial to the select element", () => {

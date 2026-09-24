@@ -742,8 +742,9 @@ export function ProjectSetupModal({
                 <Select
                   id="llm-provider"
                   value={llmProvider}
-                  onChange={(e) => {
-                    const newProvider = e.target.value as LLMProvider;
+                  options={LLM_PROVIDER_OPTIONS}
+                  onChange={(next) => {
+                    const newProvider = next as LLMProvider;
                     const firstModelForProvider = defaultLLMModel(newProvider);
                     const currentTemp = localNodeDefaults.llm?.temperature ?? 0.7;
                     setLocalNodeDefaults(prev => ({
@@ -757,11 +758,7 @@ export function ProjectSetupModal({
                       }
                     }));
                   }}
-                >
-                  {LLM_PROVIDER_OPTIONS.map((p) => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
-                  ))}
-                </Select>
+                />
               </Field>
 
               {/* Model dropdown */}
@@ -769,17 +766,14 @@ export function ProjectSetupModal({
                 <Select
                   id="llm-model"
                   value={localNodeDefaults.llm?.model || defaultLLMModel(llmProvider)}
-                  onChange={(e) => {
+                  options={llmModelOptions(llmProvider, localNodeDefaults.llm?.model)}
+                  onChange={(next) => {
                     setLocalNodeDefaults(prev => ({
                       ...prev,
-                      llm: { ...prev.llm, model: e.target.value as LLMModelType }
+                      llm: { ...prev.llm, model: next as LLMModelType }
                     }));
                   }}
-                >
-                  {llmModelOptions(llmProvider, localNodeDefaults.llm?.model).map((m) => (
-                    <option key={m.value} value={m.value}>{m.label}</option>
-                  ))}
-                </Select>
+                />
               </Field>
 
               {/* Temperature slider */}

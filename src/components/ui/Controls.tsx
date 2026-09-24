@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown } from "lucide-react";
+import { Dropdown, type DropdownOption } from "@/components/nodes/ui/Dropdown";
 import type { InputHTMLAttributes, ReactNode } from "react";
 
 import { cn } from "@/components/nodes/ui/cn";
@@ -190,18 +190,18 @@ export function Slider({
   );
 }
 
-/** Native select in the input well, with its own chevron. */
-export function Select({
-  className,
-  children,
-  ...rest
-}: React.SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <div className={cn("relative", className)}>
-      <select {...rest} className={cn(inputClass, "appearance-none pr-8")}>
-        {children}
-      </select>
-      <ChevronDown size={16} strokeWidth={1.75} className="pointer-events-none absolute right-2.5 top-2.5 text-neutral-500" />
-    </div>
-  );
+export interface SelectProps {
+  id?: string;
+  value: string;
+  options: ReadonlyArray<DropdownOption | string>;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+  "aria-label"?: string;
+  className?: string;
+}
+
+/** The dropdown at dialog density, in the input well. */
+export function Select({ className, ...rest }: SelectProps) {
+  return <Dropdown size="dialog" className={className} {...rest} />;
 }
