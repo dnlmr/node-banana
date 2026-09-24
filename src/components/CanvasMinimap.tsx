@@ -1,5 +1,6 @@
 "use client";
 
+import { Fullscreen, Lock, LockOpen, Map, Minus, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import {
   MiniMap,
@@ -62,8 +63,6 @@ export function getMiniMapNodeColor(node: Node): string {
     default: return "#94a3b8";
   }
 }
-
-const iconProps = { fill: "none", stroke: "currentColor", strokeWidth: 1.75, strokeLinecap: "round", strokeLinejoin: "round", viewBox: "0 0 24 24", "aria-hidden": true } as const;
 
 interface ControlButtonProps {
   label: string;
@@ -152,17 +151,15 @@ export function CanvasMinimap({ disabled = false }: CanvasMinimapProps) {
       )}
       <div className="flex h-10 items-center gap-0.5 px-1">
         <ControlButton label="Zoom out" disabled={disabled} onClick={() => zoomOut()}>
-          <svg className="h-[18px] w-[18px]" {...iconProps}><path d="M5 12h14" /></svg>
+          <Minus size={18} strokeWidth={1.75} />
         </ControlButton>
         <ZoomReadout />
         <ControlButton label="Zoom in" disabled={disabled} onClick={() => zoomIn()}>
-          <svg className="h-[18px] w-[18px]" {...iconProps}><path d="M12 5v14M5 12h14" /></svg>
+          <Plus size={18} strokeWidth={1.75} />
         </ControlButton>
         <div className={CHROME_DIVIDER} />
         <ControlButton label="Fit view" disabled={disabled} onClick={() => fitView()}>
-          <svg className="h-[18px] w-[18px]" {...iconProps}>
-            <path d="M4 9V5a1 1 0 011-1h4M20 9V5a1 1 0 00-1-1h-4M4 15v4a1 1 0 001 1h4M20 15v4a1 1 0 01-1 1h-4" />
-          </svg>
+          <Fullscreen size={18} strokeWidth={1.75} />
         </ControlButton>
         <ControlButton
           label={isInteractive ? "Lock canvas" : "Unlock canvas"}
@@ -171,10 +168,7 @@ export function CanvasMinimap({ disabled = false }: CanvasMinimapProps) {
           disabled={disabled}
           onClick={toggleInteractive}
         >
-          <svg className="h-[18px] w-[18px]" {...iconProps}>
-            <rect x="5" y="11" width="14" height="10" rx="2" />
-            <path d={isInteractive ? "M8 11V7a4 4 0 018 0" : "M8 11V7a4 4 0 018 0v4"} />
-          </svg>
+          {isInteractive ? <LockOpen size={18} strokeWidth={1.75} /> : <Lock size={18} strokeWidth={1.75} />}
         </ControlButton>
         <div className={CHROME_DIVIDER} />
         <ControlButton
@@ -184,10 +178,7 @@ export function CanvasMinimap({ disabled = false }: CanvasMinimapProps) {
           disabled={disabled}
           onClick={() => setIsMinimapVisible((v) => !v)}
         >
-          <svg className="h-[18px] w-[18px]" {...iconProps} strokeWidth={1.5}>
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M7 8h3v3H7zM12 8h3v3h-3zM7 13h8v3H7z" fill="currentColor" stroke="none" />
-          </svg>
+          <Map size={18} strokeWidth={1.5} />
         </ControlButton>
       </div>
     </Panel>

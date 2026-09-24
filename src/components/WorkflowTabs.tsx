@@ -1,5 +1,6 @@
 "use client";
 
+import { Plus, X } from "lucide-react";
 import { useEffect, useMemo, type MouseEvent } from "react";
 import { useOnViewportChange, useReactFlow } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -142,9 +143,7 @@ export function WorkflowTabs() {
                     : "flex"
                 }`}
               >
-                <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
-                </svg>
+                <X size={10} strokeWidth={2.5} />
               </button>
             </span>
           </div>
@@ -158,9 +157,7 @@ export function WorkflowTabs() {
         title={busy ? busyReason : "New tab"}
         className="mb-px ml-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-white/[0.06] hover:text-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25}>
-          <path strokeLinecap="round" d="M12 5v14M5 12h14" />
-        </svg>
+        <Plus size={14} strokeWidth={2.25} />
       </button>
     </div>
   );
