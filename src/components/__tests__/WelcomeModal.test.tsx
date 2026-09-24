@@ -139,7 +139,7 @@ describe("WelcomeModal", () => {
 
       await waitFor(() => {
         expect(screen.getByRole("heading", { name: "Templates" })).toBeInTheDocument();
-        expect(screen.getByText("Quick Start")).toBeInTheDocument();
+        expect(screen.getByText(/^1 template$/)).toBeInTheDocument();
       });
     });
 
@@ -277,7 +277,7 @@ describe("WelcomeModal", () => {
       });
 
       // Verify templates view is showing - the actual workflow selection is tested in QuickstartTemplatesView tests
-      expect(screen.getByText("Quick Start")).toBeInTheDocument();
+      expect(screen.getByText(/^1 template$/)).toBeInTheDocument();
     });
 
     it("should show prompt view when navigating to vibe", () => {

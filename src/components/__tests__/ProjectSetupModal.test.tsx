@@ -227,6 +227,35 @@ describe("ProjectSetupModal", () => {
       expect(screen.getByText("Replicate")).toBeInTheDocument();
       expect(screen.getByText("fal.ai")).toBeInTheDocument();
     });
+
+    it("opens on the page named by initialTab in settings mode", () => {
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          mode="settings"
+          initialTab="providers"
+        />
+      );
+
+      expect(screen.getByRole("button", { name: "Providers" })).toHaveAttribute("aria-current", "page");
+      expect(screen.getByText("Google Gemini")).toBeInTheDocument();
+    });
+
+    it("ignores initialTab for a new project, which starts on Project", () => {
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          mode="new"
+          initialTab="providers"
+        />
+      );
+
+      expect(screen.getByPlaceholderText("my-project")).toBeInTheDocument();
+    });
   });
 
   describe("Project Tab - New Mode", () => {

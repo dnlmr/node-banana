@@ -19,8 +19,9 @@ export {
   ellipsisClass,
 } from "./Field";
 export type { SelectOption, ChipOption } from "./Field";
-export { ControlsCard, SummaryValues } from "./ControlsCard";
-export type { ControlsCardProps, SummaryRowProps } from "./ControlsCard";
+export { ControlsCard, SummaryValues, ControlsSizingContext, autoControlsWidth } from "./ControlsCard";
+export type { ControlsCardProps, SummaryRowProps, ControlsSizing } from "./ControlsCard";
+export { WidthGrip } from "./WidthGrip";
 export { CarouselControls, dotWindow } from "./CarouselControls";
 export { ScrubRow, formatTime } from "./ScrubRow";
 export { Spinner, LoadingOverlay } from "./Spinner";

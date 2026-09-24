@@ -22,13 +22,14 @@ interface WelcomeModalProps {
  * The welcome dialog is a split dialog: every view keeps the dark pane on
  * the left and swaps what it carries (the identity, the template filters,
  * the folder). Sizes are the design canvas's: 820×470 for the initial,
- * prompt and browse views, 1000×620 for the template explorer.
+ * prompt and browse views; the template explorer is 1200×720, the model
+ * browser's size, so two columns of cards get the same room.
  */
 const VIEW_SIZE: Record<QuickstartView, string> = {
   initial: "w-[820px] h-[470px]",
   vibe: "w-[820px] h-[470px]",
   browse: "w-[820px] h-[470px]",
-  templates: "w-[1000px] h-[620px]",
+  templates: "w-[1200px] h-[720px]",
 };
 
 export function WelcomeModal({

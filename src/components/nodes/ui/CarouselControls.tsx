@@ -2,6 +2,7 @@
 
 import React from "react";
 import { cn } from "./cn";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 interface CarouselControlsProps {
   index: number;
@@ -93,9 +94,7 @@ function NavButton({
       aria-label={title}
       className="w-5 h-5 rounded-[6px] squircle flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
     >
-      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-        <path strokeLinecap="round" strokeLinejoin="round" d={dir === "prev" ? "M15 19l-7-7 7-7" : "M9 5l7 7-7 7"} />
-      </svg>
+      {dir === "prev" ? <ChevronLeft size={12} strokeWidth={2} /> : <ChevronRight size={12} strokeWidth={2} />}
     </button>
   );
 }

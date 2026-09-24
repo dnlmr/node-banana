@@ -1,5 +1,6 @@
 "use client";
 
+import { Check, X } from "lucide-react";
 import {
   Dialog,
   DialogButton,
@@ -129,9 +130,7 @@ export function FTUXModal({ onComplete, onStartTutorial }: FTUXModalProps) {
                 className="w-7 h-7 flex items-center justify-center rounded-md text-neutral-500 hover:text-neutral-200 hover:bg-neutral-700/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
                 aria-label="Close"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X size={16} strokeWidth={2} />
               </button>
             ) : undefined
           }
@@ -214,17 +213,7 @@ function StepRailItem({ label, state }: { label: string; state: "done" | "curren
     >
       {state === "done" ? (
         <span aria-hidden="true" className="flex w-3.5 shrink-0">
-          <svg
-            className="w-3.5 h-3.5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M5 12l5 5L20 7" />
-          </svg>
+          <Check size={14} strokeWidth={2} />
         </span>
       ) : (
         <span

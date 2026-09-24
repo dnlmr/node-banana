@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowUpRight, ChevronRight, CircleHelp, Search, Settings, Trash2, Upload } from "lucide-react";
 import { Dialog } from "@/components/ui/Dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -658,19 +659,7 @@ export function ComfyWorkflowImportModal({
                     : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-700/50"
                 }`}
               >
-                <svg
-                  className="w-4 h-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="9.5" />
-                  <path d="M9.2 9.2a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.4-2.8 4" />
-                  <path d="M12 17.6h.01" />
-                </svg>
+                <CircleHelp size={16} strokeWidth={1.8} />
               </button>
               <button
                 type="button"
@@ -684,18 +673,7 @@ export function ComfyWorkflowImportModal({
                     : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-700/50"
                 }`}
               >
-                <svg
-                  className="w-4 h-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
+                <Settings size={16} strokeWidth={1.8} />
               </button>
             </div>
           </div>
@@ -1015,19 +993,7 @@ function FileDropZone({
         </>
       ) : (
         <>
-          <svg
-            className="w-8 h-8 text-neutral-500"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <path d="m7 10 5-5 5 5" />
-            <path d="M12 5v12" />
-          </svg>
+          <Upload size={32} strokeWidth={1.5} className="text-neutral-500" />
           {/* Spans, not p/div: a button may only hold phrasing content. */}
           <span className="block text-center">
             <span className="block text-sm text-neutral-300">Drop a workflow JSON here</span>
@@ -1110,17 +1076,7 @@ function BlueprintPicker({
       {/* Header row: the list is long enough that scanning it is the slow way
           to a known name. */}
       <div className="flex items-center gap-2 px-3 border-b border-neutral-800">
-        <svg
-          className="w-3.5 h-3.5 shrink-0 text-neutral-400"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
+        <Search size={14} strokeWidth={2} className="shrink-0 text-neutral-400" />
         <input
           type="text"
           value={filter}
@@ -1263,19 +1219,7 @@ function SavedNodePicker({
                   aria-label={`Delete ${entry.name}`}
                   className="shrink-0 w-10 h-10 flex items-center justify-center text-neutral-600 hover:text-red-400 transition-colors"
                 >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M3 6h18" />
-                    <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
-                    <path d="M19 6v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6" />
-                  </svg>
+                  <Trash2 size={14} strokeWidth={2} />
                 </button>
               )}
             </div>
@@ -1475,34 +1419,14 @@ function ConfirmStep({
               aria-expanded={showAll}
               className="flex items-center gap-1.5 min-h-10 text-xs text-neutral-400 hover:text-neutral-200 transition-[color,scale] duration-150 active:scale-[0.96]"
             >
-              <svg
-                className={`w-3 h-3 transition-transform duration-150 ${showAll ? "rotate-90" : ""}`}
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="m9 18 6-6-6-6" />
-              </svg>
+              <ChevronRight size={12} strokeWidth={2.5} className={`transition-transform duration-150 ${showAll ? "rotate-90" : ""}`} />
               {showAll ? "Hide" : `Show ${rest.length} more`} widget{rest.length === 1 ? "" : "s"}
             </button>
 
             {showAll && (
               <div className="mt-1 rounded-lg border border-neutral-700/60 bg-neutral-900 overflow-hidden">
                 <div className="flex items-center gap-2 px-2.5 border-b border-neutral-800">
-                  <svg
-                    className="w-3.5 h-3.5 shrink-0 text-neutral-400"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  >
-                    <circle cx="11" cy="11" r="7" />
-                    <path d="m20 20-3.5-3.5" />
-                  </svg>
+                  <Search size={14} strokeWidth={2} className="shrink-0 text-neutral-400" />
                   <input
                     type="text"
                     value={widgetFilter}
@@ -1673,17 +1597,7 @@ function HelpPanel() {
         className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
       >
         Read the App Mode guide
-        <svg
-          className="w-3 h-3"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M7 17 17 7M9 7h8v8" />
-        </svg>
+        <ArrowUpRight size={12} strokeWidth={2} />
       </a>
     </div>
   );

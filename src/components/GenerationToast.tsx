@@ -1,5 +1,6 @@
 "use client";
 
+import { X } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { CHROME_SURFACE } from "./chromeStyles";
 import { producerName, setHistoryDragData } from "./GlobalImageHistory";
@@ -129,9 +130,7 @@ export function GenerationToastCard({ toast: item }: { toast: GenerationToastIte
         aria-label="Dismiss"
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
       >
-        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" aria-hidden="true">
-          <path d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        <X size={14} strokeWidth={1.75} />
       </button>
       <span
         // Keyed on shownAt so a batch extension restarts the countdown

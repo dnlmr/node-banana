@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
 import { Dialog, DialogButton, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
+import { X } from "lucide-react";
 
 const FONT_SIZE_STORAGE_KEY = 'prompt-editor-font-size';
 const DEFAULT_FONT_SIZE = 14;
@@ -165,19 +166,7 @@ export const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
                 className="absolute top-3 right-3 text-neutral-400 hover:text-neutral-200 transition-colors focus:outline-none"
                 aria-label="Close"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
+                <X size={20} strokeWidth={2} />
               </button>
 
               <p className="text-neutral-100 text-[13px] text-center mb-5">

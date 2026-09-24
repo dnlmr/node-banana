@@ -1,5 +1,6 @@
 "use client";
 
+import { Check, CircleAlert, CircleCheck, Copy, Info, Pause, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 
@@ -39,24 +40,16 @@ const typeStyles = {
 
 const typeIcons = {
   info: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <Info size={20} strokeWidth={2} />
   ),
   success: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <CircleCheck size={20} strokeWidth={2} />
   ),
   warning: (
-    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-    </svg>
+    <Pause size={20} strokeWidth={0} fill="currentColor" />
   ),
   error: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <CircleAlert size={20} strokeWidth={2} />
   ),
 };
 
@@ -108,13 +101,9 @@ export function Toast() {
             title="Copy message"
           >
             {copied ? (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
+              <Check size={16} strokeWidth={2} />
             ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
+              <Copy size={16} strokeWidth={2} />
             )}
           </button>
           <button
@@ -122,9 +111,7 @@ export function Toast() {
             className="shrink-0 p-1 rounded hover:bg-white/10 transition-colors"
             title="Dismiss"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={16} strokeWidth={2} />
           </button>
         </div>
         {details && (

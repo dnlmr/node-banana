@@ -28,6 +28,9 @@ export const SUMMARY_ROW_H = 28;
 /** Controls card is `node width − CONTROLS_INSET`, capped at CONTROLS_MAX_W. */
 export const CONTROLS_INSET = 24;
 export const CONTROLS_MAX_W = 360;
+/** Bounds when the user drags the controls card's edge grips to their own width. */
+export const CONTROLS_MIN_W = 160;
+export const CONTROLS_RESIZE_MAX_W = 720;
 
 /** Settings panel fields (tight density). */
 export const FIELD_ROW_H = 22;

@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useMemo, useEffect, useState, useCallback } from "react";
+import { Plus, X } from "lucide-react";
 import { useReactFlow, NodeProps } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -159,9 +160,7 @@ export const SwitchNode = memo(({ id, data, selected }: NodeProps<WorkflowNode>)
                   onClick={() => handleDelete(sw.id)}
                   title="Delete switch"
                 >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  <X size={12} strokeWidth={2} />
                 </button>
               )}
             </LogicRow>
@@ -171,9 +170,7 @@ export const SwitchNode = memo(({ id, data, selected }: NodeProps<WorkflowNode>)
             className="nodrag nopan w-full h-[22px] flex items-center justify-center gap-1 text-neutral-400 hover:text-white text-node rounded-well squircle hover:bg-white/5 transition-colors"
             onClick={handleAddSwitch}
           >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
+            <Plus size={12} strokeWidth={2} />
             Add Switch
           </button>
           {!showOutputs && (

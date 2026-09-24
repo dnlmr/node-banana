@@ -26,6 +26,7 @@ import {
   sameInputSchema,
   type SocketSpec,
 } from "./ui";
+import { Download, Pause, Play, X } from "lucide-react";
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "audio", type: "audio", label: "Audio" }];
 const DEFAULT_INPUTS: SocketSpec[] = [{ id: "text", type: "text", label: "Prompt" }];
@@ -212,13 +213,9 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
         aria-label={isPlaying ? "Pause" : "Play"}
       >
         {isPlaying ? (
-          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-          </svg>
+          <Pause size={12} strokeWidth={0} fill="currentColor" />
         ) : (
-          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-            <path d="M8 5v14l11-7z" />
-          </svg>
+          <Play size={12} strokeWidth={0} fill="currentColor" />
         )}
       </button>
       <div className="flex-1 min-w-0 h-1 bg-neutral-700 rounded-full overflow-hidden relative">
@@ -303,18 +300,14 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
                 className="w-5 h-5 bg-neutral-900/80 hover:bg-neutral-700 rounded flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
                 title="Download audio"
               >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
+                <Download size={12} strokeWidth={2} />
               </button>
               <button
                 onClick={handleClearAudio}
                 className="w-5 h-5 bg-neutral-900/80 hover:bg-red-600/80 rounded flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
                 title="Clear audio"
               >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X size={12} strokeWidth={2} />
               </button>
             </div>
           </>

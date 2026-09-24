@@ -1,5 +1,6 @@
 "use client";
 
+import { Eye, EyeOff, Trash2 } from "lucide-react";
 import { MenuBarLabel, MenuDivider, MenuIconButton, MenuSurface } from "@/components/ui/Menu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -104,25 +105,18 @@ export function HandleMenu({ target, onClose }: HandleMenuProps) {
 
       {allHidden ? (
         <MenuIconButton role="menuitem" title="Show" aria-label="Show" onClick={() => run(() => setEdgesHidden(ids, false))}>
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M2.4 12C3.7 7.9 7.5 5 12 5s8.3 2.9 9.6 7c-1.3 4.1-5.1 7-9.6 7s-8.3-2.9-9.6-7z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
+          <Eye size={16} strokeWidth={1.75} />
         </MenuIconButton>
       ) : (
         <MenuIconButton role="menuitem" title="Hide" aria-label="Hide" disabled={count === 0} onClick={() => run(() => setEdgesHidden(ids, true))}>
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A9.8 9.8 0 0112 5c4.5 0 8.3 2.9 9.6 7a10 10 0 01-2.2 3.6M6.6 6.6A10 10 0 002.4 12c1.3 4.1 5.1 7 9.6 7 1.4 0 2.8-.3 4-.8" />
-          </svg>
+          <EyeOff size={16} strokeWidth={1.75} />
         </MenuIconButton>
       )}
 
       <MenuDivider variant="bar" />
 
       <MenuIconButton role="menuitem" className="hover:text-red-400" title="Remove all" aria-label="Remove all" disabled={count === 0} onClick={() => run(() => removeEdges(ids))}>
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" />
-        </svg>
+        <Trash2 size={16} strokeWidth={1.5} />
       </MenuIconButton>
     </MenuSurface>
   );

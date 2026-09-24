@@ -1,5 +1,6 @@
 "use client";
 
+import { Images, LayoutGrid, X } from "lucide-react";
 import { memo, useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -75,30 +76,11 @@ export function formatRelativeTime(timestamp: number): string {
 }
 
 const ImagesIcon = () => (
-  <svg
-    className="h-[18px] w-[18px]"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.75}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <rect x="7" y="3" width="14" height="14" rx="2" />
-    <path d="M17 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2" />
-    <circle cx="11.5" cy="7.5" r="1.25" />
-    <path d="m21 14-3.3-3.3a1.5 1.5 0 0 0-2.1 0L10 16" />
-  </svg>
+  <Images size={18} strokeWidth={1.75} />
 );
 
 const GridIcon = () => (
-  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="4" y="4" width="6" height="6" rx="1.5" />
-    <rect x="14" y="4" width="6" height="6" rx="1.5" />
-    <rect x="4" y="14" width="6" height="6" rx="1.5" />
-    <rect x="14" y="14" width="6" height="6" rx="1.5" />
-  </svg>
+  <LayoutGrid size={14} strokeWidth={1.75} />
 );
 
 /** One thumbnail in the drop-down grid. */
@@ -209,9 +191,7 @@ function HistorySidebar({
             className="flex h-5 w-5 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-white/7 hover:text-white"
             title="Close"
           >
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={12} strokeWidth={2} />
           </button>
         </div>
       </div>

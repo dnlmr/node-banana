@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, useEffect, useMemo, useRef } from "react";
+import { Grid2x2Plus, LayoutGrid, Minus, Plus } from "lucide-react";
 import { NodeProps, Node } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { ControlsCard, EmptyState, Field, FieldRow, PanelButton, Spinner, SummaryValues, type SocketSpec } from "./ui";
@@ -54,9 +55,7 @@ function GridDimField({ label, value, onChange, disabled }: GridDimFieldProps) {
           className="nodrag nopan px-2 text-neutral-400 hover:text-neutral-100 hover:bg-white/5 disabled:text-neutral-700 disabled:hover:bg-transparent transition-colors"
           aria-label={`Decrease ${label.toLowerCase()}`}
         >
-          <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14" />
-          </svg>
+          <Minus size={10} strokeWidth={2} />
         </button>
         <input
           type="text"
@@ -77,9 +76,7 @@ function GridDimField({ label, value, onChange, disabled }: GridDimFieldProps) {
           className="nodrag nopan px-2 text-neutral-400 hover:text-neutral-100 hover:bg-white/5 disabled:text-neutral-700 disabled:hover:bg-transparent transition-colors"
           aria-label={`Increase ${label.toLowerCase()}`}
         >
-          <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14" />
-          </svg>
+          <Plus size={10} strokeWidth={2} />
         </button>
       </div>
     </Field>
@@ -231,9 +228,7 @@ export function SplitGridNode({ id, data, selected }: NodeProps<SplitGridNodeTyp
                   title={isRunning ? "Wait for the current run to finish" : "Edit the nodes created for each cell"}
                   className={`shrink-0 flex items-center justify-center gap-1.5 ${ACTION_W}`}
                 >
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 002.25-2.25V6a2.25 2.25 0 00-2.25-2.25H6A2.25 2.25 0 003.75 6v2.25A2.25 2.25 0 006 10.5zm0 9.75h2.25A2.25 2.25 0 0010.5 18v-2.25a2.25 2.25 0 00-2.25-2.25H6a2.25 2.25 0 00-2.25 2.25V18A2.25 2.25 0 006 20.25zm9.75-9.75H18a2.25 2.25 0 002.25-2.25V6A2.25 2.25 0 0018 3.75h-2.25A2.25 2.25 0 0013.5 6v2.25a2.25 2.25 0 002.25 2.25z" />
-                  </svg>
+                  <Grid2x2Plus size={12} strokeWidth={1.5} />
                   Open cell editor
                 </PanelButton>
               </div>
@@ -334,9 +329,7 @@ export function SplitGridNode({ id, data, selected }: NodeProps<SplitGridNodeTyp
           <EmptyState
             message="Connect image"
             icon={
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-              </svg>
+              <LayoutGrid size={20} strokeWidth={1.5} />
             }
           />
         )}

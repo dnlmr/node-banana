@@ -1,5 +1,6 @@
 "use client";
 
+import { Check, Info } from "lucide-react";
 import { useState, useEffect } from "react";
 import { FTUXStepProps } from "@/types/ftux";
 import { ProviderType } from "@/types";
@@ -119,9 +120,7 @@ export function FTUXApiKeysStep({}: FTUXStepProps) {
                     className="flex text-neutral-600 hover:text-neutral-100 transition-colors"
                     aria-label={`Get ${provider.name} API key`}
                   >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+                    <Info size={14} strokeWidth={2} />
                   </a>
                   <span className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 bg-[#0f0f0f] text-neutral-200 text-xs rounded-md border border-white/10 whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-10">
                     Get API key{(provider.id === "openai" || provider.id === "anthropic") && " • Used for LLM nodes only"}
@@ -135,18 +134,7 @@ export function FTUXApiKeysStep({}: FTUXStepProps) {
                 {hasKey ? (
                   <span className="inline-flex items-center gap-2 text-xs text-neutral-400">
                     Configured via .env
-                    <svg
-                      className="w-3.5 h-3.5 text-handle-image"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <path d="M5 12l5 5L20 7" />
-                    </svg>
+                    <Check size={14} strokeWidth={2} className="text-handle-image" />
                   </span>
                 ) : (
                   <TextInput

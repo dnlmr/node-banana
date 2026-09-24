@@ -2,6 +2,7 @@
 
 import React, { ReactNode, useCallback, useEffect, useId, useState } from "react";
 import { cn } from "./cn";
+import { ChevronDown } from "lucide-react";
 
 /**
  * Settings-panel fields. One column, tight density: a 22px row with a 72px
@@ -150,18 +151,11 @@ export function SelectWell({
           );
         })}
       </select>
-      <svg
-        className="pointer-events-none absolute right-[6px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-neutral-500"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <polyline points="6 9 12 15 18 9" />
-      </svg>
+      <ChevronDown
+        size={10}
+        strokeWidth={2.5}
+        className="pointer-events-none absolute right-[6px] top-1/2 -translate-y-1/2 text-neutral-500"
+      />
     </div>
   );
 }
