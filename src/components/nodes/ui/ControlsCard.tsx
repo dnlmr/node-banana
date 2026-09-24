@@ -5,6 +5,7 @@ import { cn } from "./cn";
 import { ellipsisClass } from "./Field";
 import { WidthGrip } from "./WidthGrip";
 import { CONTROLS_INSET, CONTROLS_MAX_W } from "./tokens";
+import { ChevronDown } from "lucide-react";
 
 export interface ControlsSizing {
   /** Node width, the base the card's automatic width is derived from. */
@@ -123,19 +124,12 @@ export function ControlsCard({
             aria-expanded={expanded}
             aria-controls={panelId}
           >
-            <svg
-              className="w-3 h-3 transition-transform duration-200"
+            <ChevronDown
+              size={12}
+              strokeWidth={2}
+              className="transition-transform duration-200"
               style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden
-            >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+            />
           </button>
         ) : (
           <span className="w-0" />

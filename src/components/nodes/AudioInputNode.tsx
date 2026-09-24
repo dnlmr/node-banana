@@ -9,6 +9,7 @@ import { useAudioVisualization } from "@/hooks/useAudioVisualization";
 import { useAudioPlayback } from "@/hooks/useAudioPlayback";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
+import { Download, Music, Pause, Play, X } from "lucide-react";
 
 type AudioInputNodeType = Node<AudioInputNodeData, "audioInput">;
 
@@ -144,13 +145,9 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
         aria-label={isPlaying ? "Pause" : "Play"}
       >
         {isPlaying ? (
-          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
-          </svg>
+          <Pause size={12} strokeWidth={0} fill="currentColor" />
         ) : (
-          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-            <path d="M8 5v14l11-7z" />
-          </svg>
+          <Play size={12} strokeWidth={0} fill="currentColor" />
         )}
       </button>
       <div className="flex-1 min-w-0 h-1 bg-neutral-700 rounded-full overflow-hidden relative">
@@ -221,18 +218,14 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
             className="absolute top-1 right-7 w-5 h-5 bg-black/60 hover:bg-black/80 text-white rounded text-xs opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-white transition-opacity flex items-center justify-center"
             title="Download audio"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
+            <Download size={12} strokeWidth={2} />
           </button>
           <button
             onClick={handleRemove}
             aria-label="Remove audio"
             className="absolute top-1 right-1 w-5 h-5 bg-black/60 hover:bg-red-600/80 text-white rounded text-xs opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center justify-center"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={12} strokeWidth={2} />
           </button>
         </>
       ) : (
@@ -247,9 +240,7 @@ export function AudioInputNode({ id, data, selected }: NodeProps<AudioInputNodeT
           className="absolute inset-0 bg-neutral-900/40 flex flex-col items-center justify-center cursor-pointer hover:bg-neutral-800/60 transition-colors"
         >
           <div className={`absolute inset-2 rounded-[6px] squircle border border-dashed pointer-events-none ${nodeData.isOptional ? "border-neutral-600" : "border-neutral-700/70"}`} />
-          <svg className="w-6 h-6 text-neutral-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 01-.99-3.467l2.31-.66A2.25 2.25 0 009 15.553z" />
-          </svg>
+          <Music size={24} strokeWidth={1.5} className="text-neutral-600" />
           <span className="text-xs text-neutral-500 mt-1.5">
             {nodeData.isOptional ? "Optional" : "Drop audio or click"}
           </span>

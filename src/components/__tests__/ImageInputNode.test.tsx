@@ -367,7 +367,7 @@ describe("ImageInputNode", () => {
       const buttons = container.querySelectorAll("button");
       // The remove button is the one that appears when image is present
       const removeButton = Array.from(buttons).find((btn) =>
-        btn.querySelector('svg path[d*="M6 18"]')
+        btn.querySelector('svg.lucide-x')
       );
       expect(removeButton).toBeInTheDocument();
 

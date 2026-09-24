@@ -19,6 +19,7 @@ import {
   ellipsisClass,
   type SocketSpec,
 } from "./ui";
+import { Check, CircleAlert, Copy, RefreshCw, X } from "lucide-react";
 
 const INPUT_SOCKETS: SocketSpec[] = [
   { id: "image", type: "image", label: "Image" },
@@ -212,9 +213,7 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
         </div>
       ) : nodeData.status === "error" ? (
         <div className="absolute inset-0 bg-red-900/40 flex flex-col items-center justify-center gap-1">
-          <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+          <CircleAlert size={24} strokeWidth={2} className="text-white" />
           <span className="text-white text-xs font-medium">Generation failed</span>
           {nodeData.error && (
             <span className="text-red-200 text-[10px] text-center px-3 mt-1 line-clamp-3">{nodeData.error}</span>
@@ -248,13 +247,9 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
               title={copied ? "Copied!" : "Copy to clipboard"}
             >
               {copied ? (
-                <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
+                <Check size={12} strokeWidth={2} className="text-white" />
               ) : (
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
+                <Copy size={12} strokeWidth={2} />
               )}
             </button>
             <button
@@ -263,18 +258,14 @@ export function LLMGenerateNode({ id, data, selected }: NodeProps<LLMGenerateNod
               className="nodrag nopan w-5 h-5 bg-neutral-900/80 hover:bg-blue-600/80 disabled:opacity-50 disabled:cursor-not-allowed rounded flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
               title="Regenerate"
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
+              <RefreshCw size={12} strokeWidth={2} />
             </button>
             <button
               onClick={handleClearOutput}
               className="nodrag nopan w-5 h-5 bg-neutral-900/80 hover:bg-red-600/80 rounded flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
               title="Clear output"
             >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X size={12} strokeWidth={2} />
             </button>
           </div>
         </div>
