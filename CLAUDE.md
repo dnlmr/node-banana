@@ -32,6 +32,7 @@ Node Banana is a node-based visual workflow editor for AI image generation. User
 - **@xyflow/react** (React Flow) for the node editor canvas
 - **Konva.js / react-konva** for canvas annotation drawing
 - **Zustand** for state management (single store pattern)
+- **lucide-react** for icons (20px, 1.5 stroke in chrome; hand-drawn SVG only for diagram-like glyphs such as the connector style toggle)
 
 ### Key Files
 
