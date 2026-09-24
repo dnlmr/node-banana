@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, Split } from "lucide-react";
 import { Node, NodeProps, useReactFlow } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { CheckboxField, Field, LogicRow, LogicRows, SelectWell, TextField, type SocketSpec } from "./ui";
@@ -237,12 +238,7 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
               className="nodrag nopan shrink-0 w-[22px] h-[22px] flex items-center justify-center bg-well shadow-well rounded-well squircle text-neutral-400 hover:text-neutral-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               title="Auto-route to Prompts"
             >
-              <svg className="w-3 h-3 rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M16 3h5v5" />
-                <path d="M8 3H3v5" />
-                <path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3" />
-                <path d="m15 9 6-6" />
-              </svg>
+              <Split size={12} strokeWidth={2} className="rotate-90" />
             </button>
           )}
         </LogicRow>
@@ -272,9 +268,7 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
               className="nodrag nopan flex items-center gap-1 h-[22px] text-node text-neutral-500 hover:text-neutral-300 transition-colors"
               aria-expanded={showAdvanced}
             >
-              <svg className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
+              <ChevronRight size={12} strokeWidth={2} className={`transition-transform ${showAdvanced ? "rotate-90" : ""}`} />
               <span>{showAdvanced ? "Hide" : "Show"}</span>
             </button>
           </Field>
