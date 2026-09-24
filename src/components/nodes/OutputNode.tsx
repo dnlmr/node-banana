@@ -34,7 +34,6 @@ export function OutputNode({ id, data, selected }: NodeProps<OutputNodeType>) {
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const [showLightbox, setShowLightbox] = useState(false);
   const previousEdgeCountRef = useRef<number | null>(null);
-  const videoAutoplayRef = useVideoAutoplay(id);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
   // Determine if content is audio
@@ -65,6 +64,7 @@ export function OutputNode({ id, data, selected }: NodeProps<OutputNodeType>) {
   const imageSrc = !isAudio && !isVideo ? contentSrc : null;
   const adaptiveImage = useAdaptiveImageSrc(imageSrc, id);
   const videoBlobUrl = useVideoBlobUrl(isVideo ? contentSrc ?? null : null);
+  const videoAutoplayRef = useVideoAutoplay(id, videoBlobUrl);
 
   // Auto-trigger execution when a new connection is made
   useEffect(() => {
