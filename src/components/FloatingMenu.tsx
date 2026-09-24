@@ -16,9 +16,16 @@ import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkflowBrowserModal } from "./WorkflowBrowserModal";
 import { KbdGroup } from "@/components/ui/Kbd";
 import { MenuDivider, MenuShortcut, MenuSurface, menuItemClass } from "@/components/ui/Menu";
+import {
+  CHROME_DIVIDER,
+  CHROME_ICON_BUTTON,
+  CHROME_ICON_BUTTON_OPEN,
+  CHROME_ICON_BUTTON_SIZE,
+  CHROME_SURFACE,
+} from "./chromeStyles";
 
-const ICON_BUTTON =
-  "relative flex h-7 w-7 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-neutral-700 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50";
+/** The bar's buttons are the navigator card's: 32px squircles in a 40px row. */
+const ICON_BUTTON = `relative ${CHROME_ICON_BUTTON} ${CHROME_ICON_BUTTON_SIZE.md}`;
 
 const MENU_ROW = `${menuItemClass} whitespace-nowrap [&>svg]:shrink-0 [&>svg]:text-neutral-400`;
 
@@ -398,7 +405,7 @@ export function FloatingMenu() {
       />
 
       <div ref={rootRef} className="absolute top-4 left-4 z-50 flex flex-col items-start gap-1.5">
-        <div className="flex h-8 items-center gap-0.5 rounded-lg border border-neutral-700/80 bg-neutral-800/95 px-1 shadow-lg">
+        <div className={`${CHROME_SURFACE} flex h-10 items-center gap-0.5 rounded-xl px-1`}>
           <button
             ref={toggleRef}
             type="button"
@@ -407,7 +414,7 @@ export function FloatingMenu() {
             aria-expanded={isOpen}
             aria-label="Menu"
             title="Menu"
-            className={`${ICON_BUTTON} ${isOpen ? "bg-neutral-700 text-neutral-100" : ""}`}
+            className={`${ICON_BUTTON} ${isOpen ? CHROME_ICON_BUTTON_OPEN : ""}`}
           >
             <svg
               className="h-4 w-4"
@@ -421,7 +428,7 @@ export function FloatingMenu() {
             </svg>
           </button>
 
-          <div className="mx-1 h-5 w-px bg-neutral-600" />
+          <div className={CHROME_DIVIDER} />
 
           <button
             type="button"
@@ -444,17 +451,17 @@ export function FloatingMenu() {
           >
             <SaveIcon />
             {showUnsavedDot && (
-              <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-neutral-800" />
+              <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-neutral-800" />
             )}
           </button>
 
-          {(commentCount > 0 || previousWorkflowSnapshot) && <div className="mx-1 h-5 w-px bg-neutral-600" />}
+          {(commentCount > 0 || previousWorkflowSnapshot) && <div className={CHROME_DIVIDER} />}
 
           {commentCount > 0 && (
             <button type="button" onClick={goToNextComment} className={ICON_BUTTON} title={commentTitle}>
               <CommentIcon />
               {unviewedCount > 0 && (
-                <span className="absolute top-0.5 right-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-blue-500 px-0.5 text-[9px] font-bold text-white">
+                <span className="absolute top-1 right-1 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-blue-500 px-0.5 text-[9px] font-bold text-white">
                   {commentBadge}
                 </span>
               )}
