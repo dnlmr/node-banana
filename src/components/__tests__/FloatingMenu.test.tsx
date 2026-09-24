@@ -26,8 +26,8 @@ vi.mock("@/store/workflowStore", () => ({
 }));
 
 vi.mock("@/components/ProjectSetupModal", () => ({
-  ProjectSetupModal: ({ isOpen, mode }: { isOpen: boolean; mode: string }) =>
-    isOpen ? <div data-testid="project-setup-modal" data-mode={mode}>Project Setup Modal</div> : null,
+  ProjectSetupModal: ({ isOpen, mode, initialTab }: { isOpen: boolean; mode: string; initialTab?: string }) =>
+    isOpen ? <div data-testid="project-setup-modal" data-mode={mode} data-tab={initialTab}>Project Setup Modal</div> : null,
 }));
 
 vi.mock("@/components/WorkflowBrowserModal", () => ({
@@ -221,9 +221,10 @@ describe("FloatingMenu", () => {
         "Save project",
         "Open project…",
         "Open project folder",
-        "Project settings",
         "New tab",
         "Close tab",
+        "Project settings",
+        "API keys",
         "Welcome screen",
         "Templates",
         "Keyboard shortcuts",
@@ -279,7 +280,19 @@ describe("FloatingMenu", () => {
       render(<FloatingMenu />);
       openMenu();
       fireEvent.click(menuItem("Project settings"));
-      expect(screen.getByTestId("project-setup-modal")).toHaveAttribute("data-mode", "settings");
+      const modal = screen.getByTestId("project-setup-modal");
+      expect(modal).toHaveAttribute("data-mode", "settings");
+      expect(modal).toHaveAttribute("data-tab", "project");
+    });
+
+    it("opens project settings on the Providers page from 'API keys'", () => {
+      useState(configuredState());
+      render(<FloatingMenu />);
+      openMenu();
+      fireEvent.click(menuItem("API keys"));
+      const modal = screen.getByTestId("project-setup-modal");
+      expect(modal).toHaveAttribute("data-mode", "settings");
+      expect(modal).toHaveAttribute("data-tab", "providers");
     });
 
     it("opens the welcome screen (the old logo click)", () => {

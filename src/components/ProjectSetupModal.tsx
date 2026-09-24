@@ -86,7 +86,7 @@ const getProviderIcon = (provider: ProviderType) => {
   }
 };
 
-type SettingsTab = "project" | "providers" | "comfy" | "nodeDefaults" | "canvas" | "noodles";
+export type SettingsTab = "project" | "providers" | "comfy" | "nodeDefaults" | "canvas" | "noodles";
 
 /** The rail's entries, with each page's heading and one-line subtitle. */
 const SETTINGS_PAGES: { id: SettingsTab; label: string; title: string; description: string }[] = [
@@ -133,6 +133,8 @@ interface ProjectSetupModalProps {
   onClose: () => void;
   onSave: (id: string, name: string, directoryPath: string) => void;
   mode: "new" | "settings";
+  /** Page to open on in settings mode; the menu's API keys entry passes "providers". */
+  initialTab?: SettingsTab;
 }
 
 export function ProjectSetupModal({
@@ -140,6 +142,7 @@ export function ProjectSetupModal({
   onClose,
   onSave,
   mode,
+  initialTab,
 }: ProjectSetupModalProps) {
   const sanitizeProjectFolderName = (projectName: string): string => {
     return projectName
@@ -249,9 +252,11 @@ export function ProjectSetupModal({
   // Pre-fill when opening in settings mode
   useEffect(() => {
     if (isOpen) {
-      // Reset to project tab when opening
+      // A new project starts on its page; settings open where the caller asks.
       if (mode === "new") {
         setActiveTab("project");
+      } else if (initialTab) {
+        setActiveTab(initialTab);
       }
 
       if (mode === "settings") {

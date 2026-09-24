@@ -11,7 +11,7 @@ import {
 } from "react";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useShallow } from "zustand/shallow";
-import { ProjectSetupModal } from "./ProjectSetupModal";
+import { ProjectSetupModal, type SettingsTab } from "./ProjectSetupModal";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { WorkflowBrowserModal } from "./WorkflowBrowserModal";
 import { KbdGroup } from "@/components/ui/Kbd";
@@ -203,6 +203,7 @@ export function FloatingMenu() {
   const [isOpen, setIsOpen] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [projectModalMode, setProjectModalMode] = useState<"new" | "settings">("new");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("project");
   const [showWorkflowBrowser, setShowWorkflowBrowser] = useState(false);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -309,8 +310,9 @@ export function FloatingMenu() {
     setShowProjectModal(true);
   };
 
-  const handleOpenSettings = () => {
+  const handleOpenSettings = (tab: SettingsTab = "project") => {
     setProjectModalMode("settings");
+    setSettingsTab(tab);
     setShowProjectModal(true);
   };
 
@@ -384,6 +386,7 @@ export function FloatingMenu() {
         onClose={() => setShowProjectModal(false)}
         onSave={handleProjectSave}
         mode={projectModalMode}
+        initialTab={settingsTab}
       />
       <WorkflowBrowserModal
         isOpen={showWorkflowBrowser}
@@ -509,22 +512,6 @@ export function FloatingMenu() {
             )}
             <MenuRow
               icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                  />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              }
-              label="Project settings"
-              onClick={choose(handleOpenSettings)}
-            />
-
-            <MenuDivider role="separator" className="my-1" />
-            <MenuRow
-              icon={
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.25}>
                   <path strokeLinecap="round" d="M12 5v14M5 12h14" />
                 </svg>
@@ -543,6 +530,37 @@ export function FloatingMenu() {
               })}
               disabled={tabsBusy}
               title={tabsBusy ? tabsBusyReason : undefined}
+            />
+
+            <MenuDivider role="separator" className="my-1" />
+            <MenuRow
+              icon={
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                  />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              }
+              label="Project settings"
+              onClick={choose(() => handleOpenSettings())}
+            />
+
+            <MenuRow
+              icon={
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.03 5.91l-2.27 2.27a.75.75 0 01-.53.22H10.5v1.5a.75.75 0 01-.75.75H8.25v1.5a.75.75 0 01-.75.75H4.5a.75.75 0 01-.75-.75v-2.69a.75.75 0 01.22-.53l6.12-6.12A6 6 0 1121.75 8.25z"
+                  />
+                </svg>
+              }
+              label="API keys"
+              onClick={choose(() => handleOpenSettings("providers"))}
+              title="Provider keys, in project settings"
             />
 
             {(previousWorkflowSnapshot || commentCount > 0) && (
@@ -589,6 +607,8 @@ export function FloatingMenu() {
               label="Templates"
               onClick={choose(() => setShowQuickstart(true, "templates"))}
             />
+
+            <MenuDivider role="separator" className="my-1" />
             <MenuRow
               icon={
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
