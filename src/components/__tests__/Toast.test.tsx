@@ -99,8 +99,8 @@ describe("Toast", () => {
 
       const { container } = render(<Toast />);
 
-      // Info icon has specific path
-      const icon = container.querySelector("svg.w-5.h-5");
+      // Each toast type renders its own Lucide glyph
+      const icon = container.querySelector("svg.lucide-info");
       expect(icon).toBeInTheDocument();
     });
 
@@ -111,7 +111,7 @@ describe("Toast", () => {
 
       const { container } = render(<Toast />);
 
-      const icon = container.querySelector("svg.w-5.h-5");
+      const icon = container.querySelector("svg.lucide-circle-check");
       expect(icon).toBeInTheDocument();
     });
 
@@ -122,7 +122,7 @@ describe("Toast", () => {
 
       const { container } = render(<Toast />);
 
-      const icon = container.querySelector("svg.w-5.h-5");
+      const icon = container.querySelector("svg.lucide-pause");
       expect(icon).toBeInTheDocument();
     });
 
@@ -133,7 +133,7 @@ describe("Toast", () => {
 
       const { container } = render(<Toast />);
 
-      const icon = container.querySelector("svg.w-5.h-5");
+      const icon = container.querySelector("svg.lucide-circle-alert");
       expect(icon).toBeInTheDocument();
     });
   });

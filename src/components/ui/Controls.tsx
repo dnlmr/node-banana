@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import type { InputHTMLAttributes, ReactNode } from "react";
 
 import { cn } from "@/components/nodes/ui/cn";
@@ -200,18 +201,7 @@ export function Select({
       <select {...rest} className={cn(inputClass, "appearance-none pr-8")}>
         {children}
       </select>
-      <svg
-        className="pointer-events-none absolute right-2.5 top-2.5 w-4 h-4 text-neutral-500"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M6 9l6 6 6-6" />
-      </svg>
+      <ChevronDown size={16} strokeWidth={1.75} className="pointer-events-none absolute right-2.5 top-2.5 text-neutral-500" />
     </div>
   );
 }

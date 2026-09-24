@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowRight } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
@@ -111,18 +112,7 @@ function OptionRow({
         </span>
         <span className="text-[13px] leading-[18px] text-neutral-400">{description}</span>
       </span>
-      <svg
-        className="w-[18px] h-[18px] shrink-0 text-neutral-500 group-hover:text-neutral-300 transition-colors"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M5 12h14M13 6l6 6-6 6" />
-      </svg>
+      <ArrowRight size={18} strokeWidth={1.75} className="shrink-0 text-neutral-500 group-hover:text-neutral-300 transition-colors" />
     </button>
   );
 }

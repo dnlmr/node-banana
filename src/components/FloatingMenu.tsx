@@ -1,5 +1,6 @@
 "use client";
 
+import { FolderOpen, KeyRound, Keyboard, Layers, LayoutTemplate, Menu, MessageSquareText, Plus, RotateCcw, Save, Settings, SquareArrowOutUpRight } from "lucide-react";
 import {
   useState,
   useMemo,
@@ -34,35 +35,19 @@ const MENU_ITEM_SELECTOR = '[role="menuitem"]';
 /** A floppy disk, at the same 1.75 stroke as the Open folder beside it. */
 function SaveIcon() {
   return (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 3.5h11l3.5 3.5v13a1 1 0 0 1-1 1h-13.5a1 1 0 0 1-1-1v-15.5a1 1 0 0 1 1-1z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 3.5v5.5h8v-5.5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21v-7h9v7" />
-    </svg>
+    <Save size={16} strokeWidth={1.75} />
   );
 }
 
 function OpenIcon() {
   return (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"
-      />
-    </svg>
+    <FolderOpen size={16} strokeWidth={1.75} />
   );
 }
 
 function CommentIcon() {
   return (
-    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-      <path
-        fillRule="evenodd"
-        d="M4.848 2.771A49.144 49.144 0 0112 2.25c2.43 0 4.817.178 7.152.52 1.978.292 3.348 2.024 3.348 3.97v6.02c0 1.946-1.37 3.678-3.348 3.97a48.901 48.901 0 01-3.476.383.39.39 0 00-.297.17l-2.755 4.133a.75.75 0 01-1.248 0l-2.755-4.133a.39.39 0 00-.297-.17 48.9 48.9 0 01-3.476-.384c-1.978-.29-3.348-2.024-3.348-3.97V6.741c0-1.946 1.37-3.68 3.348-3.97z"
-        clipRule="evenodd"
-      />
-    </svg>
+    <MessageSquareText size={16} strokeWidth={1.75} />
   );
 }
 
@@ -416,16 +401,7 @@ export function FloatingMenu() {
             title="Menu"
             className={`${ICON_BUTTON} ${isOpen ? CHROME_ICON_BUTTON_OPEN : ""}`}
           >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.75}
-              aria-hidden="true"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h16" />
-            </svg>
+            <Menu size={16} strokeWidth={1.75} />
           </button>
 
           <div className={CHROME_DIVIDER} />
@@ -504,22 +480,14 @@ export function FloatingMenu() {
             />
             <MenuRow
               icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 5a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM13 5a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1h-5a1 1 0 01-1-1V5zM4 14a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1v-5zM13 14a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1h-5a1 1 0 01-1-1v-5z" />
-                </svg>
+                <LayoutTemplate size={16} strokeWidth={1.75} />
               }
               label="Templates"
               onClick={choose(() => setShowQuickstart(true, "templates"))}
             />            {saveDirectoryPath && (
               <MenuRow
                 icon={
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
-                    />
-                  </svg>
+                  <SquareArrowOutUpRight size={16} strokeWidth={1.75} />
                 }
                 label="Open project folder"
                 onClick={choose(handleOpenDirectory)}
@@ -527,9 +495,7 @@ export function FloatingMenu() {
             )}
             <MenuRow
               icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.25}>
-                  <path strokeLinecap="round" d="M12 5v14M5 12h14" />
-                </svg>
+                <Plus size={16} strokeWidth={2.25} />
               }
               label="New tab"
               onClick={choose(() => newTab())}
@@ -550,14 +516,7 @@ export function FloatingMenu() {
             <MenuDivider role="separator" className="my-1" />
             <MenuRow
               icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                  />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
+                <Settings size={16} strokeWidth={1.75} />
               }
               label="Project settings"
               onClick={choose(() => handleOpenSettings())}
@@ -565,13 +524,7 @@ export function FloatingMenu() {
 
             <MenuRow
               icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.03 5.91l-2.27 2.27a.75.75 0 01-.53.22H10.5v1.5a.75.75 0 01-.75.75H8.25v1.5a.75.75 0 01-.75.75H4.5a.75.75 0 01-.75-.75v-2.69a.75.75 0 01.22-.53l6.12-6.12A6 6 0 1121.75 8.25z"
-                  />
-                </svg>
+                <KeyRound size={16} strokeWidth={1.75} />
               }
               label="API keys"
               onClick={choose(() => handleOpenSettings("providers"))}
@@ -584,9 +537,7 @@ export function FloatingMenu() {
             {previousWorkflowSnapshot && (
               <MenuRow
                 icon={
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" />
-                  </svg>
+                  <RotateCcw size={16} strokeWidth={1.75} />
                 }
                 label="Revert AI changes"
                 onClick={choose(handleRevertAIChanges)}
@@ -606,27 +557,14 @@ export function FloatingMenu() {
             <MenuDivider role="separator" className="my-1" />
             <MenuRow
               icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l9 6-9 6-9-6 9-6ZM3 15l9 6 9-6" />
-                </svg>
+                <Layers size={16} strokeWidth={1.75} />
               }
               label="Welcome screen"
               onClick={choose(() => setShowQuickstart(true))}
             />
             <MenuRow
               icon={
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M2.25 6.75A2.25 2.25 0 014.5 4.5h15a2.25 2.25 0 012.25 2.25v10.5A2.25 2.25 0 0119.5 19.5h-15a2.25 2.25 0 01-2.25-2.25V6.75z"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8"
-                  />
-                </svg>
+                <Keyboard size={16} strokeWidth={1.5} />
               }
               label="Keyboard shortcuts"
               shortcut="?"

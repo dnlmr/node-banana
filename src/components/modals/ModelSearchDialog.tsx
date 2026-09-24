@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowUpRight, Image, RefreshCw, X } from "lucide-react";
 import {
   Dialog,
   DialogButton,
@@ -617,9 +618,7 @@ export function ModelSearchDialog({
       )}
     >
       <span className="flex items-center gap-2.5">
-        <svg className="w-4 h-4 text-neutral-500 group-hover:text-error transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75} aria-hidden="true">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        <X size={16} strokeWidth={1.75} className="text-neutral-500 group-hover:text-error transition-colors" />
         <DialogRowTitle>Remove fallback</DialogRowTitle>
       </span>
       <span className="text-xs text-ink-3">Clear current selection</span>
@@ -689,18 +688,7 @@ export function ModelSearchDialog({
             title="Refresh models & schemas"
             className="inline-flex items-center gap-[7px] px-[11px] text-xs whitespace-nowrap"
           >
-            <svg
-              className={cn("w-3.5 h-3.5", isRefreshing && "animate-spin")}
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.75}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0113.292-6.036M20 15a8 8 0 01-13.292 6.036" />
-            </svg>
+            <RefreshCw size={14} strokeWidth={1.75} className={cn(isRefreshing && "animate-spin")} />
             Refresh catalog
           </DialogTextButton>
         </div>
@@ -837,9 +825,7 @@ export function ModelSearchDialog({
                               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
                             )}
                           >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M7 17L17 7M8 7h9v9" />
-                            </svg>
+                            <ArrowUpRight size={14} strokeWidth={1.75} />
                           </a>
                         )}
                       </div>
@@ -885,11 +871,7 @@ function Thumb({ src, alt = "", className, large = false }: { src?: string; alt?
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt={alt} className="absolute inset-0 w-full h-full object-cover" onError={() => setFailed(true)} />
       ) : (
-        <svg className={cn("text-neutral-600", large ? "w-7 h-7" : "w-4 h-4")} fill="none" stroke="currentColor" strokeWidth={1.25} viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
-          <circle cx="9" cy="10" r="1.5" />
-          <path d="M20.5 16l-5-5-8.5 8.5" />
-        </svg>
+        <Image size={large ? 28 : 16} strokeWidth={1.25} className="text-neutral-600" />
       )}
     </span>
   );
