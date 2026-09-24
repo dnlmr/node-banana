@@ -5,16 +5,22 @@ import { WorkflowFile } from "@/store/workflowStore";
 import { getAllPresets, PRESET_TEMPLATES } from "@/lib/quickstart/templates";
 import {
   DialogEyebrow,
+  DialogFilterGroup,
+  DialogFilterItem,
   DialogPage,
   DialogPageBody,
   DialogPageHead,
   DialogPane,
   DialogPaneFoot,
-  DialogRailItem,
+  DialogPaneRule,
+  DialogPaneTitle,
+  DialogSearchField,
+  DialogSearchGlyph,
+  DialogSpinner,
   DialogStatus,
   DialogTextButton,
+  filterPaneClass,
 } from "@/components/ui/Dialog";
-import { inputClass } from "@/components/ui/Controls";
 import { cn } from "@/components/nodes/ui/cn";
 import { APP_VERSION } from "@/lib/appVersion";
 import { QuickstartBackButton } from "./QuickstartBackButton";
@@ -60,9 +66,9 @@ const hoverThumbnails: Record<string, string> = {
 };
 
 /**
- * The template explorer: the pane holds the search well and the category
- * and provider filters as rail items; the page is the two-column card grid
- * with the community section ruled off beneath it.
+ * The template explorer, on the same shape as the model browser: a 232px
+ * filter pane (search, Category, Provider, the mark at the foot) beside a
+ * two-column grid of 124px cards, the community section ruled off beneath.
  */
 export function TemplateExplorerView({
   onBack,
@@ -203,7 +209,7 @@ export function TemplateExplorerView({
   }, []);
 
   // Check if any filters are active
-  const hasActiveFilters = searchQuery || categoryFilter !== "all" || selectedTags.size > 0;
+  const hasActiveFilters = searchQuery !== "" || categoryFilter !== "all" || selectedTags.size > 0;
 
   // Check if results are empty
   const hasNoResults =
@@ -305,108 +311,69 @@ export function TemplateExplorerView({
     filteredCommunity.length > 0 ||
     (isLoadingList && (categoryFilter === "all" || categoryFilter === "community"));
 
+  const resultCount = filteredPresets.length + filteredCommunity.length;
+  const countLabel = `${resultCount} template${resultCount === 1 ? "" : "s"}`;
+
   return (
     <>
-      <DialogPane width={260}>
-        {/* The filters scroll if the provider list outgrows the pane; the
-            scroll box spans the pane so the rail items' bleed is not clipped. */}
-        <div className="flex-1 min-h-0 -mx-6 px-6 overflow-y-auto overscroll-contain flex flex-col gap-[18px]">
-          <QuickstartBackButton onClick={onBack} disabled={isLoading} />
-          <h2 className="font-display text-[28px] leading-8 font-bold tracking-display text-neutral-100">
-            Templates
-          </h2>
+      <DialogPane width={232} className={filterPaneClass}>
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
+          <QuickstartBackButton onClick={onBack} disabled={isLoading} className="ml-[11px]" />
+          <DialogPaneTitle className="mt-2.5">Templates</DialogPaneTitle>
 
-          {/* Search */}
-          <div className="relative">
-            <svg
-              className="pointer-events-none absolute left-3 top-2.5 w-4 h-4 text-neutral-500"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.75}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="M20 20l-3.5-3.5" />
-            </svg>
-            <input
-              type="text"
-              aria-label="Search templates"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search templates..."
-              className={cn(inputClass, "bg-canvas-bg pl-9")}
-            />
-          </div>
+          <DialogSearchField
+            aria-label="Search templates"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search templates..."
+            className="mt-3"
+          />
 
-          {/* Category */}
-          <div>
-            <DialogEyebrow className="block mb-1.5 text-neutral-500">Category</DialogEyebrow>
-            <div className="flex flex-col">
+          <div className="mt-[18px] flex flex-col gap-3.5">
+            <DialogFilterGroup label="Category">
               {CATEGORY_OPTIONS.map((option) => (
-                <DialogRailItem
+                <DialogFilterItem
                   key={option.id}
                   active={categoryFilter === option.id}
                   onClick={() => setCategoryFilter(option.id)}
-                  className="h-8"
                 >
                   {option.label}
-                </DialogRailItem>
+                </DialogFilterItem>
               ))}
-            </div>
-          </div>
+            </DialogFilterGroup>
 
-          {/* Provider */}
-          <div>
-            <DialogEyebrow className="block mb-1.5 text-neutral-500">Provider</DialogEyebrow>
-            <div className="flex flex-col">
-              {availableTags.map((tag) => (
-                <DialogRailItem
-                  key={tag}
-                  active={selectedTags.has(tag)}
-                  aria-current={undefined}
-                  aria-pressed={selectedTags.has(tag)}
-                  onClick={() => toggleTag(tag)}
-                  className="h-8"
-                >
-                  {tag}
-                </DialogRailItem>
-              ))}
-            </div>
-          </div>
+            {availableTags.length > 0 && (
+              <>
+                <DialogPaneRule />
 
-          {hasActiveFilters && (
-            <DialogTextButton onClick={clearFilters} className="self-start -ml-1.5">
-              Clear filters
-            </DialogTextButton>
-          )}
+                <DialogFilterGroup label="Provider">
+                  {availableTags.map((tag) => (
+                    <DialogFilterItem key={tag} active={selectedTags.has(tag)} onClick={() => toggleTag(tag)}>
+                      {tag}
+                    </DialogFilterItem>
+                  ))}
+                </DialogFilterGroup>
+              </>
+            )}
+          </div>
         </div>
 
-        <DialogPaneFoot version={APP_VERSION || undefined} />
+        <div className="flex items-center pt-2 border-t border-white/[0.06]">
+          <DialogPaneFoot version={APP_VERSION || undefined} className="h-7 pl-[11px]" />
+        </div>
       </DialogPane>
 
       <DialogPage>
-        <DialogPageHead eyebrow="Quick Start" />
+        <DialogPageHead
+          eyebrow={<span aria-live="polite">{countLabel}</span>}
+          actions={hasActiveFilters && <DialogTextButton onClick={clearFilters}>Clear filters</DialogTextButton>}
+        />
 
         <DialogPageBody className="overscroll-contain pt-3 pb-6 flex flex-col gap-5">
           {/* Empty State */}
           {hasNoResults && hasActiveFilters && (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <svg
-                className="w-10 h-10 text-neutral-600 mb-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={1.25}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path d="M20 20l-3.5-3.5" />
-              </svg>
+            <div className="flex-1 flex flex-col items-center justify-center text-center">
+              <DialogSearchGlyph className="w-10 h-10 text-neutral-600 mb-4" strokeWidth={1.25} />
               <h3 className="font-display text-sm leading-[18px] font-semibold tracking-[-0.01em] text-neutral-100">
                 No templates match your filters
               </h3>
@@ -459,14 +426,7 @@ export function TemplateExplorerView({
 
               {isLoadingList ? (
                 <div className="flex items-center justify-center py-8">
-                  <svg className="w-5 h-5 text-neutral-500 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path
-                      className="opacity-75"
-                      fill="currentColor"
-                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    />
-                  </svg>
+                  <DialogSpinner />
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
@@ -482,6 +442,7 @@ export function TemplateExplorerView({
                         tags: workflow.tags,
                       }}
                       nodeCount={workflow.nodeCount}
+                      author={workflow.author}
                       previewImage={workflow.previewImage}
                       hoverImage={workflow.hoverImage}
                       isLoading={loadingWorkflowId === workflow.id}

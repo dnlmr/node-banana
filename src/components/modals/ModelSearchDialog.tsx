@@ -5,17 +5,24 @@ import {
   DialogButton,
   DialogChip,
   DialogEyebrow,
-  DialogHeading,
+  DialogFilterGroup,
+  DialogFilterItem,
   DialogPage,
   DialogPageBody,
   DialogPageHead,
   DialogPane,
+  DialogPaneRule,
+  DialogPaneTitle,
   DialogRowTitle,
+  DialogSearchField,
+  DialogSearchGlyph,
+  DialogSpinner,
   DialogStatus,
   DialogTextButton,
+  dialogCardClass,
+  filterPaneClass,
   splitPanelClass,
 } from "@/components/ui/Dialog";
-import { inputClass } from "@/components/ui/Controls";
 import { cn } from "@/components/nodes/ui/cn";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useWorkflowStore, useProviderApiKeys } from "@/store/workflowStore";
@@ -627,47 +634,41 @@ export function ModelSearchDialog({
       initialFocusRef={searchInputRef}
       className={cn(splitPanelClass, "w-[1200px] h-[720px] max-w-[92vw] max-h-[85vh]")}
     >
-      {/* Everything in the pane starts on one line: the search icon's, 11px in. */}
-      <DialogPane width={232} className="px-4 pt-5 pb-3 gap-2">
+      <DialogPane width={232} className={filterPaneClass}>
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
-          <DialogHeading className="pl-[11px] text-[17px] leading-6 font-semibold tracking-[-0.02em]">{title}</DialogHeading>
+          <DialogPaneTitle>{title}</DialogPaneTitle>
 
-          <div className="relative mt-3 shrink-0">
-            <SearchGlyph className="pointer-events-none absolute left-[11px] top-2 w-4 h-4 text-neutral-500" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              aria-label="Search models"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Search models..."
-              // Focused on open: a quiet ring, since the caret already says where typing goes.
-              className={cn(inputClass, "h-8 bg-canvas-bg pl-[34px] focus-visible:ring-1 focus-visible:ring-neutral-500")}
-            />
-          </div>
+          <DialogSearchField
+            ref={searchInputRef}
+            aria-label="Search models"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search models..."
+            className="mt-3"
+          />
 
           <div className="mt-[18px] flex flex-col gap-3.5">
-            <FilterGroup label="Type">
+            <DialogFilterGroup label="Type">
               {CAPABILITY_OPTIONS.map((option) => (
-                <FilterItem
+                <DialogFilterItem
                   key={option.id}
                   active={capabilityFilter === option.id}
                   onClick={() => setCapabilityFilter(option.id)}
                 >
                   {option.label}
-                </FilterItem>
+                </DialogFilterItem>
               ))}
-            </FilterGroup>
+            </DialogFilterGroup>
 
-            <div className="h-px bg-white/[0.06]" />
+            <DialogPaneRule />
 
-            <FilterGroup label="Provider">
-              <FilterItem active={providerFilter === "all"} title="All Providers" onClick={() => setProviderFilter("all")}>
+            <DialogFilterGroup label="Provider">
+              <DialogFilterItem active={providerFilter === "all"} title="All Providers" onClick={() => setProviderFilter("all")}>
                 All providers
-              </FilterItem>
+              </DialogFilterItem>
               {PROVIDER_OPTIONS.filter((option) => availableProviders.has(option.id)).map(({ id, label, Icon }) => (
-                <FilterItem
+                <DialogFilterItem
                   key={id}
                   active={providerFilter === id}
                   title={label}
@@ -675,9 +676,9 @@ export function ModelSearchDialog({
                   icon={<Icon />}
                 >
                   {label}
-                </FilterItem>
+                </DialogFilterItem>
               ))}
-            </FilterGroup>
+            </DialogFilterGroup>
           </div>
         </div>
 
@@ -715,7 +716,7 @@ export function ModelSearchDialog({
           {/* The spinner is for a first load only; a new search keeps the old results, dimmed. */}
           {isLoading && models.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-3">
-              <Spinner />
+              <DialogSpinner />
               <span className="text-xs text-ink-3">Loading models...</span>
             </div>
           ) : error ? (
@@ -731,7 +732,7 @@ export function ModelSearchDialog({
             <>
               {clearSelectionRow}
               <div className="flex-1 flex flex-col items-center justify-center text-center">
-                <SearchGlyph className="w-10 h-10 text-neutral-600 mb-4" strokeWidth={1.25} />
+                <DialogSearchGlyph className="w-10 h-10 text-neutral-600 mb-4" strokeWidth={1.25} />
                 <h3 className="font-display text-sm leading-[18px] font-semibold tracking-[-0.01em] text-neutral-100">
                   No models found
                 </h3>
@@ -766,7 +767,7 @@ export function ModelSearchDialog({
                           key={`recent-${recent.modelId}`}
                           type="button"
                           onClick={() => handleSelectModel(model)}
-                          className={cn(cardClass, "flex items-center gap-3 p-2")}
+                          className={cn(dialogCardClass, "flex items-center gap-3 p-2")}
                         >
                           <Thumb src={matchingModel?.coverImage} className="w-10 h-10 rounded-md" />
                           <span className="flex-1 min-w-0">
@@ -795,7 +796,7 @@ export function ModelSearchDialog({
                         <button
                           type="button"
                           onClick={() => handleSelectModel(model)}
-                          className={cn(cardClass, "flex items-stretch w-full h-[124px] overflow-hidden")}
+                          className={cn(dialogCardClass, "flex items-stretch w-full h-[124px] overflow-hidden")}
                         >
                           {/* Full-height cover image */}
                           <Thumb src={model.coverImage} alt={model.name} className="w-[122px] self-stretch" large />
@@ -856,53 +857,6 @@ export function ModelSearchDialog({
 
 /* ------------------------------------------------------------------ parts */
 
-/** A labelled group of filter rows in the pane. */
-function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div role="group" aria-label={label}>
-      <DialogEyebrow className="block mb-1 pl-[11px] text-neutral-500">{label}</DialogEyebrow>
-      <div className="flex flex-col">{children}</div>
-    </div>
-  );
-}
-
-/**
- * One filter row: 28px, inset to the search icon, a soft fill as wide as the
- * search box when it is the current filter.
- */
-function FilterItem({
-  active,
-  icon,
-  className,
-  children,
-  ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { active: boolean; icon?: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      {...rest}
-      className={cn(
-        "flex items-center gap-2.5 h-7 px-[11px] rounded-md text-left font-display text-[13px] tracking-[-0.01em] transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection",
-        active
-          ? "bg-white/[0.06] text-neutral-100 font-semibold"
-          : "text-neutral-400 font-medium hover:text-neutral-200 hover:bg-white/[0.03]",
-        className
-      )}
-    >
-      {icon && <span className={cn("w-4 flex justify-center shrink-0", !active && "opacity-75")}>{icon}</span>}
-      {children}
-    </button>
-  );
-}
-
-/** Card surface shared by recent and catalogue entries, drawn like the template cards. */
-const cardClass = cn(
-  "text-left rounded-[10px] border border-card-border transition-colors hover:border-neutral-600 hover:bg-white/[0.02]",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection focus-visible:ring-offset-2 focus-visible:ring-offset-canvas-bg"
-);
-
 function getProviderDisplayName(provider: ProviderType): string {
   return PROVIDER_OPTIONS.find((option) => option.id === provider)?.label ?? provider;
 }
@@ -938,23 +892,5 @@ function Thumb({ src, alt = "", className, large = false }: { src?: string; alt?
         </svg>
       )}
     </span>
-  );
-}
-
-function SearchGlyph({ className, strokeWidth = 1.75 }: { className?: string; strokeWidth?: number }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="7" />
-      <path d="M20 20l-3.5-3.5" />
-    </svg>
-  );
-}
-
-function Spinner() {
-  return (
-    <svg className="w-5 h-5 text-neutral-500 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-    </svg>
   );
 }
