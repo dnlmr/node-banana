@@ -63,9 +63,12 @@ export function ScrubRow({ videoRef, src, className, leading, trailing }: ScrubR
     else video.pause();
   };
 
+  // Scrubbing is looking at frames: hold the video on the chosen one. The
+  // pause counts as the user's, so a hover preview will not restart it.
   const seek = (t: number) => {
     const video = videoRef.current;
     if (!video) return;
+    if (!video.paused) video.pause();
     video.currentTime = t;
     setTime(t);
   };

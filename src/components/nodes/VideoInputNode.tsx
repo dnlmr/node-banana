@@ -6,6 +6,7 @@ import { NodeShell } from "./NodeShell";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { VideoInputNodeData } from "@/types";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
+import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, ScrubRow, SummaryValues, formatTime, type SocketSpec } from "./ui";
 import { Download, Video, X } from "lucide-react";
@@ -23,11 +24,11 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
   const nodeData = data;
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
   // Use blob URL for efficient playback of large base64 videos
   const playbackUrl = useVideoBlobUrl(nodeData.video ?? null);
+  const videoRef = useVideoAutoplay(id, playbackUrl);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -169,6 +170,8 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
             src={playbackUrl ?? undefined}
             className="absolute inset-0 w-full h-full object-cover"
             preload="metadata"
+            loop
+            muted
             playsInline
             onLoadedMetadata={(e) => {
               const v = e.currentTarget;

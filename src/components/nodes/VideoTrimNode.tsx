@@ -50,7 +50,6 @@ export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeTyp
   const [showOutput, setShowOutput] = useState(false);
   const [expanded, setExpanded] = useState(true);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
-  const videoAutoplayRef = useVideoAutoplay(id);
 
   // Keep a ref to endTime so the metadata callback reads fresh state
   const endTimeRef = useRef(nodeData.endTime);
@@ -170,6 +169,7 @@ export function VideoTrimNode({ id, data, selected }: NodeProps<VideoTrimNodeTyp
   // Which video URL to show in preview
   const previewUrl = showOutput && nodeData.outputVideo ? nodeData.outputVideo : sourceVideoUrl;
   const previewBlobUrl = useVideoBlobUrl(previewUrl);
+  const videoAutoplayRef = useVideoAutoplay(id, previewBlobUrl);
 
   // Slider thumb positions for the visual range highlight
   const startPct = duration > 0 ? (startTime / duration) * 100 : 0;

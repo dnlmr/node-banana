@@ -61,7 +61,7 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
   }, [nodeData.fallbackModel, settingsTab]);
 
   const videoBlobUrl = useVideoBlobUrl(nodeData.outputVideo ?? null);
-  const videoAutoplayRef = useVideoAutoplay(id);
+  const videoAutoplayRef = useVideoAutoplay(id, videoBlobUrl);
 
   // Register browse callback for floating header button
   useEffect(() => {
