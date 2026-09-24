@@ -1,6 +1,6 @@
 "use client";
 
-import React, { ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import React, { ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import {
   NodeResizeControl,
   OnResize,
@@ -15,8 +15,9 @@ import { isPanningRef, isDraggingNodeRef } from "@/components/WorkflowCanvas";
 import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { useShowHandleLabels } from "@/hooks/useShowHandleLabels";
 import type { NodeType } from "@/types";
-import type { ShellMedia } from "@/utils/nodeDimensions";
+import { getNodeSize, type ShellMedia } from "@/utils/nodeDimensions";
 import { cn } from "./ui/cn";
+import { ControlsSizingContext, type ControlsSizing } from "./ui/ControlsCard";
 import { SocketColumn, socketRowCount, type SocketOutline, type SocketSpec } from "./ui/Socket";
 import { CONTROLS_GAP, GAP_ROW_H, NODE_MIN_W, socketMinHeight } from "./ui/tokens";
 
@@ -179,6 +180,15 @@ export function NodeShell({
 }: NodeShellProps) {
   const currentNodeIds = useWorkflowStore((state) => state.currentNodeIds);
   const setHoveredNodeId = useWorkflowStore((state) => state.setHoveredNodeId);
+  const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const controlsWidth = useWorkflowStore((state) => {
+    const value = state.nodes?.find((n) => n.id === id)?.data?.controlsWidth;
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  });
+  const nodeWidth = useWorkflowStore((state) => {
+    const node = state.nodes?.find((n) => n.id === id);
+    return node ? getNodeSize(node).width : 300;
+  });
   const running = isExecuting || (currentNodeIds?.includes(id) ?? false);
   const { getNodes, setNodes } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -247,6 +257,17 @@ export function NodeShell({
       );
     },
     [getNodes, id, setNodes]
+  );
+
+  // The controls card sizes itself from this; dragging its edge grips
+  // persists a width on the node, double-clicking them clears it.
+  const controlsSizing = useMemo<ControlsSizing>(
+    () => ({
+      nodeWidth,
+      width: controlsWidth,
+      onWidthChange: (width) => updateNodeData?.(id, { controlsWidth: width }),
+    }),
+    [controlsWidth, id, nodeWidth, updateNodeData]
   );
 
   const mediaStyle: React.CSSProperties =
@@ -336,7 +357,7 @@ export function NodeShell({
           >
             {gap}
           </div>
-          {controls}
+          <ControlsSizingContext.Provider value={controlsSizing}>{controls}</ControlsSizingContext.Provider>
         </div>
       )}
     </div>

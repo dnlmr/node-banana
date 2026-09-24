@@ -1,8 +1,30 @@
 "use client";
 
-import React, { ReactNode } from "react";
+import React, { ReactNode, createContext, useContext } from "react";
 import { cn } from "./cn";
 import { ellipsisClass } from "./Field";
+import { WidthGrip } from "./WidthGrip";
+import { CONTROLS_INSET, CONTROLS_MAX_W } from "./tokens";
+
+export interface ControlsSizing {
+  /** Node width, the base the card's automatic width is derived from. */
+  nodeWidth: number;
+  /** Explicit card width in flow px; unset means "follow the node". */
+  width?: number;
+  /** Persist a dragged width, or `undefined` to follow the node again. */
+  onWidthChange: (width: number | undefined) => void;
+}
+
+/**
+ * Provided by NodeShell so the card can offer edge grips without every node
+ * wiring them up. Absent (template previews, tests), the card is not resizable.
+ */
+export const ControlsSizingContext = createContext<ControlsSizing | null>(null);
+
+/** The width the card takes on its own: node width − inset, capped. */
+export function autoControlsWidth(nodeWidth: number): number {
+  return Math.min(CONTROLS_MAX_W, Math.max(0, nodeWidth - CONTROLS_INSET));
+}
 
 export interface SummaryRowProps {
   /** 16px provider icon or similar. */
@@ -41,6 +63,8 @@ export interface ControlsCardProps {
   className?: string;
   /** Extra classes on the panel body. */
   panelClassName?: string;
+  /** Override the sizing the shell provides; `null` disables the grips. */
+  sizing?: ControlsSizing | null;
 }
 
 /**
@@ -55,18 +79,25 @@ export function ControlsCard({
   onToggle,
   className,
   panelClassName,
+  sizing: sizingProp,
 }: ControlsCardProps) {
   const toggleable = Boolean(children && onToggle);
   const panelId = `params-${id}`;
+  const contextSizing = useContext(ControlsSizingContext);
+  const sizing = sizingProp === undefined ? contextSizing : sizingProp;
+  const explicitWidth = sizing?.width;
+  const gripWidth = sizing ? (explicitWidth ?? autoControlsWidth(sizing.nodeWidth)) : 0;
 
   return (
     <div
       className={cn(
-        "w-[calc(100%-24px)] max-w-[360px] rounded-controls squircle overflow-hidden",
+        "relative w-[calc(100%-24px)] max-w-[360px] rounded-controls squircle overflow-hidden",
         "bg-card border border-card-border",
         className
       )}
+      style={explicitWidth !== undefined ? { width: explicitWidth, maxWidth: "none" } : undefined}
       data-controls-card
+      data-controls-width={explicitWidth}
     >
       <div
         className={cn(
@@ -127,6 +158,13 @@ export function ControlsCard({
             </div>
           </div>
         </div>
+      )}
+
+      {sizing && (
+        <>
+          <WidthGrip side="left" width={gripWidth} onChange={sizing.onWidthChange} />
+          <WidthGrip side="right" width={gripWidth} onChange={sizing.onWidthChange} />
+        </>
       )}
     </div>
   );
