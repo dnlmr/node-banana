@@ -23,10 +23,10 @@ the media card, transparent. Left: provider badge and the title, 12px
 semibold uppercase in neutral-400. On generate nodes the title is the model
 picker (chevron, white-6% hover fill, click opens the browser); elsewhere a
 double-click renames it. Right, never fading: the amber readiness pill, the
-lock badge, Expand where the node has an editor (dim at rest), and a filled
-blue comment glyph when a comment exists (hover reads it, click edits). Then
-Run and the kebab, 20px ghost buttons that fade in on hover or selection and
-never change width. The kebab menu holds Browse, Run (⌥↵), Rename, then
+lock badge, and a filled blue comment glyph when a comment exists (hover
+reads it, click edits). Then Expand where the node has an editor, Run and
+the kebab, which fade in together on hover or selection and never change
+width. The kebab menu holds Browse, Run (⌥↵), Rename, then
 Fallback, Optional input and Comment; a set fallback puts a blue dot on the
 kebab.
 

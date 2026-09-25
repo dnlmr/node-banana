@@ -477,17 +477,6 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
             </div>
           )}
 
-          {/* Expand is always exposed where it applies: dim at rest, lit on hover. */}
-          {canExpand && onExpandNode && (
-            <GhostButton
-              label="Expand editor"
-              onClick={() => onExpandNode(id, type)}
-              className={showControls ? "" : "text-neutral-500"}
-            >
-              <Maximize2 size={12} strokeWidth={2} />
-            </GhostButton>
-          )}
-
           {/* A comment shows as a glyph: hover reads it, click edits it. */}
           <div className="relative shrink-0 flex items-center" ref={commentPopoverRef}>
             {comment && (
@@ -584,8 +573,13 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
             )}
           </div>
 
-          {/* Run and the kebab fade in together and never change width. */}
+          {/* Expand, Run and the kebab fade in together and never change width. */}
           <div className={`shrink-0 flex items-center gap-0.5 transition-opacity duration-200 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+            {canExpand && onExpandNode && (
+              <GhostButton label="Expand editor" onClick={() => onExpandNode(id, type)}>
+                <Maximize2 size={12} strokeWidth={2} />
+              </GhostButton>
+            )}
             {/* Run carries a short permanent label so it reads as a button, and never resizes. */}
             {canRun && onRunNode && (
               <button

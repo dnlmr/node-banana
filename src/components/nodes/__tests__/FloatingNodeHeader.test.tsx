@@ -114,10 +114,18 @@ describe("FloatingNodeHeader", () => {
     expect(screen.queryByTestId("node-comment-glyph")).toBeNull();
   });
 
-  it("keeps Expand exposed at rest on an expandable node", () => {
-    const { onExpandNode } = renderHeader({ type: "prompt", onBrowse: undefined, canFallback: false, title: "Prompt" });
-    const expand = screen.getByRole("button", { name: "Expand editor" });
-    expect(expand).toBeVisible();
+  it("hides Expand until the node is hovered, then opens the editor", () => {
+    const { onExpandNode, rerender } = renderHeader({ type: "prompt", onBrowse: undefined, canFallback: false, title: "Prompt" });
+    let expand = screen.getByRole("button", { name: "Expand editor" });
+    expect(expand.closest(".opacity-0")).not.toBeNull();
+    hoveredNodeId = "n1";
+    rerender(
+      <ReactFlowProvider>
+        <FloatingNodeHeader {...base} type="prompt" title="Prompt" onExpandNode={onExpandNode} />
+      </ReactFlowProvider>
+    );
+    expand = screen.getByRole("button", { name: "Expand editor" });
+    expect(expand.closest(".opacity-0")).toBeNull();
     fireEvent.click(expand);
     expect(onExpandNode).toHaveBeenCalledWith("n1", "prompt");
     expect(expand.textContent).toBe("");
