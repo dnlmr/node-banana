@@ -585,21 +585,6 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
 
           {/* Run and the kebab fade in together and never change width. */}
           <div className={`shrink-0 flex items-center gap-0.5 transition-opacity duration-200 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
-            {/* Run carries a short permanent label so it reads as a button, and never resizes. */}
-            {canRun && onRunNode && (
-              <button
-                type="button"
-                onClick={() => onRunNode(id)}
-                disabled={isExecuting}
-                aria-label="Run node"
-                title="Run node"
-                className="nodrag nopan h-5 pl-1 pr-1.5 mr-0.5 rounded-[5px] flex items-center gap-1 bg-white/8 hover:bg-white/14 text-neutral-200 hover:text-white text-[10px] font-semibold leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/8"
-              >
-                <Play size={11} strokeWidth={0} fill="currentColor" />
-                Run
-              </button>
-            )}
-
             <div className="relative shrink-0" ref={menuRef}>
               <GhostButton
                 label="More"
@@ -654,6 +639,21 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
                 </div>
               )}
             </div>
+            {/* Run carries a short permanent label so it reads as a button, and never resizes. */}
+            {canRun && onRunNode && (
+              <button
+                type="button"
+                onClick={() => onRunNode(id)}
+                disabled={isExecuting}
+                aria-label="Run node"
+                title="Run node"
+                className="nodrag nopan h-5 pl-1 pr-1.5 ml-0.5 rounded-[5px] flex items-center gap-1 bg-white/8 hover:bg-white/14 text-neutral-200 hover:text-white text-[10px] font-semibold leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/8"
+              >
+                <Play size={11} strokeWidth={0} fill="currentColor" />
+                Run
+              </button>
+            )}
+
           </div>
         </div>
       </div>
