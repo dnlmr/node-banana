@@ -18,6 +18,16 @@ Every node on the canvas is built from the same parts, top to bottom:
    on `bg-panel`: one column of 22px rows, 72px label column, wells on
    `bg-well` with 8px squircle corners and a faint recess (`shadow-well`).
 
+**Dropdowns** (`src/components/nodes/ui/Dropdown.tsx`) replace native
+selects everywhere. The well is the trigger; the list opens under it at the
+same width on the Instrument menu skin, at the panel's density (22px rows,
+10px type) or the dialog's (28px, 12px). The selected row carries a check on
+the right, the pointer or keyboard row the neutral-700 fill. Past eight
+options a search well appears and typing filters; below that typing jumps as
+on a native select. Inside the canvas the list is portaled into the React
+Flow viewport so it zooms with the node and escapes the card's clip; it
+flips above the trigger when the window edge is near.
+
 **Video playback** follows what the user last asked of the video. Untouched,
 a video previews while its node is hovered (after a short delay) and pauses
 where it is when the pointer leaves. Pressing play in the scrub row pins

@@ -10,6 +10,7 @@
  * group per cell.
  */
 
+import { Dropdown } from "@/components/nodes/ui/Dropdown";
 import { Trash2 } from "lucide-react";
 import {
   Dialog,
@@ -1006,17 +1007,21 @@ function SplitGridTemplateModalInner({ nodeId, nodeData, onClose }: SplitGridTem
             ))}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <label className="flex items-center gap-2 mr-3 text-xs text-neutral-400">
+            <label htmlFor="split-grid-cell-layout" className="flex items-center gap-2 mr-3 text-xs text-neutral-400">
               Cell layout
-              <select
+              <Dropdown
+                id="split-grid-cell-layout"
                 value={cellLayout}
-                onChange={(event) => setCellLayout(event.target.value as NonNullable<SplitGridTemplate["layout"]>)}
-                className="h-8 rounded-md border border-chrome-border bg-well px-2 text-xs text-neutral-100 outline-none focus-visible:border-neutral-500"
-              >
-                <option value="grid">Grid</option>
-                <option value="vertical">Vertical</option>
-                <option value="horizontal">Horizontal</option>
-              </select>
+                options={[
+                  { value: "grid", label: "Grid" },
+                  { value: "vertical", label: "Vertical" },
+                  { value: "horizontal", label: "Horizontal" },
+                ]}
+                onChange={(next) => setCellLayout(next as NonNullable<SplitGridTemplate["layout"]>)}
+                size="dialog"
+                className="w-[120px]"
+                triggerClassName="h-8 w-full rounded-md border border-chrome-border bg-well px-2 text-xs text-neutral-100 text-left flex items-center justify-between gap-2 outline-none focus-visible:border-neutral-500 cursor-pointer"
+              />
             </label>
             <DialogButton variant="ghost" onClick={requestClose}>
               Cancel

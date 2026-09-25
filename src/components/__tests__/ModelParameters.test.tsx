@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ModelParameters } from "@/components/nodes/ModelParameters";
 import { ModelParameter } from "@/lib/providers/types";
+import { pickOption } from "@/test/dropdown";
 
 // Mock deduplicatedFetch to pass through to global fetch (avoids caching issues in tests)
 vi.mock("@/utils/deduplicatedFetch", () => ({
@@ -561,6 +562,7 @@ describe("ModelParameters", () => {
         expect(screen.getByRole("combobox")).toBeInTheDocument();
       });
 
+      fireEvent.click(screen.getByRole("combobox"));
       const options = screen.getAllByRole("option");
       expect(options.length).toBe(4);
       expect(options[0]).toHaveTextContent("Default");
@@ -596,9 +598,7 @@ describe("ModelParameters", () => {
         expect(screen.getByRole("combobox")).toBeInTheDocument();
       });
 
-      fireEvent.change(screen.getByRole("combobox"), {
-        target: { value: "DPM++" },
-      });
+      pickOption(screen.getByRole("combobox"), "DPM++");
 
       expect(onParametersChange).toHaveBeenCalledWith({ scheduler: "DPM++" });
     });
@@ -630,9 +630,7 @@ describe("ModelParameters", () => {
         expect(screen.getByRole("combobox")).toBeInTheDocument();
       });
 
-      fireEvent.change(screen.getByRole("combobox"), {
-        target: { value: "2" },
-      });
+      pickOption(screen.getByRole("combobox"), "2");
 
       // Should be number 2, not string "2"
       expect(onParametersChange).toHaveBeenCalledWith({ max_images: 2 });
@@ -665,9 +663,7 @@ describe("ModelParameters", () => {
         expect(screen.getByRole("combobox")).toBeInTheDocument();
       });
 
-      fireEvent.change(screen.getByRole("combobox"), {
-        target: { value: "2.5" },
-      });
+      pickOption(screen.getByRole("combobox"), "2.5");
 
       // Should be number 2.5, not string "2.5"
       expect(onParametersChange).toHaveBeenCalledWith({ guidance_scale: 2.5 });
@@ -702,9 +698,7 @@ describe("ModelParameters", () => {
       });
 
       // Select the "Default" option (empty value)
-      fireEvent.change(screen.getByRole("combobox"), {
-        target: { value: "" },
-      });
+      pickOption(screen.getByRole("combobox"), "");
 
       // Should remove the parameter (clear it)
       expect(onParametersChange).toHaveBeenCalledWith({});
