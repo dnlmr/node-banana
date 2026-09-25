@@ -123,10 +123,11 @@ describe("FloatingNodeHeader", () => {
     expect(expand.textContent).toBe("");
   });
 
-  it("fades Run and the kebab in on hover, and Run never carries a label", () => {
+  it("fades Run and the kebab in on hover, and Run's label never changes", () => {
     const { rerender, onRunNode } = renderHeader();
     const run = screen.getByRole("button", { name: "Run node" });
     expect(run.closest(".opacity-0")).not.toBeNull();
+    expect(run.textContent).toBe("Run");
     hoveredNodeId = "n1";
     rerender(
       <ReactFlowProvider>
@@ -134,7 +135,7 @@ describe("FloatingNodeHeader", () => {
       </ReactFlowProvider>
     );
     expect(screen.getByRole("button", { name: "Run node" }).closest(".opacity-0")).toBeNull();
-    expect(screen.getByRole("button", { name: "Run node" }).textContent).toBe("");
+    expect(screen.getByRole("button", { name: "Run node" }).textContent).toBe("Run");
     fireEvent.click(screen.getByRole("button", { name: "Run node" }));
     expect(onRunNode).toHaveBeenCalledWith("n1");
   });

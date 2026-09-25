@@ -433,10 +433,10 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
               onClick={() => onBrowse(id)}
               title="Browse models"
               data-testid="node-title-picker"
-              className="nodrag nopan group/picker flex items-center gap-1.5 min-w-0 h-5 pr-1.5 rounded-[5px] text-xs font-semibold uppercase tracking-wide text-neutral-400 hover:text-neutral-200 hover:bg-white/6 transition-colors cursor-pointer"
+              className="nodrag nopan group/picker flex items-center gap-1.5 min-w-0 h-[22px] pl-1.5 -ml-1.5 pr-1.5 rounded-[6px] text-xs font-semibold uppercase tracking-wide text-neutral-400 hover:text-neutral-200 hover:bg-white/8 transition-colors cursor-pointer"
             >
               <span className="truncate">{customTitle ? `${customTitle} - ${title}` : title}</span>
-              <ChevronDown size={10} strokeWidth={2.5} className="shrink-0 text-neutral-500 group-hover/picker:text-neutral-300" />
+              <ChevronDown size={14} strokeWidth={2.25} className="shrink-0 text-neutral-400 group-hover/picker:text-neutral-200" />
             </button>
           ) : (
             <span
@@ -585,10 +585,19 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
 
           {/* Run and the kebab fade in together and never change width. */}
           <div className={`shrink-0 flex items-center gap-0.5 transition-opacity duration-200 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+            {/* Run carries a short permanent label so it reads as a button, and never resizes. */}
             {canRun && onRunNode && (
-              <GhostButton label="Run node" onClick={() => onRunNode(id)} disabled={isExecuting}>
-                <Play size={12} strokeWidth={0} fill="currentColor" />
-              </GhostButton>
+              <button
+                type="button"
+                onClick={() => onRunNode(id)}
+                disabled={isExecuting}
+                aria-label="Run node"
+                title="Run node"
+                className="nodrag nopan h-5 pl-1 pr-1.5 mr-0.5 rounded-[5px] flex items-center gap-1 bg-white/8 hover:bg-white/14 text-neutral-200 hover:text-white text-[10px] font-semibold leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/8"
+              >
+                <Play size={11} strokeWidth={0} fill="currentColor" />
+                Run
+              </button>
             )}
 
             <div className="relative shrink-0" ref={menuRef}>
