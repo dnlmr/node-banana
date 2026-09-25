@@ -8,13 +8,14 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { getNodeSize } from "@/utils/nodeDimensions";
 import { ProviderBadge } from "./ProviderBadge";
 import { menuSurfaceClass } from "@/components/ui/Menu";
+import { KbdGroup } from "@/components/ui/Kbd";
 import { cn } from "./ui/cn";
 import {
   Box,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Ellipsis,
+  EllipsisVertical,
   LifeBuoy,
   Lock,
   Maximize2,
@@ -585,6 +586,21 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
 
           {/* Run and the kebab fade in together and never change width. */}
           <div className={`shrink-0 flex items-center gap-0.5 transition-opacity duration-200 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+            {/* Run carries a short permanent label so it reads as a button, and never resizes. */}
+            {canRun && onRunNode && (
+              <button
+                type="button"
+                onClick={() => onRunNode(id)}
+                disabled={isExecuting}
+                aria-label="Run node"
+                title="Run node"
+                className="nodrag nopan h-5 pl-1 pr-1.5 mr-0.5 rounded-[5px] flex items-center gap-1 bg-white/8 hover:bg-white/14 text-neutral-200 hover:text-white text-[10px] font-semibold leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/8"
+              >
+                <Play size={11} strokeWidth={0} fill="currentColor" />
+                Run
+              </button>
+            )}
+
             <div className="relative shrink-0" ref={menuRef}>
               <GhostButton
                 label="More"
@@ -594,7 +610,7 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
                 aria-expanded={isMenuOpen}
                 badge={Boolean(fallbackName)}
               >
-                <Ellipsis size={12} strokeWidth={2} />
+                <EllipsisVertical size={12} strokeWidth={2} />
               </GhostButton>
 
               {isMenuOpen && (
@@ -609,7 +625,7 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
                     </MenuRow>
                   )}
                   {canRun && onRunNode && (
-                    <MenuRow icon={<Play size={11} strokeWidth={0} fill="currentColor" />} meta="⌥↵" disabled={isExecuting} onClick={() => runMenuAction(() => onRunNode(id))}>
+                    <MenuRow icon={<Play size={11} strokeWidth={0} fill="currentColor" />} keys={["⌥", "↵"]} disabled={isExecuting} onClick={() => runMenuAction(() => onRunNode(id))}>
                       Run node
                     </MenuRow>
                   )}
@@ -639,21 +655,6 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
                 </div>
               )}
             </div>
-            {/* Run carries a short permanent label so it reads as a button, and never resizes. */}
-            {canRun && onRunNode && (
-              <button
-                type="button"
-                onClick={() => onRunNode(id)}
-                disabled={isExecuting}
-                aria-label="Run node"
-                title="Run node"
-                className="nodrag nopan h-5 pl-1 pr-1.5 ml-0.5 rounded-[5px] flex items-center gap-1 bg-white/8 hover:bg-white/14 text-neutral-200 hover:text-white text-[10px] font-semibold leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/8"
-              >
-                <Play size={11} strokeWidth={0} fill="currentColor" />
-                Run
-              </button>
-            )}
-
           </div>
         </div>
       </div>
@@ -704,11 +705,12 @@ function GhostButton({
 function MenuRow({
   icon,
   meta,
+  keys,
   set = false,
   className,
   children,
   ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: ReactNode; meta?: string; set?: boolean }) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: ReactNode; meta?: string; keys?: string[]; set?: boolean }) {
   return (
     <button
       {...rest}
@@ -724,6 +726,7 @@ function MenuRow({
       <span className="shrink-0 flex items-center justify-center w-[11px] text-current">{icon}</span>
       <span className="flex-1 min-w-0 overflow-hidden text-ellipsis">{children}</span>
       {meta && <span className="font-mono text-[9px] text-ink-3">{meta}</span>}
+      {keys && <KbdGroup keys={keys} size="xs" className="gap-0.5 [&_kbd]:text-neutral-400" />}
       {set && <span className="w-[5px] h-[5px] rounded-full bg-blue-400" />}
     </button>
   );
