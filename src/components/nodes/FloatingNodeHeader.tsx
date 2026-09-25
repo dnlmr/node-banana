@@ -459,7 +459,7 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
         </div>
 
         {/* Right cluster: what never fades, then Run and the kebab. */}
-        <div className="shrink-0 flex items-center gap-0.5 pr-1 -translate-y-1">
+        <div className="shrink-0 flex items-center gap-0.5 pr-1">
           {hint && (
             <span
               data-testid="node-readiness-hint"
