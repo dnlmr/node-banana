@@ -4,10 +4,10 @@ import { AudioWaveform, Box, Check, FileWarning, Image as ImageIcon, Play, Star,
 import { memo, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { assetFileUrl, assetThumbUrl } from "@/lib/assets/client/api";
-import { ensurePoster } from "@/lib/assets/client/poster";
 import { THUMB_WIDTHS, type AssetKind, type AssetView } from "@/lib/assets/types";
 import { VIDEO_HOVER_DELAY_MS } from "@/hooks/useVideoAutoplay";
 import { assetTitle, formatDuration, KIND_LABELS } from "./assetFormat";
+import { requestPoster } from "./posterRequests";
 import { prefersReducedMotion } from "./useVirtualWindow";
 
 /** Kind colour (the node sockets' colours): placeholder ground and glyph. */
@@ -30,9 +30,6 @@ export function thumbBucket(tileWidth: number, dpr: number = typeof window !== "
   const needed = tileWidth * dpr;
   return THUMB_WIDTHS.find((width) => width >= needed) ?? THUMB_WIDTHS[THUMB_WIDTHS.length - 1];
 }
-
-/** Videos this session has asked a poster for: once each, even when the capture fails. */
-const postersAsked = new Set<string>();
 
 /**
  * The grid thumbnail. A video's comes from a poster the browser makes, so
@@ -77,6 +74,8 @@ export interface AssetTileProps {
   height: number;
   left: number;
   top: number;
+  /** Inside the visible area, not only mounted in the overscan around it. */
+  onScreen: boolean;
   selected: boolean;
   focused: boolean;
   /** The grid's one Tab stop (roving tabindex): the focused tile, else the first in view. */
@@ -103,6 +102,7 @@ export const AssetTile = memo(function AssetTile({
   height,
   left,
   top,
+  onScreen,
   selected,
   focused,
   tabbable,
@@ -120,15 +120,15 @@ export const AssetTile = memo(function AssetTile({
   const hasPoster = !!asset?.hasPoster;
   useEffect(() => setThumbFailed(false), [sha, hasPoster]);
   // A video on screen without a poster (recorded a moment ago, imported, or its
-  // capture failed) gets one made; onPosterReady then marks it and this tile reloads
+  // capture failed) gets one made; onPosterReady then marks it and this tile reloads.
+  // Only while on screen: one scrolled past before its turn is withdrawn
   const needsPoster = !!asset && asset.kind === "video" && !asset.hasPoster && !asset.missing;
   useEffect(() => {
-    if (!needsPoster || !asset || postersAsked.has(asset.id)) return;
-    postersAsked.add(asset.id);
-    void ensurePoster(asset);
+    if (!needsPoster || !onScreen || !asset) return;
+    return requestPoster(asset);
     // Once per asset, whatever else about the record changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsPoster, asset?.id]);
+  }, [needsPoster, onScreen, asset?.id]);
   useEffect(() => () => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
   }, []);

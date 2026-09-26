@@ -60,6 +60,7 @@ const openWorkflow = vi.hoisted(() => ({
 vi.mock("@/lib/assets/client/openWorkflow", () => openWorkflow);
 
 import { AssetsView } from "../AssetsView";
+import { __resetPosterRequestsForTests } from "../posterRequests";
 import { useAssetStore } from "@/store/assetStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 
@@ -140,6 +141,7 @@ async function renderView(assets: AssetView[] = [asset("a3"), asset("a2"), asset
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetPosterRequestsForTests();
   useAssetStore.setState({ ...initial, appView: "assets" }, true);
   api.fetchFacets.mockResolvedValue(facets());
   api.fetchLibraryStatus.mockResolvedValue(library());
@@ -370,6 +372,19 @@ describe("AssetsView", () => {
     expect(tile("vid1").querySelector("img")!.getAttribute("src")).toBe(`/api/assets/thumb/${"vid1".padEnd(64, "0")}?w=320&poster=1`);
     // Once per video, not on every render
     expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for a video's poster only once its tile is on screen, not while it waits in the overscan", async () => {
+    // Five rows of images, then a video mounted below the visible area
+    const images = Array.from({ length: 20 }, (_, i) => asset(`i${String(i).padStart(2, "0")}`));
+    await renderView([...images, asset("vid9", { kind: "video", mime: "video/mp4", ext: "mp4" })]);
+    expect(tile("vid9")).toBeInTheDocument();
+    expect(poster.ensurePoster).not.toHaveBeenCalled();
+
+    const grid = screen.getByTestId("asset-grid");
+    grid.scrollTop = 600;
+    fireEvent.scroll(grid);
+    await waitFor(() => expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid9" })));
   });
 
   it("prepends a recorded asset that matches while scrolled to the top", async () => {
