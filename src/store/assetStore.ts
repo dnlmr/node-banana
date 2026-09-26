@@ -103,7 +103,7 @@ interface UndoEntry {
   query: AssetQuery | null;
   /** The action reached past the loaded pages (select all matching): Undo reloads the list. */
   wide: boolean;
-  /** Records the action took off the grid; Undo puts back the ones that still match. */
+  /** Records the action took off the grid, as they were; Undo puts them back into that list. */
   removed: AssetView[];
   /** Tags and favorite as they were, for records the action changed. */
   before: Record<string, Pick<AssetView, "tags" | "favorite">>;
@@ -573,7 +573,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
    */
   const applyLibrary = (next: LibraryStatus) => {
     const previous = get().library;
-    set({ library: next });
+    // Asked every few seconds while the view shows: an unchanged answer changes nothing on screen
+    if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) set({ library: next });
     const { loadedRoot, status, appView } = get();
     // A list loaded before any status came is taken to be from the first library reported
     if (loadedRoot === null && previous === null && status !== "idle" && next.root) set({ loadedRoot: next.root });
