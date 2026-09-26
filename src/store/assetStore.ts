@@ -114,8 +114,12 @@ export interface AssetNotice {
   sticky?: boolean;
 }
 
+/**
+ * The one popover open over the view. A menu on a selected tile acts on the
+ * whole selection (`useSelection`), on any other tile on that tile alone.
+ */
 export type AssetPopover =
-  | { kind: "menu"; x: number; y: number; anchorId: string; targetIds: string[] }
+  | { kind: "menu"; x: number; y: number; anchorId: string; useSelection: boolean }
   | { kind: "tags"; x: number; y: number; selection: AssetSelection }
   | null;
 
@@ -353,6 +357,10 @@ let facetsTimer: ReturnType<typeof setTimeout> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let jobTimer: ReturnType<typeof setTimeout> | null = null;
 let noticeSeq = 0;
+/** Failed page requests wait this long before the grid may ask again. */
+const LOAD_RETRY_MS = 5000;
+let lastLoadFailure = 0;
+const pageFailures = new Map<number, number>();
 const pageRequests = new Set<number>();
 
 /* ------------------------------------------------------------------ */
@@ -608,11 +616,15 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const controller = new AbortController();
       refreshController = controller;
       pageRequests.clear();
+      pageFailures.clear();
+      lastLoadFailure = 0;
       const query = currentQuery();
       // "Select all matching" belongs to the query it was made for
       set((state) => ({
         status: "loading",
         error: null,
+        // A page request of the old query that is still out never lands
+        loadingMore: false,
         ...(state.selection.mode === "query" && !sameQuery(state.selection.query, query)
           ? { selection: EMPTY_SELECTION, selectedRecords: {}, selectionTotal: 0 }
           : {}),
@@ -653,6 +665,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     loadMore: async () => {
       const { nextCursor, loadingMore, status, loadedQuery } = get();
       if (!nextCursor || loadingMore || status !== "ready" || !loadedQuery) return;
+      // After a failure, wait before trying again (the grid asks on every scroll)
+      if (Date.now() - lastLoadFailure < LOAD_RETRY_MS) return;
       const seq = requestSeq;
       set({ loadingMore: true });
       try {
@@ -669,14 +683,16 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
           }
           return {
             items: appended.length ? [...state.items, ...appended] : state.items,
-            pages: [...state.pages, { cursor: nextCursor, loaded: true }],
-            nextCursor: page.nextCursor,
+            pages: appended.length ? [...state.pages, { cursor: nextCursor, loaded: true }] : state.pages,
+            // A page that brings nothing new and points at the same place again is the end
+            nextCursor: appended.length === 0 && page.nextCursor === nextCursor ? null : page.nextCursor,
             total: page.total,
             totalBytes: page.totalBytes,
           };
         });
       } catch (error) {
         if (seq !== requestSeq) return;
+        lastLoadFailure = Date.now();
         get().showNotice({ message: errorMessage(error, "More assets could not be loaded."), tone: "error" });
       } finally {
         if (seq === requestSeq) set({ loadingMore: false });
@@ -687,6 +703,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const { pages, loadedQuery } = get();
       const slot = pages[pageIndex];
       if (!slot || slot.loaded || !loadedQuery || pageRequests.has(pageIndex)) return;
+      if (Date.now() - (pageFailures.get(pageIndex) ?? 0) < LOAD_RETRY_MS) return;
       const seq = requestSeq;
       pageRequests.add(pageIndex);
       try {
@@ -698,7 +715,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
           pages: state.pages.map((p, i) => (i === pageIndex ? { ...p, loaded: true } : p)),
         }));
       } catch {
-        // Tiles of that page keep their placeholders; scrolling back retries
+        // Tiles of that page keep their placeholders; scrolling retries after a pause
+        pageFailures.set(pageIndex, Date.now());
       } finally {
         pageRequests.delete(pageIndex);
       }
