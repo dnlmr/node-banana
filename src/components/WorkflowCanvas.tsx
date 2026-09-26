@@ -1230,7 +1230,8 @@ export function WorkflowCanvas() {
         const nodeHeight = 280;
         const gap = 20;
 
-        // Add split images to global history
+        // Add split images to global history, and keep them in the asset
+        // library as one edit of the source node's image
         images.forEach((imageData: string, index: number) => {
           const row = Math.floor(index / grid.cols);
           const col = index % grid.cols;
@@ -1242,6 +1243,19 @@ export function WorkflowCanvas() {
             model: sourceNodeData?.model || "nano-banana",
           });
         });
+        const sourceModel = sourceNodeData?.selectedModel;
+        useWorkflowStore.getState().recordUiAsset(
+          images.map((imageData: string, index: number) => ({
+            kind: "image" as const,
+            origin: "edited" as const,
+            media: imageData,
+            ...(sourceModel
+              ? { model: { provider: sourceModel.provider, modelId: sourceModel.modelId, displayName: sourceModel.displayName } }
+              : {}),
+            parameters: { rows: grid.rows, cols: grid.cols, row: Math.floor(index / grid.cols) + 1, col: (index % grid.cols) + 1 },
+            producer: { nodeId: sourceNodeId, nodeType: sourceNode.type ?? "unknown", operation: "splitToNodes", batchIndex: index },
+          }))
+        );
 
         // Create ImageInput nodes arranged in a grid matching the layout
         images.forEach((imageData: string, index: number) => {
