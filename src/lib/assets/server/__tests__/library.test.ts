@@ -817,6 +817,70 @@ describe("unreadable sidecars", () => {
     expect(trashed).toEqual([]);
     expect(fs.existsSync(sharing.asset.displayPath)).toBe(true);
     expect(fs.existsSync(path.join(root, ".nodebanana", "runs", `${run}.json.gz`))).toBe(true);
+
+    // Readable again, and it did share them: the release noted for later leaves both where they are.
+    vi.restoreAllMocks();
+    expect(await runCleanup(jobContext(), { library: fresh, thumbs: null }, { unusedMedia: true })).toBe("Nothing to clean up.");
+    expect(trashed).toEqual([]);
+    expect(fs.existsSync(sharing.asset.displayPath)).toBe(true);
+    expect(fs.existsSync(path.join(root, ".nodebanana", "runs", `${run}.json.gz`))).toBe(true);
+    expect(pendingReleases()).toEqual([]);
+    await fresh.drain();
+  });
+
+  const jobContext = (): JobContext => ({ signal: new AbortController().signal, update: () => {}, addBytes: () => {}, step: () => {}, checkCancelled: () => {} });
+
+  function pendingReleases(): string[] {
+    const dir = path.join(root, ".nodebanana", "pending-release");
+    return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+  }
+
+  /** A trashed asset deleted for good while an unrelated record's sidecar can't be read. */
+  async function deleteWhileUnreadable() {
+    const deleted = await record();
+    const unrelated = await record();
+    await patchAsset(deleted.asset.id, { trashed: true });
+    unreadable(sidecarOf(unrelated.asset.id));
+    const trashed: string[] = [];
+    const fresh = new AssetLibrary(root, { trash: async (files) => void trashed.push(...files) });
+    await fresh.ready();
+    expect(await fresh.deleteRecords([deleted.asset.id])).toMatchObject({ affected: 1, errors: [] });
+    expect(trashed).toEqual([]);
+    expect(fs.existsSync(deleted.asset.displayPath)).toBe(true);
+    vi.restoreAllMocks();
+    return { deleted, trashed, fresh };
+  }
+
+  it("releases a deleted asset's file with the next delete, once every record reads again", async () => {
+    const { deleted, trashed, fresh } = await deleteWhileUnreadable();
+    const next = await record();
+    await patchAsset(next.asset.id, { trashed: true });
+    await fresh.ready();
+    expect(await fresh.deleteRecords([next.asset.id])).toMatchObject({ affected: 1 });
+    expect(trashed.sort()).toEqual([deleted.asset.displayPath, next.asset.displayPath].sort());
+    expect(pendingReleases()).toEqual([]);
+    await fresh.drain();
+  });
+
+  it("releases a deleted asset's file with the next cleanup, once every record reads again", async () => {
+    const { deleted, trashed, fresh } = await deleteWhileUnreadable();
+    expect(await runCleanup(jobContext(), { library: fresh, thumbs: null }, { unusedMedia: true })).toMatch(/^Removed 1 file \(/);
+    expect(trashed).toEqual([deleted.asset.displayPath]);
+    expect(pendingReleases()).toEqual([]);
+    expect(await runCleanup(jobContext(), { library: fresh, thumbs: null }, { unusedMedia: true })).toBe("Nothing to clean up.");
+    expect(trashed).toHaveLength(1);
+    await fresh.drain();
+  });
+
+  it("leaves a kept file alone when it no longer holds the deleted bytes by the time it can be released", async () => {
+    const { deleted, trashed, fresh } = await deleteWhileUnreadable();
+    const bytes = fs.readFileSync(deleted.asset.displayPath);
+    bytes[bytes.length - 1] ^= 0xff;
+    fs.writeFileSync(deleted.asset.displayPath, bytes);
+    expect(await runCleanup(jobContext(), { library: fresh, thumbs: null }, { unusedMedia: true })).toBe("Nothing to clean up.");
+    expect(trashed).toEqual([]);
+    expect(fs.existsSync(deleted.asset.displayPath)).toBe(true);
+    expect(pendingReleases()).toEqual([]);
     await fresh.drain();
   });
 

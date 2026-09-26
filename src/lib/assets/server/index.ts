@@ -272,7 +272,7 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
   }
   await noteInterruptedMove(rt, library);
   await library.ensureLoaded();
-  const dirs = [layout.data, layout.assets, layout.runs, layout.media, layout.posters];
+  const dirs = [layout.data, layout.assets, layout.runs, layout.media, layout.posters, layout.pendingReleases];
   try {
     for (const day of await fs.readdir(layout.generations)) dirs.push(path.join(layout.generations, day));
   } catch {

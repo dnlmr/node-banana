@@ -184,16 +184,24 @@ function trashRoutes(platform: NodeJS.Platform, exec: ExecRunner, interactive: b
 const APPLE_EVENTS_REFUSED = /\((?:-1743|-1712|-600)\)|not (?:authori[sz]ed|permitted) to send apple events/i;
 
 /**
- * The route failed as a whole, not over one of the files: the tool is
- * missing, it was stopped (the exec timeout — a prompt nobody answered), or
- * macOS refused it the Apple Events it needs. Retrying file by file would
- * only fail the same way, once per file.
+ * The route can't be used at all, whatever the files: the tool is missing,
+ * or macOS refused it the Apple Events it needs.
  */
-function routeUnavailable(error: unknown): boolean {
+function routeRefused(error: unknown): boolean {
   if (errnoCode(error) === "ENOENT") return true;
-  const failure = (error ?? {}) as { killed?: unknown; signal?: unknown; message?: unknown; stderr?: unknown };
-  if (failure.killed === true || (typeof failure.signal === "string" && failure.signal !== "")) return true;
+  const failure = (error ?? {}) as { message?: unknown; stderr?: unknown };
   return APPLE_EVENTS_REFUSED.test(`${String(failure.message ?? "")}\n${String(failure.stderr ?? "")}`);
+}
+
+/** The tool was stopped before it finished: the exec timeout, or a signal. */
+function wasStopped(error: unknown): boolean {
+  const failure = (error ?? {}) as { killed?: unknown; signal?: unknown };
+  return failure.killed === true || (typeof failure.signal === "string" && failure.signal !== "");
+}
+
+async function someGone(files: readonly string[]): Promise<boolean> {
+  for (const file of files) if (!(await exists(file))) return true;
+  return false;
 }
 
 export interface TrashOptions extends DesktopDeps {
@@ -234,20 +242,37 @@ export async function trashFiles(files: readonly string[], options: TrashOptions
   }
   for (const route of trashRoutes(platform, exec, options.interactive !== false)) {
     if (!pending.length) break;
+    const handed: string[] = [];
+    let works = false;
+    /**
+     * Whether a failure means the route itself is down, so retrying file by
+     * file would only fail the same way, once per file. A stopped tool means
+     * so only while the route has moved nothing yet (a prompt nobody
+     * answered, a tool that hangs); once it has moved files it works, and a
+     * timeout is about the files — a slow disk, a big batch, a locked file's
+     * error dialog.
+     */
+    const isDown = async (error: unknown): Promise<boolean> => {
+      if (routeRefused(error)) return true;
+      if (!wasStopped(error)) return false;
+      works ||= await someGone(handed);
+      return !works;
+    };
     let down = false;
     for (const batch of batches(pending)) {
       if (down) break;
+      handed.push(...batch);
       try {
         await route(batch);
       } catch (error) {
-        down = routeUnavailable(error);
-        // One bad path can fail a whole batch; retry its files one by one, while the route itself works.
+        down = await isDown(error);
+        // One bad path (or a timeout part-way) can fail a whole batch; retry what is left one by one, while the route works.
         for (const file of down || batch.length === 1 ? [] : batch) {
           if (!(await exists(file))) continue;
           try {
             await route([file]);
           } catch (single) {
-            if ((down = routeUnavailable(single))) break;
+            if ((down = await isDown(single))) break;
           }
         }
       }

@@ -22,7 +22,7 @@ import {
   sweepStaleTemps,
   unlinkWithRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, GENERATIONS_DIR } from "./layout";
+import { acquireLock, DATA_DIR, GENERATIONS_DIR, WRITERS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
 import type { Thumbnailer } from "./thumbs";
@@ -443,10 +443,11 @@ export const ORPHAN_RUN_GRACE_MS = 60 * 60 * 1000;
 
 /**
  * `unusedMedia`: delete the snapshots of runs no asset belongs to any more,
- * then snapshot media no remaining run references (none at all when a
- * snapshot can't be read right now), posters of assets that no longer
- * exist, stale partial files, and trim the thumbnail cache. While an asset
- * record can't be read, none of the first three: they may be its.
+ * release the files deletes kept while a record couldn't be read, then
+ * snapshot media no remaining run references (none at all when a snapshot
+ * can't be read right now), posters of assets that no longer exist, stale
+ * partial files, and trim the thumbnail cache. While an asset record can't
+ * be read, none of the first four: they may be its.
  * `thumbnails`: empty the thumbnail cache.
  */
 export async function runCleanup(
@@ -479,6 +480,10 @@ export async function runCleanup(
       const orphans = await library.runs.removeOrphans(runsInUse, Date.now() - ORPHAN_RUN_GRACE_MS);
       files += orphans.files;
       bytes += orphans.bytes;
+      // What deletes had to keep while a record couldn't be read, now that every one reads.
+      const deferred = await library.releaseDeferred();
+      files += deferred.files;
+      bytes += deferred.bytes;
       ctx.checkCancelled();
       const { hashes: referenced, incomplete } = await library.runs.referencedHashes();
       keptForUnreadable = incomplete;
@@ -505,7 +510,8 @@ export async function runCleanup(
         ctx.step();
       }
     }
-    for (const dir of [library.layout.data, library.layout.assets, library.layout.runs, library.layout.media, library.layout.posters]) {
+    const layout = library.layout;
+    for (const dir of [layout.data, layout.assets, layout.runs, layout.media, layout.posters, layout.pendingReleases]) {
       await sweepStaleTemps(dir, 60 * 60 * 1000);
     }
     await thumbs?.trim();
@@ -644,9 +650,10 @@ async function realpathNearest(target: string): Promise<string> {
   }
 }
 
-async function isNonEmptyDir(dir: string): Promise<boolean> {
+/** Whether `dir` holds anything but the names in `ignore`. */
+async function isNonEmptyDir(dir: string, ignore: readonly string[] = []): Promise<boolean> {
   try {
-    return (await fs.readdir(dir)).length > 0;
+    return (await fs.readdir(dir)).some((name) => !ignore.includes(name));
   } catch {
     return false;
   }
@@ -675,7 +682,8 @@ export async function validateMoveTarget(fromRoot: string, target: unknown, plat
   } catch (error) {
     if (error instanceof LibraryError) throw error;
   }
-  if ((await isNonEmptyDir(path.join(to, DATA_DIR))) || (await isNonEmptyDir(path.join(to, GENERATIONS_DIR)))) {
+  // A writers folder alone is no library: the other build can recreate it in a root the library just left.
+  if ((await isNonEmptyDir(path.join(to, DATA_DIR), [WRITERS_DIR])) || (await isNonEmptyDir(path.join(to, GENERATIONS_DIR)))) {
     throw new LibraryError(
       "That folder already holds a Node Banana library. Use it as it is, or choose an empty folder.",
       409,
@@ -709,7 +717,7 @@ const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 async function buildManifest(root: string, library?: AssetLibrary): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
   const data = path.join(root, DATA_DIR);
-  const skipDirs = new Set([path.join(data, "cache"), path.join(data, "writers")]);
+  const skipDirs = new Set([path.join(data, "cache"), path.join(data, WRITERS_DIR)]);
   const skipFiles = new Set([
     path.join(data, "lock"),
     path.join(data, "config.json"),
@@ -935,6 +943,9 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     await unlinkWithRetry(markerFile).catch(() => {});
     await unlinkWithRetry(logFile).catch(() => {});
   }
+  // Never copied, and empty once the writes it named have landed (as the pending-release folder is once
+  // what it noted was released); the data folder can go only after them.
+  for (const dir of [from.layout.writers, from.layout.pendingReleases]) await fs.rmdir(dir).catch(() => {});
   await removeEmptyDirs([...[...copied.values()].map(({ source }) => path.dirname(source)), from.layout.data], fromRoot);
   const moved = `Moved ${copied.size} ${copied.size === 1 ? "file" : "files"}.`;
   return leftovers
