@@ -423,6 +423,18 @@ const OUTPUT_FIELDS: Record<string, string> = {
   gifEncoder: "outputGif",
 };
 
+/**
+ * Edits that cut an output into cells (spec A7: "splitGrid cells → leave").
+ * The cells became nodes of their own; the producer recorded is the source
+ * node, whose output field still holds the whole image.
+ */
+const CELL_OPERATIONS = new Set(["splitToNodes", "splitGrid"]);
+
+/** Whether opening the asset's workflow puts the asset back into its producing node. False for split cells. */
+export function injectsIntoProducer(asset: Pick<AssetView, "producer">): boolean {
+  return !CELL_OPERATIONS.has(asset.producer.operation ?? "");
+}
+
 /** comfyApp's typed mirrors, the first declared output of each type (see outputsToNodeData). */
 const COMFY_MIRRORS: Record<AssetKind, string> = {
   image: "outputImage",
@@ -478,7 +490,8 @@ export function snapshotOpenedLabel(at: number, locale?: string): string {
  * fresh id, no directoryPath, name "<name> (27 Sep 14:32)", statuses reset
  * (loading/running → idle; jobId, runStatus, abortController, selected
  * dropped), and `assetMedia` injected into the producing node's output
- * field (plus its carousel selection when the node has one).
+ * field (plus its carousel selection when the node has one). A split cell
+ * injects nothing: its producer is the source node, which keeps the grid.
  */
 export function prepareWorkflowForOpen(
   file: WorkflowFile,
@@ -497,7 +510,7 @@ export function prepareWorkflowForOpen(
     for (const key of RUN_DATA_KEYS) delete data[key];
     if (typeof data.status === "string" && RUNNING_STATUSES.has(data.status)) data.status = "idle";
 
-    if (node === producer) {
+    if (node === producer && injectsIntoProducer(asset)) {
       const field = OUTPUT_FIELDS[String(node.type)];
       if (assetMedia && (field || node.type === "comfyApp")) {
         if (node.type === "comfyApp") injectComfyOutput(data, asset, assetMedia);

@@ -18,7 +18,7 @@ import type { AssetView } from "../types";
 import { fetchAssetBlob, fetchAssetWorkflow } from "./api";
 import { blobToDataUrl } from "./mediaBlob";
 import { getRecorderLibraryStatus } from "./recorder";
-import { INLINE_VIDEO_LIMIT, hydrateSnapshot, prepareWorkflowForOpen } from "./snapshot";
+import { INLINE_VIDEO_LIMIT, hydrateSnapshot, injectsIntoProducer, prepareWorkflowForOpen } from "./snapshot";
 
 export type OpenWorkflowMode = "snapshot" | "project";
 
@@ -231,13 +231,18 @@ async function openSnapshot(asset: AssetView): Promise<OpenWorkflowResult> {
 
   const result = await fetchAssetWorkflow(asset.id);
   if (!result) return fail("There's no snapshot of this asset's workflow.");
-  const [file, assetMedia] = await Promise.allSettled([hydrateSnapshot(result.workflow), loadAssetMedia(asset)]);
+  const recorded = result.asset ?? asset;
+  // A split cell is not put back into its source node, so its bytes are not needed.
+  const [file, assetMedia] = await Promise.allSettled([
+    hydrateSnapshot(result.workflow),
+    injectsIntoProducer(recorded) ? loadAssetMedia(asset) : Promise.resolve(null),
+  ]);
   const media = assetMedia.status === "fulfilled" ? assetMedia.value : null;
   if (file.status === "rejected") {
     if (media?.startsWith("blob:")) URL.revokeObjectURL(media);
     throw file.reason;
   }
-  const prepared = prepareWorkflowForOpen(file.value, { asset: result.asset ?? asset, assetMedia: media, openedAt: Date.now() });
+  const prepared = prepareWorkflowForOpen(file.value, { asset: recorded, assetMedia: media, openedAt: Date.now() });
 
   const opened = await openCopy(prepared);
   if (!opened.ok) return opened;

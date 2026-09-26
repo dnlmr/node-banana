@@ -93,6 +93,26 @@ describe("prepareWorkflowForOpen", () => {
     expect(dataOf(prepared, 1).outputImage).toBe("other");
   });
 
+  it.each(["splitToNodes", "splitGrid"])("leaves the source node's output alone for a %s cell", (operation) => {
+    const grid = node("nanoBanana-1", "nanoBanana", {
+      outputImage: "full-grid",
+      status: "loading",
+      imageHistory: [{ id: "g", assetId: "a-grid" }],
+      selectedHistoryIndex: 0,
+    });
+    const prepared = prepareWorkflowForOpen(file([grid]), {
+      asset: assetFor("nanoBanana-1", "nanoBanana", "image", { operation, batchIndex: 2 }),
+      assetMedia: MEDIA,
+      openedAt: OPENED_AT,
+    });
+    expect(dataOf(prepared)).toEqual({
+      outputImage: "full-grid",
+      status: "idle",
+      imageHistory: [{ id: "g", assetId: "a-grid" }],
+      selectedHistoryIndex: 0,
+    });
+  });
+
   it("injects nothing when the asset's bytes could not be loaded", () => {
     const prepared = prepareWorkflowForOpen(file([node("nanoBanana-1", "nanoBanana", { outputImage: "old" })]), {
       asset: assetFor("nanoBanana-1", "nanoBanana"),

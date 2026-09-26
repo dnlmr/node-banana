@@ -210,6 +210,21 @@ describe("openAssetWorkflow: snapshot", () => {
     expect(state.setNavigationTarget).toHaveBeenCalledWith("nanoBanana-1");
   });
 
+  it("opens a split cell's workflow with the source node's own output, centred on it", async () => {
+    const cell = asset({ id: "a-cell", producer: { nodeId: "nanoBanana-1", nodeType: "nanoBanana", operation: "splitToNodes", batchIndex: 2 } });
+    const server = await fakeServer({ assets: [cell] });
+    const result = await open.openAssetWorkflow(cell, "snapshot");
+
+    expect(result).toEqual({ ok: true, tabId: "tab-new-1", nodeId: "nanoBanana-1" });
+    expect(liveData("nanoBanana-1")).toMatchObject({
+      outputImage: `data:image/png;base64,${btoa(OLD_OUTPUT)}`,
+      status: "idle",
+      selectedHistoryIndex: 4,
+    });
+    // The cell's own bytes are not needed.
+    expect(server.calls.some((call) => call.url.endsWith("/file"))).toBe(false);
+  });
+
   it("goes back to the copy it opened for the same run instead of opening another", async () => {
     const server = await fakeServer();
     const first = await open.openAssetWorkflow(asset(), "snapshot");
