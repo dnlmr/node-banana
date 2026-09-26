@@ -389,6 +389,32 @@ describe("asset actions and undo", () => {
     expect(useAssetStore.getState().undoStack).toHaveLength(0);
   });
 
+  it("puts back only what the server restored: an asset deleted for good since stays gone", async () => {
+    api.bulkAssets.mockResolvedValueOnce({ affected: 2, ids: ["a3", "a2"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a3", "a2"] }, { action: "trash" });
+    expect(ids()).toEqual(["a1"]);
+    expect(useAssetStore.getState().total).toBe(1);
+
+    // a2 was then deleted permanently from the Trash
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a3"], errors: [{ id: "a2", error: "Not found" }] });
+    await useAssetStore.getState().undo();
+    expect(ids()).toEqual(["a3", "a1"]);
+    expect(useAssetStore.getState().total).toBe(2);
+    expect(useAssetStore.getState().notice).toMatchObject({ message: "Undid: Trashed 2 assets · 1 asset no longer exists", tone: "error" });
+  });
+
+  it("says so when nothing could be undone, and changes nothing on screen", async () => {
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "favorite" });
+    expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.favorite).toBe(true);
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 0, ids: [], errors: [{ id: "a2", error: "The library is busy" }] });
+    await useAssetStore.getState().undo();
+    expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.favorite).toBe(true);
+    expect(useAssetStore.getState().notice).toMatchObject({ message: "Couldn't undo: 1 asset could not be changed back", tone: "error" });
+    expect(useAssetStore.getState().notice?.message).not.toMatch(/Undid/);
+  });
+
   it("undoes a tag only on the assets that did not have it", async () => {
     api.bulkAssets.mockResolvedValueOnce({ affected: 2, ids: ["a2", "a1"], errors: [] });
     await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2", "a1"] }, { action: "tag", tags: ["hero"] });
@@ -671,6 +697,15 @@ describe("library jobs and switches", () => {
     // The same folder again changes nothing
     useAssetStore.getState().setLibrary(status({ root: "/Volumes/Other/Node Banana" }));
     expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets Undo when the library changes: its actions belong to the other one", async () => {
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "trash" });
+    expect(useAssetStore.getState().undoStack).toHaveLength(1);
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("b1")]));
+    useAssetStore.getState().setLibrary(status({ root: "/new" }));
+    expect(useAssetStore.getState().undoStack).toHaveLength(0);
   });
 });
 

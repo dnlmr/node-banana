@@ -580,6 +580,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     if (loadedRoot === null && previous === null && status !== "idle" && next.root) set({ loadedRoot: next.root });
     const moved = loadedRoot !== null && next.root !== loadedRoot;
     const cameOrWent = previous !== null && previous.available !== next.available;
+    // Undo replays actions on the library they were taken in, never on this one
+    if (moved || cameOrWent) set({ undoStack: [] });
     if ((moved || cameOrWent) && status !== "idle") {
       get().clearSelection();
       get().closeDetail();
@@ -1410,28 +1412,43 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const entry = get().undoStack[get().undoStack.length - 1];
       if (!entry) return;
       set((state) => ({ undoStack: state.undoStack.slice(0, -1) }));
+      const changed = new Set<string>();
+      const failed = new Map<string, string>();
       try {
-        for (const step of entry.steps) await api.bulkAssets(step);
+        for (const step of entry.steps) {
+          const result = await api.bulkAssets(step);
+          for (const id of result.ids) changed.add(id);
+          for (const { id, error } of result.errors) failed.set(id, error);
+        }
       } catch (error) {
         get().showNotice({ message: errorMessage(error, "Undo did not work."), tone: "error" });
         void get().refresh();
         return;
       }
+      // Only what the server put back is put back here: an asset deleted for good since stays gone
+      for (const id of failed.keys()) changed.delete(id);
       const restored = new Map<string, AssetView>();
       for (const [id, prior] of Object.entries(entry.before)) {
-        const record = knownRecord(id);
+        const record = changed.has(id) ? knownRecord(id) : null;
         if (record) restored.set(id, { ...record, ...prior });
       }
       replaceRecords(restored);
       const loaded = get().loadedQuery;
       if (!entry.wide && entry.query && loaded && sameQuery(entry.query, loaded)) {
         // Back into the list they left, where they sort
-        if (entry.removed.length) insertItems(entry.removed);
+        const back = entry.removed.filter((asset) => changed.has(asset.id));
+        if (back.length) insertItems(back);
       } else {
         // Another list is shown now, or the action reached past the loaded one: ask again
         void get().refresh();
       }
-      get().showNotice({ message: `Undid: ${entry.label}`, tone: "info" });
+      if (failed.size === 0) {
+        get().showNotice({ message: `Undid: ${entry.label}`, tone: "info" });
+      } else {
+        const gone = [...failed.values()].every((error) => error === "Not found");
+        const why = `${plural(failed.size, "asset")} ${gone ? (failed.size === 1 ? "no longer exists" : "no longer exist") : "could not be changed back"}`;
+        get().showNotice({ message: changed.size ? `Undid: ${entry.label} · ${why}` : `Couldn't undo: ${why}`, tone: "error" });
+      }
       scheduleFacets();
     },
   };
