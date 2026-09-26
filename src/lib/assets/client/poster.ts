@@ -6,7 +6,9 @@
  * means a placeholder tile.
  */
 
+import type { AssetView } from "../types";
 import { assetFileUrl, uploadPoster } from "./api";
+import { createEmitter } from "./emitter";
 
 const POSTER_WIDTH = 640;
 const STEP_TIMEOUT_MS = 20_000;
@@ -99,5 +101,30 @@ async function capture(assetId: string, mime?: string): Promise<boolean> {
 export function capturePoster(assetId: string, mime?: string): Promise<boolean> {
   const run = queue.then(() => capture(assetId, mime)).catch(() => false);
   queue = run;
+  return run;
+}
+
+const posterReady = createEmitter<string>();
+const inFlight = new Map<string, Promise<boolean>>();
+
+/** Fires with the asset id once a poster was stored, so tiles can load their thumbnail again. */
+export function onPosterReady(listener: (assetId: string) => void): () => void {
+  return posterReady.on(listener);
+}
+
+/**
+ * Makes sure a video asset has a poster: captures one when it has none,
+ * once at a time per asset. Resolves whether a poster was stored now.
+ */
+export function ensurePoster(asset: Pick<AssetView, "id" | "kind" | "mime" | "hasPoster">): Promise<boolean> {
+  if (asset.kind !== "video" || asset.hasPoster) return Promise.resolve(false);
+  const running = inFlight.get(asset.id);
+  if (running) return running;
+  const run = capturePoster(asset.id, asset.mime).then((stored) => {
+    inFlight.delete(asset.id);
+    if (stored) posterReady.emit(asset.id);
+    return stored;
+  });
+  inFlight.set(asset.id, run);
   return run;
 }
