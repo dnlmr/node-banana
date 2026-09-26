@@ -32,6 +32,11 @@ export interface LibraryLayout {
    * (empty) in the root the library left.
    */
   writers: string;
+  /**
+   * One file per permanent delete that had to keep its runs and files while
+   * a record couldn't be read; a later delete or cleanup releases them.
+   */
+  pendingReleases: string;
 }
 
 export function libraryLayout(root: string): LibraryLayout {
@@ -49,6 +54,7 @@ export function libraryLayout(root: string): LibraryLayout {
     lock: path.join(data, "lock"),
     libraryFile: path.join(data, "library.json"),
     writers: path.join(data, WRITERS_DIR),
+    pendingReleases: path.join(data, "pending-release"),
   };
 }
 

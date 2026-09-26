@@ -38,6 +38,7 @@ import { errnoCode, LibraryError, pausedError } from "./errors";
 import {
   atomicWriteFile,
   foldsCase,
+  hashFile,
   isInsideRoot,
   KeyedMutex,
   mapConcurrent,
@@ -64,6 +65,7 @@ import {
   isAssetId,
   isMd5,
   isMediaExtension,
+  isRunId,
   isSha256,
   isWorkflowId,
   MAX_SIDECAR_BYTES,
@@ -251,6 +253,60 @@ function applyBulkOp(record: AssetRecord, op: Exclude<AssetBulkOp, { action: "de
   }
 }
 
+/**
+ * One file a permanent delete releases: to the OS Trash, into media/ for a
+ * snapshot that needs its bytes, or — a project file the delete keeps — at
+ * most a snapshot's reference to it.
+ */
+interface FileRelease {
+  /** Where the record had it: a library file by its relative path, so a release kept for later survives a move. */
+  file: AssetFileLocation;
+  sha256: string;
+  bytes: number;
+  ext: string;
+  /** A project file the delete leaves in its project. */
+  keep: boolean;
+}
+
+/** `.nodebanana/pending-release/<uuid>.json`: what one delete had to keep while a record couldn't be read. */
+interface PendingRelease {
+  v: 1;
+  at: number;
+  runIds: string[];
+  files: FileRelease[];
+}
+
+const PENDING_RELEASE_NAME = /^[0-9a-f-]{36}\.json$/;
+
+/** The runs and files a pending-release file names (only the entries that pass the checks a sidecar's would). */
+function parsePendingRelease(value: unknown, root: string): { runIds: string[]; files: FileRelease[] } {
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const runIds = Array.isArray(raw.runIds) ? raw.runIds.filter(isRunId) : [];
+  const files: FileRelease[] = [];
+  for (const entry of Array.isArray(raw.files) ? (raw.files as Record<string, unknown>[]) : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const location = entry.file as Record<string, unknown> | undefined;
+    let file: AssetFileLocation;
+    if (location?.root === "library" && libraryRelToPath(root, location.rel)) {
+      file = { root: "library", rel: location.rel as string };
+    } else if (
+      location?.root === "external" &&
+      typeof location.path === "string" &&
+      path.isAbsolute(location.path) &&
+      isMediaExtension(extOf(location.path))
+    ) {
+      file = { root: "external", path: location.path };
+    } else {
+      continue;
+    }
+    const bytes = optionalNumber(entry.bytes);
+    if (!isSha256(entry.sha256) || bytes === undefined || bytes < 0) continue;
+    if (typeof entry.ext !== "string" || !isMediaExtension(entry.ext)) continue;
+    files.push({ file, sha256: entry.sha256, bytes, ext: entry.ext, keep: entry.keep === true });
+  }
+  return { runIds, files };
+}
+
 function validateBulkOp(value: unknown): AssetBulkOp {
   const op = value as AssetBulkOp;
   if (!op || typeof op !== "object") throw new LibraryError("op is required", 400, "bad_request");
@@ -316,6 +372,8 @@ export class AssetLibrary {
    * file is still used and releasing it, so neither sees the other halfway.
    */
   readonly shaLocks = new KeyedMutex();
+  /** Serialises this process's passes over `.nodebanana/pending-release/`. */
+  private readonly pendingLock = new KeyedMutex();
   /** Bumped on every change that can alter a query or facet result. */
   private revision = 0;
   private facetsCache: { revision: number; facets: AssetFacets } | null = null;
@@ -883,8 +941,12 @@ export class AssetLibrary {
 
   /** Absolute path of a record's file (null for a location that fails validation). */
   filePath(record: AssetRecord): string | null {
-    if (record.file.root === "library") return libraryRelToPath(this.root, record.file.rel);
-    const external = record.file.path;
+    return this.locationPath(record.file);
+  }
+
+  private locationPath(location: AssetFileLocation): string | null {
+    if (location.root === "library") return libraryRelToPath(this.root, location.rel);
+    const external = location.path;
     return path.isAbsolute(external) && isMediaExtension(extOf(external)) ? external : null;
   }
 
@@ -1364,6 +1426,9 @@ export class AssetLibrary {
    * Bytes a surviving run's snapshot still references move into
    * `.nodebanana/media` instead of the OS Trash, so "open original workflow"
    * keeps working; for a kept project file, a reference to it goes there.
+   * While some record's sidecar can't be read, those runs and files are
+   * kept and noted instead, and a later delete or cleanup releases them
+   * once every record reads ({@link releaseDeferred}).
    * `purge` (the automatic 30-day empty) uses the OS Trash too, but never
    * a route that asks for permissions at startup: where only that one is
    * left (macOS 14 or earlier in web mode), the files are unlinked.
@@ -1410,16 +1475,94 @@ export class AssetLibrary {
       }),
     );
     await this.publish(lines);
+    const runIds = removed.map((record) => record.runId);
+    const files = release.map((record) => this.fileRelease(record, options.deleteProjectFiles === true));
     if (removed.length && (await this.hasUnreadable())) {
       // A record whose sidecar can't be read may share a run or a file with these; keep both
-      // (the file stays where it is) rather than guess. Cleanup takes the runs once it can tell.
-      console.warn("[assets] some asset records can't be read right now, so the deleted ones' files and snapshots were kept");
+      // (the file stays where it is) rather than guess, and note them so a later delete or
+      // cleanup releases them once every record reads.
+      console.warn("[assets] some asset records can't be read right now, so the deleted ones' files and snapshots were kept for now");
+      await this.deferRelease(runIds, files);
     } else {
-      await this.collectRuns(removed.map((record) => record.runId));
-      await this.releaseFiles(release, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
+      await this.collectRuns(runIds);
+      await this.releaseFiles(files, { purge: options.purge === true });
+      await this.releaseDeferred({ purge: options.purge === true });
     }
     const affected = [...new Set(ids)].filter((id) => done.has(id));
     return { affected: affected.length, ids: affected, errors };
+  }
+
+  private fileRelease(record: AssetRecord, deleteProjectFiles: boolean): FileRelease {
+    return {
+      file: record.file,
+      sha256: record.sha256,
+      bytes: record.bytes,
+      ext: record.ext,
+      keep: record.file.root === "external" && !deleteProjectFiles,
+    };
+  }
+
+  /**
+   * Notes runs and files a delete had to keep, in a file of its own under
+   * `.nodebanana/pending-release/` (so no two deletes, in any process, write
+   * over each other's note).
+   */
+  private async deferRelease(runIds: string[], files: FileRelease[]): Promise<void> {
+    if (!runIds.length && !files.length) return;
+    const note: PendingRelease = { v: 1, at: this.now(), runIds: [...new Set(runIds)], files };
+    try {
+      await fs.mkdir(this.layout.pendingReleases, { recursive: true });
+      await atomicWriteFile(path.join(this.layout.pendingReleases, `${randomUUID()}.json`), JSON.stringify(note), { fsync: true });
+    } catch (error) {
+      console.warn("[assets] could not note the deleted assets' files to release later", error);
+    }
+  }
+
+  /**
+   * Finishes the deletes that had to keep their runs and files while a
+   * record couldn't be read, once every record reads: the runs no record
+   * belongs to are deleted, and each file no record uses — still holding
+   * exactly the deleted bytes — is released as the delete would have.
+   * Returns what went to the OS Trash.
+   */
+  async releaseDeferred(options: { purge?: boolean } = {}): Promise<{ files: number; bytes: number }> {
+    return this.pendingLock.run("pending", async () => {
+      const none = { files: 0, bytes: 0 };
+      let names: string[];
+      try {
+        names = (await fs.readdir(this.layout.pendingReleases)).filter((name) => PENDING_RELEASE_NAME.test(name));
+      } catch {
+        return none;
+      }
+      if (!names.length || (await this.hasUnreadable())) return none;
+      const notes: string[] = [];
+      const runIds = new Set<string>();
+      const files: FileRelease[] = [];
+      for (const name of names) {
+        const note = path.join(this.layout.pendingReleases, name);
+        let text: string;
+        try {
+          text = await withFsRetry(() => fs.readFile(note, "utf8"));
+        } catch {
+          // Taken by another process, or unreadable for now: the next pass gets it.
+          continue;
+        }
+        let parsed: unknown = null;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          // Torn or not ours: nothing it names can be trusted, so it goes.
+        }
+        const pending = parsePendingRelease(parsed, this.root);
+        pending.runIds.forEach((runId) => runIds.add(runId));
+        files.push(...pending.files);
+        notes.push(note);
+      }
+      await this.collectRuns([...runIds]);
+      const released = await this.releaseFiles(files, { purge: options.purge === true, checkHash: true });
+      for (const note of notes) await unlinkWithRetry(note).catch(() => {});
+      return released;
+    });
   }
 
   /** Deletes the snapshots of these runs that no record (live or trashed) belongs to any more. */
@@ -1438,65 +1581,77 @@ export class AssetLibrary {
     }
   }
 
-  /** Re-checks that a file is the one the record describes before anything moves or trashes it. */
-  private async isOwnedFile(record: AssetRecord, file: string): Promise<boolean> {
-    if (record.file.root === "library") {
+  /**
+   * Re-checks that a file is the one being released before anything moves
+   * or trashes it: where it should be, and its size — and with `checkHash`
+   * (a release kept for later, so the file had time to change) its bytes.
+   */
+  private async isOwnedFile(release: FileRelease, file: string, checkHash: boolean): Promise<boolean> {
+    if (release.file.root === "library") {
       if (!isInsideRoot(this.layout.generations, file, { platform: this.platform })) return false;
-    } else if (file !== record.file.path || !isMediaExtension(extOf(file))) {
+    } else if (file !== release.file.path || !isMediaExtension(extOf(file))) {
       return false;
     }
     try {
       const stat = await fs.stat(file);
-      return stat.isFile() && stat.size === record.bytes;
+      if (!stat.isFile() || stat.size !== release.bytes) return false;
+      return !checkHash || (await hashFile(file)).sha256 === release.sha256;
     } catch {
       return false;
     }
   }
 
+  /** Releases each file no record uses any more; returns what went to the OS Trash. */
   private async releaseFiles(
-    removed: AssetRecord[],
-    options: { deleteProjectFiles: boolean; purge: boolean },
-  ): Promise<void> {
-    if (!removed.length) return;
-    const byFile = new Map<string, { record: AssetRecord; file: string; keep: boolean }>();
-    for (const record of removed) {
-      const file = this.filePath(record);
-      const keep = record.file.root === "external" && !options.deleteProjectFiles;
-      if (file) byFile.set(pathKey(file, this.platform), { record, file, keep });
+    releases: FileRelease[],
+    options: { purge: boolean; checkHash?: boolean },
+  ): Promise<{ files: number; bytes: number }> {
+    const released = { files: 0, bytes: 0 };
+    const byFile = new Map<string, { release: FileRelease; file: string }>();
+    for (const release of releases) {
+      const file = this.locationPath(release.file);
+      if (file) byFile.set(pathKey(file, this.platform), { release, file });
     }
-    if (!byFile.size) return;
+    if (!byFile.size) return released;
     const { hashes: referenced, incomplete } = await this.runs.referencedHashes();
     // Held across the check and the release, so a recording that chose one of these files to reuse
     // has indexed its record before we look (sorted, so two deletes never wait on each other).
-    const hashes = [...new Set([...byFile.values()].map(({ record }) => record.sha256))].sort();
-    const releases: (() => void)[] = [];
-    for (const sha256 of hashes) releases.push(await this.shaLocks.acquire(sha256));
+    const hashes = [...new Set([...byFile.values()].map(({ release }) => release.sha256))].sort();
+    const unlocks: (() => void)[] = [];
+    for (const sha256 of hashes) unlocks.push(await this.shaLocks.acquire(sha256));
     try {
       const toTrash: string[] = [];
-      for (const [key, { record, file, keep }] of byFile) {
+      let trashBytes = 0;
+      for (const [key, { release, file }] of byFile) {
         if (this.byPath.get(key)?.size) continue;
-        if (!(await this.isOwnedFile(record, file))) continue;
+        if (!(await this.isOwnedFile(release, file, options.checkHash === true))) continue;
         try {
-          if (keep) {
+          if (release.keep) {
             // The project keeps its file; a snapshot that needs the bytes gets a checked reference to it.
-            if (referenced.has(record.sha256)) await this.runs.retainReference(record.sha256, file, record.bytes);
+            if (referenced.has(release.sha256)) await this.runs.retainReference(release.sha256, file, release.bytes);
             continue;
           }
           // A snapshot that could not be read may need these bytes: keep them rather than guess.
-          const needed = referenced.has(record.sha256) || incomplete;
-          if (needed && (await this.runs.adoptFile(record.sha256, record.ext, file))) continue;
+          const needed = referenced.has(release.sha256) || incomplete;
+          if (needed && (await this.runs.adoptFile(release.sha256, release.ext, file))) continue;
           toTrash.push(file);
+          trashBytes += release.bytes;
         } catch (error) {
           console.warn("[assets] could not remove", file, error);
         }
       }
-      if (!toTrash.length) return;
+      if (!toTrash.length) return released;
       // The unprompted purge goes to the OS Trash too, by any route that can't put up a prompt.
-      await this.trash(toTrash, { interactive: !options.purge }).catch((error) =>
-        console.warn("[assets] could not remove", toTrash, error),
-      );
+      try {
+        await this.trash(toTrash, { interactive: !options.purge });
+        released.files = toTrash.length;
+        released.bytes = trashBytes;
+      } catch (error) {
+        console.warn("[assets] could not remove", toTrash, error);
+      }
+      return released;
     } finally {
-      releases.forEach((release) => release());
+      unlocks.forEach((unlock) => unlock());
     }
   }
 
