@@ -962,4 +962,26 @@ describe("workflows table", () => {
     await expect(upsertWorkflowEntry("bad/id", { name: null, projectPath: null })).rejects.toMatchObject({ status: 400 });
     await expect(upsertWorkflowEntry("wf_c", { name: null, projectPath: "relative" })).rejects.toMatchObject({ status: 400 });
   });
+
+  it("never lets a run's late upsert undo a rename or a folder change made during the run", async () => {
+    const fox = path.join(base, "Fox");
+    const wolf = path.join(base, "Wolf");
+    const runStarted = Date.now() - 1000;
+    await upsertWorkflowEntry("wf_run", { name: "Fox", projectPath: fox });
+    // Saved under a new name and folder while the video rendered.
+    await upsertWorkflowEntry("wf_run", { name: "Wolf", projectPath: wolf });
+    // The video lands and its run sends what the canvas knew when it started.
+    const late = await upsertWorkflowEntry("wf_run", { name: "Fox", projectPath: fox, asOf: runStarted });
+    expect(late).toMatchObject({ name: "Wolf", projectPath: wolf });
+    expect(JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "workflows.json"), "utf8")).wf_run).toMatchObject({
+      name: "Wolf",
+      projectPath: wolf,
+    });
+
+    // A newer observation still wins, and an older one still fills in what the row lacks or creates it.
+    expect(await upsertWorkflowEntry("wf_run", { name: "Wolf 2", projectPath: wolf, asOf: Date.now() + 1000 })).toMatchObject({ name: "Wolf 2" });
+    await upsertWorkflowEntry("wf_unnamed", { name: null, projectPath: null });
+    expect(await upsertWorkflowEntry("wf_unnamed", { name: "Named", projectPath: fox, asOf: 1 })).toMatchObject({ name: "Named", projectPath: fox });
+    expect(await upsertWorkflowEntry("wf_absent", { name: "New", projectPath: null, asOf: 1 })).toMatchObject({ name: "New" });
+  });
 });

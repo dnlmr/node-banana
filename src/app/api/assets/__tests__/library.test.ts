@@ -260,6 +260,20 @@ describe("PUT /api/assets/workflows/[workflowId]", () => {
     expect(facade.upsertWorkflowEntry).toHaveBeenCalledWith("wf_2", { name: null, projectPath: null, forkedFrom: "wf_1" });
   });
 
+  it("passes when the caller saw the values (asOf) through, and refuses one that is not a number", async () => {
+    vi.mocked(facade.upsertWorkflowEntry).mockResolvedValue({ id: "wf_3", name: "Fox", projectPath: null, createdAt: 1, updatedAt: 1 });
+    await putWorkflow(
+      page(`/api/assets/workflows/wf_3`, { method: "PUT", json: { name: "Fox", projectPath: null, asOf: 1234 } }),
+      ctx({ workflowId: "wf_3" }),
+    );
+    expect(facade.upsertWorkflowEntry).toHaveBeenCalledWith("wf_3", { name: "Fox", projectPath: null, asOf: 1234 });
+    const refused = await putWorkflow(
+      page(`/api/assets/workflows/wf_3`, { method: "PUT", json: { name: "Fox", projectPath: null, asOf: "yesterday" } }),
+      ctx({ workflowId: "wf_3" }),
+    );
+    expect(refused.status).toBe(400);
+  });
+
   it("refuses ids with path characters and relative project folders", async () => {
     for (const workflowId of ["wf%2F..%2Fx", "a b", "x".repeat(129)]) {
       const response = await putWorkflow(

@@ -34,6 +34,7 @@ import {
   type RevealRequest,
   type SetLibraryRootRequest,
   type SnapshotWorkflow,
+  type WorkflowEntryUpdate,
 } from "@/lib/assets/types";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 import { badRequest } from "./http";
@@ -380,13 +381,14 @@ export function parsePutRunRequest(runId: string, body: unknown): PutRunRequest 
   };
 }
 
-export function parseWorkflowEntry(body: unknown): { name: string | null; projectPath: string | null; forkedFrom?: string } {
+export function parseWorkflowEntry(body: unknown): WorkflowEntryUpdate {
   const request = object(body, "The request");
-  const entry: { name: string | null; projectPath: string | null; forkedFrom?: string } = {
+  const entry: WorkflowEntryUpdate = {
     name: nullableString(request.name ?? null, "name"),
     projectPath: request.projectPath == null ? null : folder(request.projectPath, "projectPath"),
   };
   if (request.forkedFrom != null) entry.forkedFrom = matching(request.forkedFrom, WORKFLOW_ID_PATTERN, "forkedFrom");
+  if (request.asOf != null) entry.asOf = finiteNumber(request.asOf, "asOf");
   return entry;
 }
 

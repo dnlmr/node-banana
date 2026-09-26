@@ -15,6 +15,8 @@ export interface WorkflowEntryInput {
   name: string | null;
   projectPath: string | null;
   forkedFrom?: string;
+  /** When the caller saw these values (ms); older than the row's last change, they don't overwrite it. */
+  asOf?: number;
 }
 
 function parseEntry(id: string, value: unknown): LibraryWorkflowEntry | null {
@@ -88,9 +90,10 @@ export class WorkflowTable {
   /**
    * Inserts or updates a row. A no-op (no write) when nothing changed, which
    * is the common case: the recorder upserts at every run start. A null name
-   * or folder never clears one the row already has: the recorder's upsert
-   * carries what the canvas knew when its run started, and lands after any
-   * save or classification made while the run went on.
+   * or folder never clears one the row already has. The recorder's upsert
+   * carries what the canvas knew when its run started (`asOf`) and can land
+   * after a rename or a folder change made while the run went on: seen
+   * before the row's last change, it only fills in what the row lacks.
    */
   async upsert(id: string, input: WorkflowEntryInput, now: number = Date.now()): Promise<{ entry: LibraryWorkflowEntry; changed: boolean }> {
     requireWorkflowId(id);
@@ -105,8 +108,10 @@ export class WorkflowTable {
     return this.writes.run("table", async () => {
       await this.refresh();
       const existing = this.entries.get(id);
-      const name = incomingName ?? existing?.name ?? null;
-      const projectPath = incomingPath ?? existing?.projectPath ?? null;
+      const asOf = input.asOf;
+      const stale = existing !== undefined && typeof asOf === "number" && Number.isFinite(asOf) && asOf < existing.updatedAt;
+      const name = stale ? (existing.name ?? incomingName) : (incomingName ?? existing?.name ?? null);
+      const projectPath = stale ? (existing.projectPath ?? incomingPath) : (incomingPath ?? existing?.projectPath ?? null);
       const forkedFrom = input.forkedFrom ?? existing?.forkedFrom;
       if (
         existing &&

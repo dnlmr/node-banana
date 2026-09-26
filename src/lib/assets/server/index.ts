@@ -707,6 +707,7 @@ export async function upsertWorkflowEntry(
       name: typeof entry.name === "string" ? entry.name : null,
       projectPath: typeof entry.projectPath === "string" ? entry.projectPath : null,
       ...(entry.forkedFrom !== undefined ? { forkedFrom: entry.forkedFrom } : {}),
+      ...(typeof entry.asOf === "number" && Number.isFinite(entry.asOf) ? { asOf: entry.asOf } : {}),
     }),
   );
 }
