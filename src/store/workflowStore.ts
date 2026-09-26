@@ -3569,7 +3569,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   // Auto-save actions
   setWorkflowMetadata: (id: string, name: string, path: string, generationsPath?: string | null) => {
     // Auto-derive generationsPath: use provided value, fall back to existing, then auto-derive
-    const currentGenPath = get().generationsPath;
+    const prev = get();
+    const currentGenPath = prev.generationsPath;
     const derivedGenerationsPath = generationsPath ?? currentGenPath ?? `${path}/generations`;
 
     set({
@@ -3578,8 +3579,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       saveDirectoryPath: path,
       generationsPath: derivedGenerationsPath,
     });
-    // The workflow's assets, including those made before it had a folder, now belong to this project
-    classifyWorkflow(id, name, path);
+    // The workflow's assets, including those made before it had a folder, now
+    // belong to this project. A workflow that already has a folder is left to
+    // the save that follows: only it knows whether the new folder is a fork,
+    // and filing the old id there first would hand its assets to the copy.
+    if (!prev.saveDirectoryPath || prev.workflowId !== id) classifyWorkflow(id, name, path);
   },
 
   setWorkflowName: (name: string) => {

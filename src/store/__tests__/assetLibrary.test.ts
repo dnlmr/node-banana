@@ -312,6 +312,65 @@ describe("classification", () => {
     });
   });
 
+  it("moving a project to another folder in Settings leaves the old id's assets with the old folder", async () => {
+    useWorkflowStore.setState({
+      workflowId: "wf-old",
+      workflowName: "Fox",
+      saveDirectoryPath: "/projects/fox",
+      generationsPath: "/projects/fox/generations",
+      imageRefBasePath: "/projects/fox",
+      useExternalImageStorage: true,
+    });
+    mockFetch.mockResolvedValue({ json: async () => ({ success: true }) });
+
+    // What FloatingMenu does after the settings dialog: metadata, then save
+    store().setWorkflowMetadata("wf-old", "Fox", "/projects/fox-copy");
+    await expect(store().saveToFile()).resolves.toBe(true);
+
+    const newId = store().workflowId;
+    expect(newId).not.toBe("wf-old");
+    await vi.waitFor(() => {
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledWith(newId, {
+        name: "Fox",
+        projectPath: "/projects/fox-copy",
+        forkedFrom: "wf-old",
+      });
+    });
+    expect(api.upsertWorkflowEntry).not.toHaveBeenCalledWith("wf-old", expect.anything());
+  });
+
+  it("a move that keeps the id files the id under the new folder once it is saved", async () => {
+    useWorkflowStore.setState({
+      workflowId: "wf-1",
+      workflowName: "Fox",
+      saveDirectoryPath: "/projects/fox",
+      imageRefBasePath: null,
+      useExternalImageStorage: false,
+    });
+    mockFetch.mockResolvedValue({ json: async () => ({ success: true }) });
+
+    store().setWorkflowMetadata("wf-1", "Fox", "/projects/fox-moved");
+    await Promise.resolve();
+    // Nothing is filed until the save says the folder holds the workflow
+    expect(api.upsertWorkflowEntry).not.toHaveBeenCalled();
+    await expect(store().saveToFile()).resolves.toBe(true);
+
+    expect(store().workflowId).toBe("wf-1");
+    await vi.waitFor(() => {
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox-moved" });
+    });
+  });
+
+  it("files a new project made from a saved canvas under its own new id", () => {
+    useWorkflowStore.setState({ workflowId: "wf-old", workflowName: "Fox", saveDirectoryPath: "/projects/fox" });
+
+    store().setWorkflowMetadata("wf-new", "Wolf", "/projects/wolf");
+
+    return vi.waitFor(() => {
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-new", { name: "Wolf", projectPath: "/projects/wolf" });
+    });
+  });
+
   it("does not file a failed save", async () => {
     useWorkflowStore.setState({ workflowId: "wf-1", workflowName: "Fox", saveDirectoryPath: "/projects/fox", useExternalImageStorage: false });
     mockFetch.mockResolvedValue({ json: async () => ({ success: false, error: "disk full" }) });
