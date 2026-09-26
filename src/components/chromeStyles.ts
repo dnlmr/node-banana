@@ -36,3 +36,10 @@ export const CHROME_MENU_ITEM =
 
 export const CHROME_MENU_HEADING = "px-2 pb-0.5 pt-1.5 text-[10px] uppercase tracking-[0.06em] text-neutral-500";
 
+/**
+ * Controls floating over a lightbox image: the chrome glass on a dark base
+ * with a hairline, so they read over light and dark media alike.
+ */
+export const LIGHTBOX_BUTTON =
+  "bg-neutral-900/80 backdrop-blur-md border border-white/10 text-neutral-100 " +
+  "shadow-[0_1px_2px_rgba(0,0,0,0.4)] hover:bg-neutral-800 hover:text-white transition-colors";
