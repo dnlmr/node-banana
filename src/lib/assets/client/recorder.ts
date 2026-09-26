@@ -52,6 +52,7 @@ import {
 import { mapWithConcurrency, withRetry } from "./async";
 import { createEmitter } from "./emitter";
 import { newAssetId } from "./ids";
+import { libraryOffForGood } from "./libraryStatus";
 import { dataUrlMime, dataUrlToBlob, isBlobUrl, isDataUrl, isMediaString } from "./mediaBlob";
 import { ensurePoster } from "./poster";
 import {
@@ -118,13 +119,9 @@ function scheduleStatusCheck(ms: number): void {
   }, ms);
 }
 
-/**
- * Off for a reason no later answer changes while the page is open: a hosted
- * server, or a request guard that refuses this page. Polling would only add
- * a refusal to the server's log every minute.
- */
+/** Off for good (a hosted server, the request guard): polling would only add a refusal to the server's log every minute. */
 function offForGood(status: LibraryStatus | null = libraryStatus): boolean {
-  return status !== null && !status.available && (status.reasonCode === "hosted" || status.reasonCode === "guard");
+  return libraryOffForGood(status);
 }
 
 function setStatus(status: LibraryStatus, seq: number): void {
