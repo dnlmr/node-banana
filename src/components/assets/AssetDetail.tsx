@@ -54,6 +54,7 @@ import {
   toggleFavorite,
 } from "./assetActions";
 import { workflowActions } from "./AssetContextMenu";
+import { gridReveal } from "./AssetGrid";
 import { AssetPlaceholder, KIND_TONE } from "./AssetTile";
 import { TagInput } from "./TagEditor";
 
@@ -257,6 +258,8 @@ function DetailPanel({ asset }: { asset: AssetView }) {
   const parameters = Object.entries(asset.parameters ?? {});
   const node = asset.producer.nodeTitle || asset.producer.nodeType;
   const format = `${asset.ext.toUpperCase()} · ${asset.mime}`;
+  // Named as the rail names it, so an untitled workflow reads the same in both
+  const workflowAt = facets?.workflows.find((workflow) => workflow.id === asset.workflow.id)?.lastAt ?? asset.createdAt;
 
   return (
     <aside
@@ -356,7 +359,7 @@ function DetailPanel({ asset }: { asset: AssetView }) {
       <Section label="Details">
         <dl>
           <DetailRow label="Created">{formatDateTime(asset.createdAt)}</DetailRow>
-          <DetailRow label="Workflow">{workflowLabel(asset.workflow.name ?? asset.workflowName, asset.createdAt)}</DetailRow>
+          <DetailRow label="Workflow">{workflowLabel(asset.workflow.name ?? asset.workflowName, workflowAt)}</DetailRow>
           <DetailRow label="Project">{asset.workflow.projectPath ? projectLabel(asset.workflow.projectPath) : "Not in a project"}</DetailRow>
           <DetailRow label="Node">{asset.origin === "edited" && asset.producer.operation ? `${node} · ${operationLabel(asset.producer.operation)}` : node}</DetailRow>
           <DetailRow label="Model">{modelLabel(asset.model)}</DetailRow>
@@ -425,6 +428,19 @@ export function AssetDetail() {
     })),
   );
   const [fullscreen, setFullscreen] = useState(false);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const open = detailId !== null;
+
+  // Focus comes in with the detail (the grid behind is inert), and goes back
+  // to the tile it ended on, scrolled into view, when it closes
+  useEffect(() => {
+    if (!open) return;
+    layerRef.current?.focus({ preventScroll: true });
+    return () => {
+      const state = useAssetStore.getState();
+      if (state.appView === "assets" && !state.detailId && state.focusedId) gridReveal.current?.(state.focusedId);
+    };
+  }, [open]);
 
   useEffect(() => {
     const onChange = () => setFullscreen(!!document.fullscreenElement);
@@ -443,10 +459,13 @@ export function AssetDetail() {
 
   return (
     <div
+      ref={layerRef}
       data-asset-detail=""
       role="dialog"
+      aria-modal="true"
       aria-label={asset ? assetTitle(asset) : "Asset"}
-      className="animate-drop-in motion-reduce:animate-none absolute inset-0 z-30 flex bg-canvas-bg"
+      tabIndex={-1}
+      className="animate-drop-in motion-reduce:animate-none absolute inset-0 z-30 flex bg-canvas-bg outline-none"
     >
       <div className="relative flex min-w-0 flex-1 flex-col bg-[#0f0f0f]">
         <div className="flex h-12 shrink-0 items-center gap-2 px-3">

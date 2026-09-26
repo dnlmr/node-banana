@@ -133,6 +133,15 @@ describe("paging", () => {
     expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
   });
 
+  it("shows a failed load as an error, not the previous query's tiles", async () => {
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("a2"), asset("a1")], { nextCursor: "c1", total: 9 }));
+    await useAssetStore.getState().refresh();
+    api.fetchAssetPage.mockRejectedValueOnce(new Error("The asset library is not available"));
+    useAssetStore.getState().toggleFilter("kinds", "video");
+    await vi.waitFor(() => expect(useAssetStore.getState().status).toBe("error"));
+    expect(useAssetStore.getState()).toMatchObject({ items: [], total: 0, nextCursor: null, error: "The asset library is not available" });
+  });
+
   it("drops a response for a query that has since changed", async () => {
     let resolveFirst!: (value: AssetPage) => void;
     api.fetchAssetPage.mockImplementationOnce(() => new Promise((resolve) => (resolveFirst = resolve)));
@@ -319,6 +328,20 @@ describe("asset actions and undo", () => {
     api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
     await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "trash" });
     expect(useAssetStore.getState().detailId).toBe("a1");
+  });
+
+  it("starts the list over after trashing everything matching, since that reached past the loaded pages", async () => {
+    useAssetStore.getState().selectAllMatching();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 3, ids: ["a3", "a2", "a1"], errors: [] });
+    api.fetchAssetPage.mockResolvedValueOnce(page([]));
+    await useAssetStore.getState().runBulk(useAssetStore.getState().selection, { action: "trash" });
+    expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "query", query: {}, excludeIds: [] }, op: { action: "trash" } });
+    expect(selectionCount(useAssetStore.getState())).toBe(0);
+    await vi.waitFor(() => expect(api.fetchAssetPage).toHaveBeenCalledTimes(2));
+    // Undo still knows every id the server changed
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([
+      { selection: { mode: "ids", ids: ["a3", "a2", "a1"] }, op: { action: "restore" } },
+    ]);
   });
 
   it("reports a failed action and keeps the grid as it was", async () => {

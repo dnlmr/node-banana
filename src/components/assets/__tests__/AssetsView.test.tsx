@@ -248,6 +248,30 @@ describe("AssetsView", () => {
     expect(useAssetStore.getState().appView).toBe("canvas");
   });
 
+  it("takes focus into the detail, keeps the grid out of reach, and lands on the last asset shown when it closes", async () => {
+    await renderView();
+    fireEvent.click(tile("a3"));
+    const detail = screen.getByRole("dialog", { name: "A cat called a3" });
+    await waitFor(() => expect(detail).toHaveFocus());
+    expect(screen.getByTestId("asset-grid").closest("main")).toHaveAttribute("inert");
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(useAssetStore.getState().detailId).toBe("a2"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(tile("a2")).toHaveFocus());
+    expect(screen.getByTestId("asset-grid").closest("main")).not.toHaveAttribute("inert");
+  });
+
+  it("leaves the arrow keys to a focused player in the detail", async () => {
+    await renderView([asset("a2", { kind: "video", mime: "video/mp4", ext: "mp4" }), asset("a1")]);
+    fireEvent.click(tile("a2"));
+    const video = document.querySelector("[data-asset-detail] video")!;
+    fireEvent.keyDown(video, { key: "ArrowRight" });
+    expect(useAssetStore.getState().detailId).toBe("a2");
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(useAssetStore.getState().detailId).toBe("a1"));
+  });
+
   it("keeps its keys from the canvas: they stop at the view's capture handler", async () => {
     await renderView();
     const behind = vi.fn();
@@ -390,6 +414,24 @@ describe("AssetsView", () => {
     await renderView();
     act(() => useWorkflowStore.setState({ canvasGeneration: useWorkflowStore.getState().canvasGeneration + 1 }));
     expect(useAssetStore.getState().appView).toBe("canvas");
+  });
+
+  it("empties the whole Trash, not just what a search shows, and offers the project files without guessing their number", async () => {
+    api.fetchFacets.mockResolvedValue(facets({ trash: 40 }));
+    useAssetStore.setState({ filters: { ...initial.filters, view: "trash", q: "cat" } });
+    await renderView([asset("a1", { trashedAt: 1 })]);
+    await waitFor(() => expect(useAssetStore.getState().facets?.trash).toBe(40));
+    fireEvent.click(screen.getByRole("button", { name: "Empty Trash" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 40 assets permanently?" });
+    expect(within(dialog).getByText(/Also delete any of their files that are in project folders/)).toBeInTheDocument();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 40, ids: [], errors: [] });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+    await waitFor(() =>
+      expect(api.bulkAssets).toHaveBeenCalledWith({
+        selection: { mode: "query", query: { scope: "trash" }, excludeIds: [] },
+        op: { action: "delete", deleteProjectFiles: false },
+      }),
+    );
   });
 
   it("opens the shortcuts from ? and hands the keyboard to a dialog above it", async () => {

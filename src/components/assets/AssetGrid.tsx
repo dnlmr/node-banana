@@ -41,6 +41,18 @@ const BOTTOM_PADDING = 96;
  */
 export const gridNavigation: { current: ((direction: GridDirection) => void) | null } = { current: null };
 
+/** Scroll a tile into view and focus it: where closing the detail lands. */
+export const gridReveal: { current: ((id: string) => void) | null } = { current: null };
+
+/** Focus a tile once the virtual window has mounted it (a scroll renders a frame or two later). */
+function focusTileSoon(scroller: HTMLElement | null, id: string, frames = 4) {
+  requestAnimationFrame(() => {
+    const tile = scroller?.querySelector<HTMLElement>(`[data-asset-tile="${id}"]`);
+    if (tile) tile.focus({ preventScroll: true });
+    else if (frames > 1) focusTileSoon(scroller, id, frames - 1);
+  });
+}
+
 /** Lays out incrementally while only pages are appended; from the top when `version` changes. */
 function useGridLayout(items: AssetGridItem[], options: GridLayoutOptions, version: number): GridLayout {
   const cache = useRef<{ layout: GridLayout; version: number } | null>(null);
@@ -200,12 +212,17 @@ export function AssetGrid() {
       if (!item) return;
       store.setFocused(item.id);
       scrollToIndex(next);
-      requestAnimationFrame(() => {
-        scrollRef.current?.querySelector<HTMLElement>(`[data-asset-tile="${item.id}"]`)?.focus({ preventScroll: true });
-      });
+      focusTileSoon(scrollRef.current, item.id);
+    };
+    gridReveal.current = (id) => {
+      const index = useAssetStore.getState().items.findIndex((item) => item.id === id);
+      if (index === -1) return;
+      scrollToIndex(index);
+      focusTileSoon(scrollRef.current, id);
     };
     return () => {
       gridNavigation.current = null;
+      gridReveal.current = null;
     };
   }, [layout, visible, scrollTop, scrollToIndex]);
 

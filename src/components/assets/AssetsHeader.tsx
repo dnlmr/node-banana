@@ -60,10 +60,12 @@ function JobProgress({ job, onCancel }: { job: LibraryJobStatus; onCancel: () =>
  * with "Clear filters" while any are on and "Empty Trash" in the Trash.
  */
 export function AssetsHeader() {
-  const { filters, total, status, sort, tileSize, selectMode, job, setSort, setTileSize, setSelectMode, clearFilters, cancelJob } = useAssetStore(
+  const { filters, total, trashed, status, sort, tileSize, selectMode, job, setSort, setTileSize, setSelectMode, clearFilters, cancelJob } = useAssetStore(
     useShallow((state) => ({
       filters: state.filters,
       total: state.total,
+      // Empty Trash empties all of it, whatever the filters show
+      trashed: state.facets?.trash ?? state.total,
       status: state.status,
       sort: state.sort,
       tileSize: state.tileSize,
@@ -91,10 +93,10 @@ export function AssetsHeader() {
       <div className="ml-auto flex items-center gap-2">
         {job?.state === "running" && <JobProgress job={job} onCancel={() => void cancelJob()} />}
         {filtered && <DialogTextButton onClick={clearFilters}>Clear filters</DialogTextButton>}
-        {filters.view === "trash" && total > 0 && (
+        {filters.view === "trash" && trashed > 0 && (
           <DialogButton
             variant="danger"
-            onClick={() => requestPermanentDelete({ mode: "query", query: { scope: "trash" }, excludeIds: [] }, total)}
+            onClick={() => requestPermanentDelete({ mode: "query", query: { scope: "trash" }, excludeIds: [] }, trashed)}
           >
             Empty Trash
           </DialogButton>

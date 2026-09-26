@@ -122,7 +122,8 @@ function handleAssetsKey(event: KeyboardEvent) {
   }
 
   if (store.detailId) {
-    if (key === "ArrowLeft" || key === "ArrowRight") {
+    // A focused player keeps its arrows for seeking
+    if ((key === "ArrowLeft" || key === "ArrowRight") && !(event.target instanceof HTMLMediaElement)) {
       own();
       void store.stepDetail(key === "ArrowLeft" ? -1 : 1);
     } else if (lower === "f" && !event.shiftKey) {
@@ -262,7 +263,8 @@ export function AssetsView() {
     if (known) store.setLibrary(known);
     void store.refreshLibrary();
     clearGenerationToasts();
-    rootRef.current?.focus({ preventScroll: true });
+    // A detail left open takes focus itself
+    if (!store.detailId) rootRef.current?.focus({ preventScroll: true });
 
     let facetsTimer: ReturnType<typeof setTimeout> | null = null;
     const offRecorded = onAssetRecorded((result) => {
@@ -299,8 +301,11 @@ export function AssetsView() {
       aria-label="Assets"
       className="absolute inset-0 flex bg-canvas-bg outline-none"
     >
-      <AssetsRail />
-      <main className="relative flex min-w-0 flex-1 flex-col">
+      {/* Behind an open detail, out of reach of Tab and the pointer */}
+      <div className="contents" inert={detailOpen}>
+        <AssetsRail />
+      </div>
+      <main className="relative flex min-w-0 flex-1 flex-col" inert={detailOpen}>
         <AssetsHeader />
         {showGrid ? (
           <AssetGrid />

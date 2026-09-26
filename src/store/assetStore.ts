@@ -669,7 +669,20 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         }));
       } catch (error) {
         if (seq !== requestSeq || controller.signal.aborted) return;
-        set({ status: "error", error: errorMessage(error, "The asset library could not be read.") });
+        // What is loaded answers another query: show the failure, not stale tiles
+        set((state) => ({
+          status: "error",
+          error: errorMessage(error, "The asset library could not be read."),
+          items: [],
+          pages: [],
+          layoutVersion: state.layoutVersion + 1,
+          nextCursor: null,
+          headCursor: null,
+          total: 0,
+          totalBytes: 0,
+          loadedQuery: null,
+          arrivals: [],
+        }));
       } finally {
         if (refreshController === controller) refreshController = null;
       }
@@ -1057,27 +1070,28 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const detailId = get().detailId;
       const detailIndex = detailId ? get().items.findIndex((item) => item.id === detailId) : -1;
       applyLocally(op, result.ids);
+      const removing = op.action === "trash" || op.action === "restore" || op.action === "delete";
 
       // The open detail moves on when its asset leaves the list
-      if (detailId && result.ids.includes(detailId) && (op.action === "trash" || op.action === "restore" || op.action === "delete")) {
+      if (detailId && removing && result.ids.includes(detailId)) {
         const items = get().items;
         const next = items[Math.min(detailIndex, items.length - 1)];
         if (next && detailIndex >= 0) set({ detailId: next.id, detailAsset: next.asset, focusedId: next.id });
         else set({ detailId: null, detailAsset: null });
       }
       // Whatever was selected has left the list
-      if (targetsSelection && (op.action === "trash" || op.action === "restore" || op.action === "delete")) {
-        get().clearSelection();
-      }
+      if (targetsSelection && removing) get().clearSelection();
 
       const steps = inverseOf(op, result.ids, before);
       if (steps.length) {
+        // A query selection can change thousands: look ids up, never scan
+        const changed = new Set(result.ids);
         const removed = op.action === "trash" || op.action === "restore" ? result.ids.map((id) => before.get(id)).filter((a): a is AssetView => !!a) : [];
         const entry: UndoEntry = {
           label: describe(op, result.affected),
           steps,
           removed,
-          before: Object.fromEntries([...before].filter(([id]) => result.ids.includes(id)).map(([id, record]) => [id, { tags: record.tags, favorite: record.favorite }])),
+          before: Object.fromEntries([...before].filter(([id]) => changed.has(id)).map(([id, record]) => [id, { tags: record.tags, favorite: record.favorite }])),
         };
         set((state) => ({ undoStack: [...state.undoStack, entry].slice(-UNDO_LIMIT) }));
       }
@@ -1088,6 +1102,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
           : { message: describe(op, result.affected), tone: "info", undo: steps.length > 0 },
       );
       scheduleFacets();
+      // "All matching" reached past the loaded pages: counts and paging start over
+      if (selection.mode === "query" && removing) void get().refresh();
       return result;
     },
 
