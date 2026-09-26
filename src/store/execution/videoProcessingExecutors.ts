@@ -7,15 +7,65 @@
 
 import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFrameGrabNodeData } from "@/types";
 import { revokeBlobUrl } from "@/store/utils/executionUtils";
+import { dataUrlToBlob, isDataUrl, readBlobBytes } from "@/lib/assets/client/mediaBlob";
 import type { NodeExecutionContext } from "./types";
-import { assetParameters, assetProducer, recordOutput } from "./assetRecording";
+import { assetParameters, assetProducer, recordingResult, recordOutput } from "./assetRecording";
+
+const FINGERPRINT_SAMPLES = 8;
+const FINGERPRINT_SAMPLE_BYTES = 4096;
+const MAX_REMEMBERED_VIDEOS = 256;
+
+/**
+ * A cheap stand-in for an encoded video's identity: its size, its type and a
+ * few slices spread through its body, tail included. The head is left out:
+ * the muxer stamps the time of each encode into the moov box at the front,
+ * so two encodes of the same edit differ there and nowhere else.
+ */
+export async function videoFingerprint(blob: Blob): Promise<string> {
+  const { size } = blob;
+  const starts = new Set<number>([Math.max(0, size - FINGERPRINT_SAMPLE_BYTES)]);
+  for (let i = 1; i <= FINGERPRINT_SAMPLES; i++) starts.add(Math.floor((size * i) / (FINGERPRINT_SAMPLES + 1)));
+  // 32-bit FNV-1a over the sampled bytes, in file order
+  let hash = 0x811c9dc5;
+  for (const start of [...starts].sort((a, b) => a - b)) {
+    const bytes = await readBlobBytes(blob.slice(start, Math.min(size, start + FINGERPRINT_SAMPLE_BYTES)));
+    for (let i = 0; i < bytes.length; i++) {
+      hash ^= bytes[i];
+      hash = Math.imul(hash, 0x01000193);
+    }
+  }
+  return `${size}:${blob.type}:${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * The video each edit node last recorded, by workflow and node. A re-run that
+ * produced it again is not a new asset, and over 20 MB the node's string can
+ * never tell: every run gets a fresh object URL.
+ */
+const lastRecordedVideo = new Map<string, string>();
+
+function rememberRecordedVideo(key: string, fingerprint: string): void {
+  lastRecordedVideo.delete(key);
+  lastRecordedVideo.set(key, fingerprint);
+  if (lastRecordedVideo.size > MAX_REMEMBERED_VIDEOS) {
+    const oldest = lastRecordedVideo.keys().next().value;
+    if (oldest !== undefined) lastRecordedVideo.delete(oldest);
+  }
+}
+
+/** What the node showed before this run, when that was a video still readable here. */
+async function previousVideoFingerprint(previousOutput: unknown): Promise<string | null> {
+  // An object URL is revoked by now; a data: URL (under 20 MB, or loaded from a file) still holds its bytes
+  if (typeof previousOutput !== "string" || !isDataUrl(previousOutput)) return null;
+  return videoFingerprint(dataUrlToBlob(previousOutput));
+}
 
 /**
  * Keep an edited video in the asset library. The Blob goes rather than the
  * node's string: over 20 MB that string is an object URL, which does not
  * outlive the session. A re-run that produced the same video is not a new one.
  */
-function recordEditedVideo(
+async function recordEditedVideo(
   ctx: NodeExecutionContext,
   outputVideo: string,
   previousOutput: unknown,
@@ -23,9 +73,22 @@ function recordEditedVideo(
   operation: string,
   parameters: Record<string, unknown>,
   durationSec?: number
-): void {
-  if (outputVideo === previousOutput) return;
-  recordOutput(ctx, {
+): Promise<void> {
+  if (outputVideo === previousOutput || !ctx.recordAsset) return;
+  const key = `${ctx.assetRun?.workflowId ?? ""}\u0000${ctx.node.id}`;
+  let fingerprint: string | null = null;
+  try {
+    fingerprint = await videoFingerprint(outputBlob);
+    const previous = lastRecordedVideo.get(key) ?? (await previousVideoFingerprint(previousOutput));
+    if (fingerprint === previous) {
+      rememberRecordedVideo(key, fingerprint);
+      return;
+    }
+  } catch (error) {
+    // Not knowing is no reason to lose the edit
+    console.warn("Could not compare the edited video with the previous one:", error);
+  }
+  const handle = recordOutput(ctx, {
     kind: "video",
     origin: "edited",
     media: outputBlob,
@@ -33,6 +96,13 @@ function recordEditedVideo(
     parameters: assetParameters(parameters),
     producer: assetProducer(ctx, { operation }),
     ...(typeof durationSec === "number" && Number.isFinite(durationSec) && durationSec > 0 ? { durationSec } : {}),
+  });
+  if (!handle || !fingerprint) return;
+  const recorded = fingerprint;
+  rememberRecordedVideo(key, recorded);
+  // A recording that failed kept nothing, so the next run records it again
+  void recordingResult(handle).then((result) => {
+    if (!result && lastRecordedVideo.get(key) === recorded) lastRecordedVideo.delete(key);
   });
 }
 
@@ -143,7 +213,7 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       error: null,
     });
 
-    recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
+    await recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
       clips: inputs.videos.length,
       loopCount,
       withAudio: audioData !== null,
@@ -259,7 +329,7 @@ export async function executeVideoTrim(ctx: NodeExecutionContext): Promise<void>
       error: null,
     });
 
-    recordEditedVideo(ctx, outputVideo, oldOutputVideo, outputBlob, "trim", { startTime, endTime }, endTime - startTime);
+    await recordEditedVideo(ctx, outputVideo, oldOutputVideo, outputBlob, "trim", { startTime, endTime }, endTime - startTime);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });
@@ -415,7 +485,7 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
       error: null,
     });
 
-    recordEditedVideo(
+    await recordEditedVideo(
       ctx,
       outputVideo,
       previousOutput,

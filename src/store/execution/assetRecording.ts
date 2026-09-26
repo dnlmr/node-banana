@@ -155,23 +155,82 @@ export function adoptLegacyId(
   ctx.updateNodeData(ctx.node.id, { [field]: next } as Partial<WorkflowNodeData>);
 }
 
+/** Where each carousel keeps its selected entry. */
+const SELECTED_INDEX: Record<CarouselField, string> = {
+  imageHistory: "selectedHistoryIndex",
+  videoHistory: "selectedVideoHistoryIndex",
+  audioHistory: "selectedAudioHistoryIndex",
+};
+
 /**
- * In a project, wait for the recorded file and give its carousel entry the
- * file's name. Tracked, so a workflow save waits for the id to settle, the
- * way it waits for a save to the generations folder.
+ * A recording that failed left its carousel entry pointing at an asset the
+ * library never stored. With a folder save to fall back on the entry keeps
+ * its place and loses the asset id, so it lives by its file name, as a save
+ * without the library always did. Without one nothing could show it again,
+ * so it goes, the way a generation saved nowhere never got an entry.
  */
-export function trackLegacyId(
+function forgetFailedAsset(ctx: NodeExecutionContext, field: CarouselField, assetId: string, keepEntry: boolean): void {
+  const data = ctx.getNodes().find((n) => n.id === ctx.node.id)?.data as Record<string, unknown> | undefined;
+  const history = data?.[field];
+  if (!Array.isArray(history)) return;
+  const index = history.findIndex((entry) => (entry as { assetId?: string } | null)?.assetId === assetId);
+  if (index === -1) return;
+  if (keepEntry) {
+    const next = [...history];
+    const entry = { ...(next[index] as Record<string, unknown>) };
+    delete entry.assetId;
+    next[index] = entry;
+    ctx.updateNodeData(ctx.node.id, { [field]: next } as Partial<WorkflowNodeData>);
+    return;
+  }
+  const selectedField = SELECTED_INDEX[field];
+  const selected = typeof data?.[selectedField] === "number" ? (data[selectedField] as number) : 0;
+  // The selection stays on its entry; one on the dropped entry moves to the newest
+  const nextSelected = selected > index ? selected - 1 : selected === index ? 0 : selected;
+  ctx.updateNodeData(ctx.node.id, {
+    [field]: history.filter((_, i) => i !== index),
+    [selectedField]: nextSelected,
+  } as Partial<WorkflowNodeData>);
+}
+
+/** The recording's result, or null when it failed (a broken promise counts as failed). */
+export function recordingResult(handle: RecordedAssetHandle): Promise<RecordAssetResult | null> {
+  return handle.done.catch((error) => {
+    console.error("Failed to record asset:", error);
+    return null;
+  });
+}
+
+/**
+ * Follow the recording of a generation that has a carousel entry.
+ *
+ * In a project (`saveToFolder` given) it is tracked, so a workflow save waits
+ * for it the way it waits for a save to the generations folder. Once the file
+ * is on disk the entry takes the file's name. When the recording fails, the
+ * output goes to the generations folder the way a run without the library
+ * saves it, so a project's generation always lands in its folder.
+ *
+ * Outside a project nothing holds the tabs; a failed recording only takes its
+ * entry back out of the carousel.
+ */
+export function followRecording(
   ctx: NodeExecutionContext,
   field: CarouselField,
   key: string,
-  handle: RecordedAssetHandle
+  handle: RecordedAssetHandle,
+  saveToFolder: (() => Promise<unknown>) | null
 ): void {
-  ctx.trackSaveGeneration(
-    key,
-    handle.done
-      .then((recorded) => adoptLegacyId(ctx, field, handle.assetId, recorded))
-      .catch((err) => {
-        console.error("Failed to save generation:", err);
-      })
-  );
+  const settled = recordingResult(handle)
+    .then(async (recorded) => {
+      if (recorded) {
+        adoptLegacyId(ctx, field, handle.assetId, recorded);
+        return;
+      }
+      forgetFailedAsset(ctx, field, handle.assetId, saveToFolder !== null);
+      if (saveToFolder) await saveToFolder();
+    })
+    .catch((err) => {
+      console.error("Failed to save generation:", err);
+    });
+  if (saveToFolder) ctx.trackSaveGeneration(key, settled);
 }

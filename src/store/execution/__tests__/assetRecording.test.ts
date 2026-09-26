@@ -37,8 +37,8 @@ vi.mock("@/lib/comfy/settings", () => ({
 
 const providerSettings = { providers: {} } as never;
 
-/** A recorder stand-in: numbered ids, and a `done` that settles with `result`. */
-function makeRecorder(result: Partial<RecordAssetResult> | null = null) {
+/** A recorder stand-in: numbered ids, and a `done` that settles with `result` (null: the recording failed). */
+function makeRecorder(result: Partial<RecordAssetResult> | null = {}) {
   let count = 0;
   const handles: RecordedAssetHandle[] = [];
   const recordAsset = vi.fn((_input: RecordAssetInput): RecordedAssetHandle => {
@@ -302,6 +302,47 @@ describe("nanoBanana", () => {
     error.mockRestore();
   });
 
+  it("in a project, saves to the folder when the recording fails, and the entry lives by the file's name", async () => {
+    const { recordAsset } = makeRecorder(null);
+    const { ctx, nodes } = makeCtx(imageNode(), { recordAsset, generationsPath: "/proj/generations" });
+    mockFetch
+      .mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }))
+      .mockResolvedValueOnce(okJson({ success: true, imageId: "a_red_fox_1" }));
+
+    await executeNanoBanana(ctx);
+    const track = ctx.trackSaveGeneration as ReturnType<typeof vi.fn>;
+    expect(track).toHaveBeenCalledOnce();
+    await track.mock.calls[0][1];
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[1][0]).toBe("/api/save-generation");
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toMatchObject({
+      directoryPath: "/proj/generations",
+      image: "data:image/png;base64,fox",
+      prompt: "a red fox",
+    });
+    // The library never stored it, so the entry keeps only the folder's name for it
+    const [entry] = (nodes.get("gen-1")!.data as { imageHistory: Record<string, unknown>[] }).imageHistory;
+    expect(entry.id).toBe("a_red_fox_1");
+    expect(entry).not.toHaveProperty("assetId");
+  });
+
+  it("outside a project, takes a failed recording's entry back out of the carousel", async () => {
+    const { recordAsset } = makeRecorder(null);
+    const older = { id: "older", assetId: "a-older", timestamp: 1, prompt: "", aspectRatio: "1:1", model: "m" };
+    const { ctx, nodes } = makeCtx(imageNode({ imageHistory: [older], selectedHistoryIndex: 0 }), { recordAsset });
+    mockFetch.mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }));
+
+    await executeNanoBanana(ctx);
+
+    await vi.waitFor(() => {
+      expect((nodes.get("gen-1")!.data as { imageHistory: { id: string }[] }).imageHistory).toEqual([older]);
+    });
+    expect((nodes.get("gen-1")!.data as { selectedHistoryIndex: number }).selectedHistoryIndex).toBe(0);
+    expect(ctx.trackSaveGeneration).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("tags each batch item's asset with its index", async () => {
     const { recordAsset } = makeRecorder();
     const { ctx } = makeCtx(imageNode(), { recordAsset });
@@ -402,6 +443,23 @@ describe("generateVideo", () => {
     expect((nodes.get("vid-1")!.data as { videoHistory: { id: string }[] }).videoHistory[0].id).toBe("waves_1a2b");
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
+
+  it("in a project, hands a video whose recording failed to the folder save, which fetches the provider's URL itself", async () => {
+    const { recordAsset } = makeRecorder(null);
+    const { ctx, nodes } = makeCtx(videoNode(), { recordAsset, generationsPath: "/proj/generations" }, "waves");
+    mockFetch
+      .mockResolvedValueOnce(okJson({ success: true, videoUrl: "http://cdn.example/v.mp4" }))
+      .mockResolvedValueOnce(okJson({ success: true, imageId: "waves_1a2b" }));
+
+    await executeGenerateVideo(ctx);
+    await (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1];
+
+    expect(mockFetch.mock.calls[1][0]).toBe("/api/save-generation");
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toMatchObject({ video: "http://cdn.example/v.mp4", prompt: "waves" });
+    const [entry] = (nodes.get("vid-1")!.data as { videoHistory: Record<string, unknown>[] }).videoHistory;
+    expect(entry.id).toBe("waves_1a2b");
+    expect(entry).not.toHaveProperty("assetId");
+  });
 });
 
 describe("generateAudio", () => {
@@ -455,6 +513,22 @@ describe("generateAudio", () => {
     await (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1];
 
     expect((nodes.get("aud-1")!.data as { audioHistory: { id: string }[] }).audioHistory[0].id).toBe("hello_there_77");
+  });
+
+  it("in a project, saves the audio to the folder when its recording fails", async () => {
+    const { recordAsset } = makeRecorder(null);
+    const { ctx, nodes } = makeCtx(audioNode(), { recordAsset, generationsPath: "/proj/generations" }, "hello there");
+    mockFetch
+      .mockResolvedValueOnce(okJson({ success: true, audio: "data:audio/mpeg;base64,a" }))
+      .mockResolvedValueOnce(okJson({ success: true, imageId: "hello_there_77" }));
+
+    await executeGenerateAudio(ctx);
+    await (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1];
+
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toMatchObject({ audio: "data:audio/mpeg;base64,a", imageId: expect.any(String) });
+    const [entry] = (nodes.get("aud-1")!.data as { audioHistory: Record<string, unknown>[] }).audioHistory;
+    expect(entry.id).toBe("hello_there_77");
+    expect(entry).not.toHaveProperty("assetId");
   });
 });
 
@@ -523,6 +597,21 @@ describe("generate3d", () => {
 
     expect(nodes.get("3d-1")!.data).toMatchObject({ savedFilename: null, savedFilePath: null });
   });
+
+  it("in a project, saves the model to the folder when the library could not download it", async () => {
+    const { recordAsset } = makeRecorder(null);
+    const { ctx, nodes } = makeCtx(modelNode(), { recordAsset, generationsPath: "/proj/generations" }, "a chair");
+    mockFetch
+      .mockResolvedValueOnce(okJson({ success: true, model3dUrl: "http://cdn.example/chair.glb" }))
+      .mockResolvedValueOnce(okJson({ success: true, filename: "chair.glb", filePath: "/proj/generations/chair.glb" }));
+
+    await executeGenerate3D(ctx);
+    await (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1];
+
+    expect(mockFetch.mock.calls[1][0]).toBe("/api/save-generation");
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toMatchObject({ model3d: "http://cdn.example/chair.glb", prompt: "a chair" });
+    expect(nodes.get("3d-1")!.data).toMatchObject({ savedFilename: "chair.glb", savedFilePath: "/proj/generations/chair.glb" });
+  });
 });
 
 describe("comfyApp", () => {
@@ -585,5 +674,55 @@ describe("comfyApp", () => {
     });
     expect(mockFetch.mock.calls.some((c) => c[0] === "/api/save-generation")).toBe(false);
     expect(ctx.addToGlobalHistory).toHaveBeenCalledOnce();
+  });
+
+  function comfyRun(recordAsset: NodeExecutionContext["recordAsset"]) {
+    const node = { id: "comfy-1", type: "comfyApp", position: { x: 0, y: 0 }, data: { app, paramValues: {}, status: "idle" } } as unknown as WorkflowNode;
+    const { ctx } = makeCtx(node, { recordAsset, generationsPath: "/proj/generations" });
+    mockFetch.mockImplementation(async (url: string) =>
+      url === "/api/comfy/run"
+        ? okJson({ success: true, polling: true, jobId: "job-1", status: "queued" })
+        : url === "/api/save-generation"
+          ? okJson({ success: true })
+          : okJson({
+              success: true,
+              polling: false,
+              status: "success",
+              outputs: [{ handleId: "9", type: "image", value: "data:image/png;base64,big" }],
+            })
+    );
+    return ctx;
+  }
+
+  it("in a project, saves the image to the folder when its recording fails", async () => {
+    vi.useFakeTimers();
+    const { recordAsset } = makeRecorder(null);
+    const ctx = comfyRun(recordAsset);
+
+    const run = executeComfyApp(ctx);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    const track = ctx.trackSaveGeneration as ReturnType<typeof vi.fn>;
+    expect(track).toHaveBeenCalledOnce();
+    await track.mock.calls[0][1];
+
+    const save = mockFetch.mock.calls.find((c) => c[0] === "/api/save-generation");
+    expect(JSON.parse(save![1].body)).toMatchObject({ directoryPath: "/proj/generations", image: "data:image/png;base64,big" });
+  });
+
+  it("in a project, saves the image to the folder when the recorder throws", async () => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ctx = comfyRun(() => {
+      throw new Error("recorder down");
+    });
+
+    const run = executeComfyApp(ctx);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    await (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1];
+
+    expect(mockFetch.mock.calls.filter((c) => c[0] === "/api/save-generation")).toHaveLength(1);
+    error.mockRestore();
   });
 });

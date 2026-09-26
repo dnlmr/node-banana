@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NodeExecutionContext } from "../types";
 import type { WorkflowNode, WorkflowNodeData, WorkflowEdge } from "@/types";
-import type { RecordAssetInput, RecordedAssetHandle } from "@/lib/assets/types";
+import type { RecordAssetInput, RecordAssetResult, RecordedAssetHandle } from "@/lib/assets/types";
 import { executeRemoveBackground } from "../removeBackgroundExecutor";
 import { executeImageResize, executeGifEncoder } from "../imageProcessingExecutors";
 import { executeVideoStitch, executeVideoTrim, executeEaseCurve, executeVideoFrameGrab } from "../videoProcessingExecutors";
@@ -48,8 +48,25 @@ class MockImage {
 }
 vi.stubGlobal("Image", MockImage);
 
-/** Over 20 MB, so executors keep an object URL and never need a FileReader. */
-const bigVideo = { size: 21 * 1024 * 1024, type: "video/mp4" } as Blob;
+/** Over 20 MB, so executors keep an object URL rather than a data: URL. */
+const BIG = 21 * 1024 * 1024;
+const bigVideo = new Blob([new Uint8Array(BIG)], { type: "video/mp4" });
+
+/**
+ * The bytes of an encode of edit `seed`: the same body every time, and a head
+ * that differs per `stamp`, like the time a muxer writes into the moov box.
+ */
+function encodedBytes(size: number, seed: number, stamp: number): Uint8Array {
+  const bytes = new Uint8Array(size);
+  for (let i = 0; i < size; i += 997) bytes[i] = (i * 31 + seed) & 0xff;
+  bytes[40] = stamp & 0xff;
+  bytes[41] = (stamp >> 8) & 0xff;
+  return bytes;
+}
+
+function encoded(size: number, seed: number, stamp: number): Blob {
+  return new Blob([encodedBytes(size, seed, stamp) as BlobPart], { type: "video/mp4" });
+}
 
 function recorder() {
   let count = 0;
@@ -318,6 +335,67 @@ describe("video edits", () => {
         height: 360,
       });
     });
+  });
+});
+
+describe("a re-run of a video edit", () => {
+  const trimNode = (id: string, outputVideo: string | null = null) =>
+    node(id, "videoTrim", { outputVideo, encoderSupported: true, startTime: 1, endTime: 3 });
+
+  /** A recorder whose recordings land. */
+  function saving(ctx: NodeExecutionContext) {
+    const recordAsset = vi.fn(
+      (_input: RecordAssetInput): RecordedAssetHandle => ({ assetId: "a000000000001", done: Promise.resolve({} as RecordAssetResult) })
+    );
+    ctx.recordAsset = recordAsset;
+    return recordAsset;
+  }
+
+  it("over 20 MB, is not recorded again when it made the same video", async () => {
+    (URL.createObjectURL as unknown as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce("blob:http://localhost/run-1")
+      .mockReturnValueOnce("blob:http://localhost/run-2")
+      .mockReturnValueOnce("blob:http://localhost/run-3");
+    const { ctx } = makeCtx(trimNode("vt-rerun"), { videos: ["data:video/mp4;base64,a"] });
+    const recordAsset = saving(ctx);
+
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(BIG, 1, 1));
+    await executeVideoTrim(ctx);
+    // The same edit, encoded a second later: a fresh object URL, the same video
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(BIG, 1, 2));
+    await executeVideoTrim(ctx);
+    expect(recordAsset).toHaveBeenCalledOnce();
+
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(BIG, 2, 3));
+    await executeVideoTrim(ctx);
+    expect(recordAsset).toHaveBeenCalledTimes(2);
+  });
+
+  it("is not recorded when it reproduced the video the node already showed", async () => {
+    const size = 64 * 1024;
+    const shown = `data:video/mp4;base64,${Buffer.from(encodedBytes(size, 7, 1)).toString("base64")}`;
+    const { ctx } = makeCtx(trimNode("vt-loaded", shown), { videos: ["data:video/mp4;base64,a"] });
+    const recordAsset = saving(ctx);
+
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(size, 7, 2));
+    await executeVideoTrim(ctx);
+
+    expect(recordAsset).not.toHaveBeenCalled();
+  });
+
+  it("is recorded again after a recording that failed", async () => {
+    (URL.createObjectURL as unknown as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce("blob:http://localhost/fail-1")
+      .mockReturnValueOnce("blob:http://localhost/fail-2");
+    const { ctx, recordAsset } = makeCtx(trimNode("vt-failed"), { videos: ["data:video/mp4;base64,a"] });
+
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(BIG, 3, 1));
+    await executeVideoTrim(ctx);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(BIG, 3, 2));
+    await executeVideoTrim(ctx);
+
+    expect(recordAsset).toHaveBeenCalledTimes(2);
   });
 });
 

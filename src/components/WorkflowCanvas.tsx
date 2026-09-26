@@ -1233,8 +1233,7 @@ export function WorkflowCanvas() {
         const nodeHeight = 280;
         const gap = 20;
 
-        // Add split images to global history, and keep them in the asset
-        // library as one edit of the source node's image
+        // Add split images to global history
         images.forEach((imageData: string, index: number) => {
           const row = Math.floor(index / grid.cols);
           const col = index % grid.cols;
@@ -1246,6 +1245,35 @@ export function WorkflowCanvas() {
             model: sourceNodeData?.model || "nano-banana",
           });
         });
+
+        // Create ImageInput nodes arranged in a grid matching the layout,
+        // holding their cells from the start
+        images.forEach((imageData: string, index: number) => {
+          const row = Math.floor(index / grid.cols);
+          const col = index % grid.cols;
+
+          const nodeId = addNode(
+            "imageInput",
+            {
+              x: flowPosition.x + col * (nodeWidth + gap),
+              y: flowPosition.y + row * (nodeHeight + gap),
+            },
+            { image: imageData, filename: `split-${row + 1}-${col + 1}.png` }
+          );
+
+          // Get dimensions from the split image
+          const img = new Image();
+          img.onload = () => {
+            updateNodeData(nodeId, {
+              dimensions: { width: img.width, height: img.height },
+            });
+          };
+          img.src = imageData;
+        });
+
+        // Keep the cells in the asset library as one edit of the source
+        // node's image, once they are on the canvas, so the workflow saved
+        // with them shows the split nodes
         const sourceModel = sourceNodeData?.selectedModel;
         useWorkflowStore.getState().recordUiAsset(
           images.map((imageData: string, index: number) => ({
@@ -1259,28 +1287,6 @@ export function WorkflowCanvas() {
             producer: { nodeId: sourceNodeId, nodeType: sourceNode.type ?? "unknown", operation: "splitToNodes", batchIndex: index },
           }))
         );
-
-        // Create ImageInput nodes arranged in a grid matching the layout
-        images.forEach((imageData: string, index: number) => {
-          const row = Math.floor(index / grid.cols);
-          const col = index % grid.cols;
-
-          const nodeId = addNode("imageInput", {
-            x: flowPosition.x + col * (nodeWidth + gap),
-            y: flowPosition.y + row * (nodeHeight + gap),
-          });
-
-          // Get dimensions from the split image
-          const img = new Image();
-          img.onload = () => {
-            updateNodeData(nodeId, {
-              image: imageData,
-              filename: `split-${row + 1}-${col + 1}.png`,
-              dimensions: { width: img.width, height: img.height },
-            });
-          };
-          img.src = imageData;
-        });
 
       } catch (error) {
         console.error("[SplitGrid] Error:", error);

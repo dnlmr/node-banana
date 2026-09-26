@@ -12,10 +12,11 @@
 
 import type { ComfyAppNodeData } from "@/types";
 import type { ComfyAppInput, ComfyResolvedOutput } from "@/lib/comfy/types";
+import type { RecordedAssetHandle } from "@/lib/assets/types";
 import { buildComfyHeaders, comfyConfigError, getComfySettings } from "@/lib/comfy/settings";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
-import { assetParameters, assetProducer, recordOutput } from "./assetRecording";
+import { assetParameters, assetProducer, recordingResult, recordOutput } from "./assetRecording";
 
 /** Polling cadence — starts responsive, then backs off for long renders. */
 const INITIAL_INTERVAL = 1500;
@@ -347,7 +348,7 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         ...(nodeData.paramValues ?? {}),
         ...(settings.randomizeSeeds ? { seedKey } : {}),
       });
-      let imageRecorded = false;
+      let imageRecording: RecordedAssetHandle | null = null;
       for (const output of outputs) {
         if (output.type === "text" || !output.value) continue;
         const recorded = recordOutput(ctx, {
@@ -359,31 +360,32 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
           parameters,
           producer: assetProducer(ctx, { outputHandle: output.handleId }),
         });
-        if (recorded && output.value === resolved.outputImage) imageRecorded = true;
+        if (recorded && !imageRecording && output.value === resolved.outputImage) imageRecording = recorded;
       }
 
       // A Comfy app's image also belongs in the global history, and — without
-      // the asset library — in the project's generations folder, so it can be
-      // browsed and reloaded alongside everything else.
+      // the asset library, or when its recording fails — in the project's
+      // generations folder, so it can be browsed and reloaded alongside
+      // everything else.
       if (resolved.outputImage) {
         const timestamp = Date.now();
         const imageId = `${timestamp}`;
+        const image = resolved.outputImage;
         addToGlobalHistory({
-          image: resolved.outputImage,
+          image,
           timestamp,
           prompt,
           aspectRatio: "1:1",
           model: app.name,
         });
-        if (generationsPath && !imageRecorded) {
-          trackSaveGeneration(
-            imageId,
+        if (generationsPath) {
+          const saveToFolder = () =>
             fetch("/api/save-generation", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 directoryPath: generationsPath,
-                image: resolved.outputImage,
+                image,
                 prompt,
                 imageId,
               }),
@@ -391,7 +393,12 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
               .then(() => undefined)
               .catch((err) => {
                 console.error("Failed to save ComfyUI generation:", err);
-              })
+              });
+          trackSaveGeneration(
+            imageId,
+            imageRecording
+              ? recordingResult(imageRecording).then((recorded) => (recorded ? undefined : saveToFolder()))
+              : saveToFolder()
           );
         }
       }

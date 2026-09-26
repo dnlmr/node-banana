@@ -3334,7 +3334,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   pruneMissingHistory: async () => {
-    const { generationsPath, nodes } = get();
+    const { generationsPath, nodes, canvasGeneration, workflowId } = get();
     if (!hasHistoryEntries(nodes)) return;
     // Entries with an asset id are asked about in the library (only while it
     // is on: otherwise nothing can be said about them, and they stay); the
@@ -3346,6 +3346,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       generationsPath ? listGenerationIds(generationsPath) : Promise.resolve(null),
       assetExistence(assetIds),
     ]);
+    // The answers describe the canvas that asked. Another one (a tab switch,
+    // a load, a clear, a new id) is judged by its own prune, never by these.
+    const current = get();
+    if (current.canvasGeneration !== canvasGeneration || current.workflowId !== workflowId) return;
     const sources = { folderIds, hasFolder: !!generationsPath, assetStates };
     const pruned = pruneMissingHistory(get().nodes, (entry) => isHistoryEntryAvailable(entry, sources));
     if (!pruned.changed) return;
@@ -3569,7 +3573,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   // Auto-save actions
   setWorkflowMetadata: (id: string, name: string, path: string, generationsPath?: string | null) => {
     // Auto-derive generationsPath: use provided value, fall back to existing, then auto-derive
-    const currentGenPath = get().generationsPath;
+    const prev = get();
+    const currentGenPath = prev.generationsPath;
     const derivedGenerationsPath = generationsPath ?? currentGenPath ?? `${path}/generations`;
 
     set({
@@ -3578,8 +3583,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       saveDirectoryPath: path,
       generationsPath: derivedGenerationsPath,
     });
-    // The workflow's assets, including those made before it had a folder, now belong to this project
-    classifyWorkflow(id, name, path);
+    // The workflow's assets, including those made before it had a folder, now
+    // belong to this project. A workflow that already has a folder is left to
+    // the save that follows: only it knows whether the new folder is a fork,
+    // and filing the old id there first would hand its assets to the copy.
+    if (!prev.saveDirectoryPath || prev.workflowId !== id) classifyWorkflow(id, name, path);
   },
 
   setWorkflowName: (name: string) => {

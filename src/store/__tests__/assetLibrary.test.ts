@@ -312,6 +312,65 @@ describe("classification", () => {
     });
   });
 
+  it("moving a project to another folder in Settings leaves the old id's assets with the old folder", async () => {
+    useWorkflowStore.setState({
+      workflowId: "wf-old",
+      workflowName: "Fox",
+      saveDirectoryPath: "/projects/fox",
+      generationsPath: "/projects/fox/generations",
+      imageRefBasePath: "/projects/fox",
+      useExternalImageStorage: true,
+    });
+    mockFetch.mockResolvedValue({ json: async () => ({ success: true }) });
+
+    // What FloatingMenu does after the settings dialog: metadata, then save
+    store().setWorkflowMetadata("wf-old", "Fox", "/projects/fox-copy");
+    await expect(store().saveToFile()).resolves.toBe(true);
+
+    const newId = store().workflowId;
+    expect(newId).not.toBe("wf-old");
+    await vi.waitFor(() => {
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledWith(newId, {
+        name: "Fox",
+        projectPath: "/projects/fox-copy",
+        forkedFrom: "wf-old",
+      });
+    });
+    expect(api.upsertWorkflowEntry).not.toHaveBeenCalledWith("wf-old", expect.anything());
+  });
+
+  it("a move that keeps the id files the id under the new folder once it is saved", async () => {
+    useWorkflowStore.setState({
+      workflowId: "wf-1",
+      workflowName: "Fox",
+      saveDirectoryPath: "/projects/fox",
+      imageRefBasePath: null,
+      useExternalImageStorage: false,
+    });
+    mockFetch.mockResolvedValue({ json: async () => ({ success: true }) });
+
+    store().setWorkflowMetadata("wf-1", "Fox", "/projects/fox-moved");
+    await Promise.resolve();
+    // Nothing is filed until the save says the folder holds the workflow
+    expect(api.upsertWorkflowEntry).not.toHaveBeenCalled();
+    await expect(store().saveToFile()).resolves.toBe(true);
+
+    expect(store().workflowId).toBe("wf-1");
+    await vi.waitFor(() => {
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox-moved" });
+    });
+  });
+
+  it("files a new project made from a saved canvas under its own new id", () => {
+    useWorkflowStore.setState({ workflowId: "wf-old", workflowName: "Fox", saveDirectoryPath: "/projects/fox" });
+
+    store().setWorkflowMetadata("wf-new", "Wolf", "/projects/wolf");
+
+    return vi.waitFor(() => {
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-new", { name: "Wolf", projectPath: "/projects/wolf" });
+    });
+  });
+
   it("does not file a failed save", async () => {
     useWorkflowStore.setState({ workflowId: "wf-1", workflowName: "Fox", saveDirectoryPath: "/projects/fox", useExternalImageStorage: false });
     mockFetch.mockResolvedValue({ json: async () => ({ success: false, error: "disk full" }) });
@@ -380,6 +439,35 @@ describe("pruneMissingHistory", () => {
     await store().pruneMissingHistory();
 
     expect(kept()).toEqual(["x", "y"]);
+  });
+
+  it("drops its answers when another canvas replaced the one it asked for", async () => {
+    useWorkflowStore.setState({
+      workflowId: "wf-a",
+      generationsPath: "/projects/a/generations",
+      nodes: [withHistory([entry("a-file"), entry("a-lost")])],
+    });
+    let listFolder!: (ids: string[]) => void;
+    mockFetch.mockReturnValue(
+      new Promise((resolve) => (listFolder = (ids) => resolve({ json: async () => ({ success: true, ids }) })))
+    );
+
+    const pruning = store().pruneMissingHistory();
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledOnce());
+    // The user switches to project B while A's folder is still being listed
+    const other = [withHistory([entry("b-1"), entry("b-2")])];
+    useWorkflowStore.setState({
+      workflowId: "wf-b",
+      generationsPath: "/projects/b/generations",
+      nodes: other,
+      canvasGeneration: store().canvasGeneration + 1,
+      hasUnsavedChanges: false,
+    });
+    listFolder(["a-file"]);
+    await pruning;
+
+    expect(store().nodes).toBe(other);
+    expect(store().hasUnsavedChanges).toBe(false);
   });
 
   it("while the library is off, keeps entries with an asset id and prunes the rest by the folder", async () => {

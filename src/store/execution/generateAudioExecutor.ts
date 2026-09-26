@@ -16,9 +16,9 @@ import {
   assetModel,
   assetParameters,
   assetProducer,
+  followRecording,
   recordOutput,
   resolvedPrompt,
-  trackLegacyId,
 } from "./assetRecording";
 
 export interface GenerateAudioOptions {
@@ -197,42 +197,47 @@ export async function executeGenerateAudio(
           addIncurredCost(runCost);
         }
 
+        // The save to the generations folder: a project's only save without
+        // the asset library, and its fallback when a recording fails
+        const saveToFolder = generationsPath
+          ? () =>
+              fetch("/api/save-generation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  directoryPath: generationsPath,
+                  audio: audioData,
+                  prompt: text,
+                  imageId: audioId,
+                }),
+              })
+                .then((res) => res.json())
+                .then((saveResult) => {
+                  if (saveResult.success && saveResult.imageId && saveResult.imageId !== audioId) {
+                    const currentNode = getNodes().find((n) => n.id === node.id);
+                    if (currentNode) {
+                      const currentData = currentNode.data as GenerateAudioNodeData;
+                      const histCopy = [...(currentData.audioHistory || [])];
+                      const entryIndex = histCopy.findIndex((h) => h.id === audioId);
+                      if (entryIndex !== -1) {
+                        histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
+                        updateNodeData(node.id, { audioHistory: histCopy });
+                      }
+                    }
+                  }
+                })
+                .catch((err) => {
+                  console.error("Failed to save audio generation:", err);
+                })
+          : null;
+
         if (recorded) {
           // The recorder writes a project's generations into its folder; the
           // carousel entry then takes the file's name, as a save there always did.
-          if (generationsPath) trackLegacyId(ctx, "audioHistory", audioId, recorded);
-        } else if (generationsPath) {
+          followRecording(ctx, "audioHistory", audioId, recorded, saveToFolder);
+        } else if (saveToFolder) {
           // No asset library: auto-save to the generations folder
-          const savePromise = fetch("/api/save-generation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              directoryPath: generationsPath,
-              audio: audioData,
-              prompt: text,
-              imageId: audioId,
-            }),
-          })
-            .then((res) => res.json())
-            .then((saveResult) => {
-              if (saveResult.success && saveResult.imageId && saveResult.imageId !== audioId) {
-                const currentNode = getNodes().find((n) => n.id === node.id);
-                if (currentNode) {
-                  const currentData = currentNode.data as GenerateAudioNodeData;
-                  const histCopy = [...(currentData.audioHistory || [])];
-                  const entryIndex = histCopy.findIndex((h) => h.id === audioId);
-                  if (entryIndex !== -1) {
-                    histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
-                    updateNodeData(node.id, { audioHistory: histCopy });
-                  }
-                }
-              }
-            })
-            .catch((err) => {
-              console.error("Failed to save audio generation:", err);
-            });
-
-          trackSaveGeneration(audioId, savePromise);
+          trackSaveGeneration(audioId, saveToFolder());
         }
       } else {
         updateNodeData(node.id, {
