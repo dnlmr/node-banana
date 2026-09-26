@@ -580,6 +580,26 @@ describe("AssetsView", () => {
       expect(document.exitFullscreen).toHaveBeenCalled();
       expect(screen.getByRole("dialog", { name: "Delete 1 asset permanently?" })).toBeInTheDocument();
     });
+
+    it("leaves fullscreen before showing the shortcuts, which open outside the detail", async () => {
+      await renderView();
+      fireEvent.click(tile("a2"));
+      enterFullscreen();
+      fireEvent.keyDown(window, { key: "?" });
+      expect(document.exitFullscreen).toHaveBeenCalled();
+      expect(useWorkflowStore.getState().shortcutsDialogOpen).toBe(true);
+      useWorkflowStore.setState({ shortcutsDialogOpen: false });
+    });
+
+    it("leaves fullscreen when any dialog opens over the detail, however it was opened", async () => {
+      await renderView();
+      fireEvent.click(tile("a2"));
+      enterFullscreen();
+      // Settings, say, opened from the desktop menu
+      act(() => useWorkflowStore.getState().incrementModalCount());
+      expect(document.exitFullscreen).toHaveBeenCalled();
+      act(() => useWorkflowStore.getState().decrementModalCount());
+    });
   });
 
   it("goes back to the canvas when a workflow opens or the tab changes, however that was asked for", async () => {

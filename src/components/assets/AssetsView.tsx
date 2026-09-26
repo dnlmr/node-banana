@@ -18,7 +18,7 @@ import { BulkBar } from "./BulkBar";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { EmptyState } from "./EmptyState";
 import { BulkTagEditor } from "./TagEditor";
-import { copyPrompt, recordsOf, removeSelection, selectionOf } from "./assetActions";
+import { copyPrompt, leaveFullscreen, recordsOf, removeSelection, selectionOf } from "./assetActions";
 import type { GridDirection } from "./masonryLayout";
 
 const RAIL_WIDTH = 232;
@@ -111,6 +111,8 @@ function handleAssetsKey(event: KeyboardEvent) {
 
   if (key === "?") {
     own();
+    // The dialog renders outside the detail: in fullscreen it would take the keyboard unseen
+    leaveFullscreen();
     useWorkflowStore.getState().setShortcutsDialogOpen(true);
     return;
   }
@@ -219,6 +221,8 @@ export function AssetsView() {
     const offCanvas = useWorkflowStore.subscribe((state, previous) => {
       // A workflow opened or a tab switched, however it was asked for: show it
       if (state.canvasGeneration !== previous.canvasGeneration) useAssetStore.getState().setAppView("canvas");
+      // A dialog opened over a fullscreen detail is not painted, yet takes the keyboard: leave fullscreen
+      if (state.openModalCount > previous.openModalCount) leaveFullscreen();
       // A dialog closed over the view (Settings may have switched the library or started a job): ask again
       if (state.openModalCount < previous.openModalCount) void useAssetStore.getState().refreshLibrary();
     });

@@ -220,9 +220,10 @@ export function removeSelection(selection: AssetSelection) {
 
 /**
  * A confirm is a dialog on document.body, which a fullscreen detail would
- * hide (while it held the keyboard): leave fullscreen first.
+ * hide (while it held the keyboard): leave fullscreen first. So is every
+ * other dialog, the shortcuts and Settings among them.
  */
-function leaveFullscreen() {
+export function leaveFullscreen() {
   if (typeof document !== "undefined" && document.fullscreenElement) void document.exitFullscreen?.().catch(() => {});
 }
 
