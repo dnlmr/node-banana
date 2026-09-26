@@ -49,7 +49,7 @@ export function ConfirmDelete() {
             ? "Their files are already missing. The records, with their prompts and settings, are removed. This cannot be undone."
             : `Library files go to ${osTrashName(resolvePlatform(library))}. They leave Node Banana for good: this cannot be undone here.`}
         </DialogDescription>
-        {!remove && confirm.projectCount > 0 && (
+        {!remove && confirm.projectCount !== 0 && (
           <label className="flex items-start gap-2.5 rounded-lg border border-card-border p-3 text-[13px] leading-5 text-neutral-300">
             <input
               type="checkbox"
@@ -58,7 +58,9 @@ export function ConfirmDelete() {
               className="mt-1 accent-neutral-200"
             />
             <span>
-              Also delete the {formatCount(confirm.projectCount, "file")} in project folders.
+              {confirm.projectCount === null
+                ? "Also delete any of their files that are in project folders."
+                : `Also delete the ${formatCount(confirm.projectCount, "file")} in project folders.`}
               <span className="block text-xs text-ink-3">
                 Unticked, they stay in their projects, which still use them.
               </span>

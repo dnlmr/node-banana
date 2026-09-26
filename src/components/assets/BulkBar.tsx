@@ -82,7 +82,7 @@ export function BulkBar() {
 
   const openTags = () => {
     const rect = tagsButton.current?.getBoundingClientRect();
-    store.openPopover({ kind: "tags", x: rect?.left ?? 0, y: (rect?.top ?? 0) - 348, selection });
+    store.openPopover({ kind: "tags", x: rect?.left ?? 0, y: (rect?.top ?? 0) - 8, selection, above: true });
   };
 
   return (
@@ -125,13 +125,16 @@ export function BulkBar() {
               onClick={favoriteSelection}
             />
             <MenuDivider variant="bar" className="mx-0.5" />
-            <BarButton icon={FolderInput} label="Export…" onClick={() => void exportAssets(selection)} title="Copy the files to a folder" />
-            {zippable && <BarButton icon={Download} label="Download" onClick={() => void downloadZip(records)} title="Download as a zip" />}
-            <MenuDivider variant="bar" className="mx-0.5" />
             {filters.view === "missing" ? (
+              // Nothing to copy: the files are gone
               <BarButton icon={Trash2} label="Remove from library…" danger onClick={() => removeSelection(selection)} />
             ) : (
-              <BarButton icon={Trash2} label="Trash" onClick={() => removeSelection(selection)} />
+              <>
+                <BarButton icon={FolderInput} label="Export…" onClick={() => void exportAssets(selection)} title="Copy the files to a folder" />
+                {zippable && <BarButton icon={Download} label="Download" onClick={() => void downloadZip(records)} title="Download as a zip" />}
+                <MenuDivider variant="bar" className="mx-0.5" />
+                <BarButton icon={Trash2} label="Trash" onClick={() => removeSelection(selection)} />
+              </>
             )}
           </>
         )}

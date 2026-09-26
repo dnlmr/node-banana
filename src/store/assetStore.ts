@@ -120,11 +120,24 @@ export interface AssetNotice {
  */
 export type AssetPopover =
   | { kind: "menu"; x: number; y: number; anchorId: string; useSelection: boolean }
-  | { kind: "tags"; x: number; y: number; selection: AssetSelection }
+  | {
+      kind: "tags";
+      x: number;
+      y: number;
+      selection: AssetSelection;
+      /** Hang above `y` (from the bulk bar) rather than below it. */
+      above?: boolean;
+    }
   | null;
 
 export type AssetConfirm =
-  | { kind: "delete" | "remove"; selection: AssetSelection; count: number; projectCount: number }
+  | {
+      kind: "delete" | "remove";
+      selection: AssetSelection;
+      count: number;
+      /** How many sit in project folders; null when the selection reaches past what is loaded. */
+      projectCount: number | null;
+    }
   | null;
 
 export type AssetLoadStatus = "idle" | "loading" | "ready" | "error";
@@ -514,7 +527,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
   const describe = (op: AssetBulkOp, count: number): string => {
     const n = `${count.toLocaleString("en-US")} ${count === 1 ? "asset" : "assets"}`;
     switch (op.action) {
-      case "trash": return `Moved ${n} to Trash`;
+      case "trash": return `Trashed ${n}`;
       case "restore": return `Restored ${n}`;
       case "delete": return `Deleted ${n}`;
       case "favorite": return `Added ${n} to Favorites`;

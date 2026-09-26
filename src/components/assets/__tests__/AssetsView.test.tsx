@@ -121,6 +121,8 @@ beforeEach(() => {
   useAssetStore.setState({ ...initial, appView: "assets" }, true);
   api.fetchFacets.mockResolvedValue(facets());
   api.fetchLibraryStatus.mockResolvedValue(library());
+  // A key test may trash through the view without caring about the result
+  api.bulkAssets.mockResolvedValue({ affected: 0, ids: [], errors: [] });
   openWorkflow.openWorkflowBlockedReason.mockReturnValue(null);
   openWorkflow.openAssetWorkflow.mockResolvedValue({ ok: true, tabId: "tab-2", nodeId: "n1" });
 });
@@ -173,7 +175,7 @@ describe("AssetsView", () => {
       expect(api.bulkAssets).toHaveBeenCalledWith({ selection: { mode: "ids", ids: ["a3", "a1"] }, op: { action: "trash" } }),
     );
     await waitFor(() => expect(document.querySelectorAll("[data-asset-tile]")).toHaveLength(1));
-    expect(screen.getByRole("status")).toHaveTextContent("Moved 2 assets to Trash");
+    expect(screen.getByRole("status")).toHaveTextContent("Trashed 2 assets");
     expect(screen.queryByRole("toolbar", { name: "Selected assets" })).not.toBeInTheDocument();
   });
 
@@ -382,6 +384,12 @@ describe("AssetsView", () => {
         op: { action: "delete", deleteProjectFiles: false },
       }),
     );
+  });
+
+  it("goes back to the canvas when a workflow opens or the tab changes, however that was asked for", async () => {
+    await renderView();
+    act(() => useWorkflowStore.setState({ canvasGeneration: useWorkflowStore.getState().canvasGeneration + 1 }));
+    expect(useAssetStore.getState().appView).toBe("canvas");
   });
 
   it("opens the shortcuts from ? and hands the keyboard to a dialog above it", async () => {

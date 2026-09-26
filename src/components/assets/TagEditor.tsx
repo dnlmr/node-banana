@@ -184,12 +184,15 @@ export function BulkTagEditor({
   suggestions,
   x,
   y,
+  above = false,
 }: {
   selection: AssetSelection;
   records: AssetView[];
   suggestions: string[];
   x: number;
   y: number;
+  /** Hang above `y` (opened from the bulk bar) instead of below it. */
+  above?: boolean;
 }) {
   const runBulk = useAssetStore((state) => state.runBulk);
   const closePopover = useAssetStore((state) => state.closePopover);
@@ -212,8 +215,11 @@ export function BulkTagEditor({
     void runBulk(selection, state === "all" ? { action: "untag", tags: [tag] } : { action: "tag", tags: [tag] });
   };
 
-  const left = typeof window !== "undefined" ? Math.max(8, Math.min(x, window.innerWidth - POPOVER_WIDTH - 8)) : x;
-  const top = typeof window !== "undefined" ? Math.max(8, Math.min(y, window.innerHeight - 360)) : y;
+  // Kept inside the window: clamped sideways, and below or above its anchor
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : Infinity;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : Infinity;
+  const left = Math.max(8, Math.min(x, viewportWidth - POPOVER_WIDTH - 8));
+  const vertical = above ? { bottom: Math.max(8, viewportHeight - y) } : { top: Math.max(8, Math.min(y, viewportHeight - 348)) };
 
   return (
     <MenuSurface
@@ -221,7 +227,7 @@ export function BulkTagEditor({
       role="dialog"
       aria-label="Tags"
       className="flex max-h-[340px] flex-col"
-      style={{ left, top, width: POPOVER_WIDTH }}
+      style={{ left, ...vertical, width: POPOVER_WIDTH }}
       onWheel={(event) => event.stopPropagation()}
     >
       <div className="border-b border-chrome-border p-2">

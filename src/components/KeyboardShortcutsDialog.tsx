@@ -78,7 +78,7 @@ const assetsGroup: ShortcutGroup = {
     { keys: ["←", "→"], description: "Previous / next asset (open)" },
     { keys: ["Space"], description: "Select the asset" },
     { keys: [`${modKey}`, "A"], description: "Select all loaded assets" },
-    { keys: ["Delete"], description: "Move to Trash" },
+    { keys: ["Delete"], description: "Trash the selected assets" },
     { keys: [`${modKey}`, "Z"], description: "Undo the last asset action" },
     { keys: [`${modKey}`, "C"], description: "Copy the prompt (open)" },
     { keys: ["F"], description: "Full screen (open)" },

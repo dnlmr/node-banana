@@ -154,9 +154,14 @@ function selectionEntries(selection: AssetSelection, count: number, view: string
       onSelect: act(() => void store.runBulk(selection, favorite)),
     },
     "divider",
-    { key: "export", label: "Export…", icon: FolderInput, onSelect: act(() => void exportAssets(selection)) },
-    ...(zippable ? [{ key: "download", label: "Download", icon: Download, onSelect: act(() => void downloadZip(records)) } satisfies MenuEntry] : []),
-    "divider",
+    // Missing files have nothing to copy
+    ...(view === "missing"
+      ? []
+      : ([
+          { key: "export", label: "Export…", icon: FolderInput, onSelect: act(() => void exportAssets(selection)) },
+          ...(zippable ? [{ key: "download", label: "Download", icon: Download, onSelect: act(() => void downloadZip(records)) } satisfies MenuEntry] : []),
+          "divider",
+        ] satisfies MenuPart[])),
     ...(view === "trash"
       ? [
           { key: "restore", label: "Restore", icon: RotateCcw, onSelect: act(() => restoreSelection(selection)) },

@@ -199,8 +199,11 @@ export function requestRemoveFromLibrary(selection: AssetSelection, count: numbe
 }
 
 export function requestPermanentDelete(selection: AssetSelection, count: number) {
-  // Files in project folders are kept unless the user opts in; say how many there are
-  const projectCount = recordsOf(selection).filter((asset) => asset.file.root === "external").length;
+  // Files in project folders are kept unless the user opts in; say how many
+  // there are, when every record of the selection is at hand
+  const records = recordsOf(selection);
+  const inProjects = records.filter((asset) => asset.file.root === "external").length;
+  const projectCount = records.length >= count ? inProjects : null;
   useAssetStore.getState().requestConfirm({ kind: "delete", selection, count, projectCount });
 }
 

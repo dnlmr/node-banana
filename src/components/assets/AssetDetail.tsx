@@ -67,6 +67,16 @@ export function toggleDetailFullscreen() {
   else void el.requestFullscreen?.().catch(() => {});
 }
 
+/** A kind-coloured square and a line, where the media cannot be shown. */
+function StageNote({ kind, children }: { kind: AssetView["kind"]; children: ReactNode }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center">
+      <AssetPlaceholder kind={kind} size={48} className="h-40 w-40 rounded-card" />
+      <p className="text-xs text-ink-3">{children}</p>
+    </div>
+  );
+}
+
 /** Image at fit, click for 100% and drag to pan, click again to fit. */
 function ImageStage({ asset }: { asset: AssetView }) {
   const [actual, setActual] = useState(false);
@@ -78,7 +88,7 @@ function ImageStage({ asset }: { asset: AssetView }) {
     setFailed(false);
   }, [asset.id]);
 
-  if (failed) return <AssetPlaceholder kind="image" size={48} className="rounded-media" />;
+  if (failed) return <StageNote kind="image">The image could not be shown.</StageNote>;
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!actual || !scroller.current) return;
@@ -125,14 +135,7 @@ function ImageStage({ asset }: { asset: AssetView }) {
 
 function Stage({ asset }: { asset: AssetView }) {
   const platform = resolvePlatform(useAssetStore.getState().library);
-  if (asset.missing) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center">
-        <AssetPlaceholder kind={asset.kind} size={48} className="h-40 w-40 rounded-card" />
-        <p className="text-xs text-ink-3">The file is not where it was saved.</p>
-      </div>
-    );
-  }
+  if (asset.missing) return <StageNote kind={asset.kind}>The file is not where it was saved.</StageNote>;
   switch (asset.kind) {
     case "image":
       return <ImageStage asset={asset} />;

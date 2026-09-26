@@ -145,9 +145,9 @@ export const AssetTile = memo(function AssetTile({
           "shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)] transition-[box-shadow,opacity] duration-[120ms]",
           "focus-visible:outline-none",
           selected
-            ? "ring-2 ring-selection ring-offset-2 ring-offset-canvas-bg"
+            ? "ring-2 ring-selection ring-offset-1 ring-offset-canvas-bg"
             : focused
-              ? "ring-2 ring-white/40 ring-offset-2 ring-offset-canvas-bg"
+              ? "ring-2 ring-white/40 ring-offset-1 ring-offset-canvas-bg"
               : "group-hover:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)]",
         )}
       >

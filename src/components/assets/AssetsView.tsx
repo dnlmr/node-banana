@@ -233,6 +233,7 @@ function Popovers() {
       suggestions={(facets?.tags ?? []).map((tag) => tag.tag)}
       x={popover.x}
       y={popover.y}
+      above={popover.above}
     />
   );
 }
@@ -270,11 +271,16 @@ export function AssetsView() {
       facetsTimer = setTimeout(() => void useAssetStore.getState().refreshFacets(), FACETS_AFTER_RECORDING_MS);
     });
     const offStatus = onLibraryStatus((next) => useAssetStore.getState().setLibrary(next));
+    // A workflow opened or a tab switched, however it was asked for: show it
+    const offCanvas = useWorkflowStore.subscribe((state, previous) => {
+      if (state.canvasGeneration !== previous.canvasGeneration) useAssetStore.getState().setAppView("canvas");
+    });
     const poll = setInterval(() => void useAssetStore.getState().pollArrivals(), ARRIVALS_POLL_MS);
     window.addEventListener("keydown", handleAssetsKey, { capture: true });
     return () => {
       offRecorded();
       offStatus();
+      offCanvas();
       clearInterval(poll);
       if (facetsTimer) clearTimeout(facetsTimer);
       window.removeEventListener("keydown", handleAssetsKey, { capture: true });

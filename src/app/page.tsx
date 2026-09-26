@@ -23,6 +23,9 @@ export default function Home() {
   return <DesktopSession><Editor /></DesktopSession>;
 }
 
+/** One library init per page load, however often the effect below runs (Strict Mode runs it twice). */
+let libraryInit: ReturnType<typeof initAssetLibrary> | null = null;
+
 function Editor() {
   const initializeAutoSave = useWorkflowStore(
     (state) => state.initializeAutoSave
@@ -42,7 +45,8 @@ function Editor() {
   useEffect(() => {
     let cancelled = false;
     let stopHint = () => {};
-    initAssetLibrary()
+    libraryInit ??= initAssetLibrary();
+    libraryInit
       .then((status) => {
         if (cancelled) return;
         useAssetStore.getState().setLibrary(status);

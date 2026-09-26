@@ -286,7 +286,7 @@ describe("asset actions and undo", () => {
     expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["a2"] }, op: { action: "trash" } });
     expect(ids()).toEqual(["a3", "a1"]);
     expect(selectionCount(useAssetStore.getState())).toBe(0);
-    expect(useAssetStore.getState().notice).toMatchObject({ message: "Moved 1 asset to Trash", undo: true });
+    expect(useAssetStore.getState().notice).toMatchObject({ message: "Trashed 1 asset", undo: true });
 
     api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
     await useAssetStore.getState().undo();
