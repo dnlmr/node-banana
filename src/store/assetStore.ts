@@ -222,6 +222,9 @@ interface AssetStoreState {
   showArrivals: () => void;
   setScroll: (scrollTop: number, atTop: boolean) => void;
 
+  /** A video's poster was stored: its tile loads the thumbnail again. */
+  markPosterReady: (id: string) => void;
+
   refreshFacets: () => Promise<void>;
   /** Asks the server where the library is and what job it runs; follows a job, reloads after a switch. */
   refreshLibrary: () => Promise<void>;
@@ -1110,6 +1113,17 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       // Back at the top with arrivals waiting: they can go in now without moving anything under the user
       if (atTop && !state.atTop && state.arrivals.length) get().showArrivals();
     },
+
+    markPosterReady: (id) =>
+      set((state) => {
+        const withPoster = (asset: AssetView): AssetView => (asset.id === id && !asset.hasPoster ? { ...asset, hasPoster: true } : asset);
+        return {
+          items: state.items.map((item) => (item.id === id && item.asset && !item.asset.hasPoster ? { ...item, asset: withPoster(item.asset) } : item)),
+          arrivals: state.arrivals.map(withPoster),
+          ...(state.selectedRecords[id] ? { selectedRecords: { ...state.selectedRecords, [id]: withPoster(state.selectedRecords[id]!) } } : {}),
+          ...(state.detailAsset?.id === id ? { detailAsset: withPoster(state.detailAsset) } : {}),
+        };
+      }),
 
     refreshFacets: async () => {
       try {

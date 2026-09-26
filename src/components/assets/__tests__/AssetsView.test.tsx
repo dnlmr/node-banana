@@ -39,6 +39,20 @@ vi.mock("@/lib/assets/client/recorder", () => ({
   },
 }));
 
+const poster = vi.hoisted(() => ({
+  ensurePoster: vi.fn(async () => false),
+  listener: null as ((id: string) => void) | null,
+}));
+vi.mock("@/lib/assets/client/poster", () => ({
+  ensurePoster: poster.ensurePoster,
+  onPosterReady: (listener: (id: string) => void) => {
+    poster.listener = listener;
+    return () => {
+      poster.listener = null;
+    };
+  },
+}));
+
 const openWorkflow = vi.hoisted(() => ({
   openAssetWorkflow: vi.fn(),
   openWorkflowBlockedReason: vi.fn(),
@@ -339,6 +353,21 @@ describe("AssetsView", () => {
     await waitFor(() => expect(tile("a3")).toBeInTheDocument());
     await waitFor(() => expect(useAssetStore.getState().nextCursor).toBeNull());
     expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("has a poster made for a video tile without one, and shows its thumbnail once stored", async () => {
+    await renderView([asset("vid1", { kind: "video", mime: "video/mp4", ext: "mp4" }), asset("a1")]);
+    expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
+    expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid1", kind: "video" }));
+    // Asked before the poster existed: the server had nothing (204)
+    fireEvent.error(tile("vid1").querySelector("img")!);
+    expect(tile("vid1").querySelector("img")).toBeNull();
+
+    act(() => poster.listener?.("vid1"));
+    expect(useAssetStore.getState().items[0]!.asset!.hasPoster).toBe(true);
+    expect(tile("vid1").querySelector("img")!.getAttribute("src")).toBe(`/api/assets/thumb/${"vid1".padEnd(64, "0")}?w=320&poster=1`);
+    // Once per video, not on every render
+    expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
   });
 
   it("prepends a recorded asset that matches while scrolled to the top", async () => {

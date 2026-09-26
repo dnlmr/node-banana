@@ -6,6 +6,7 @@ import { useShallow } from "zustand/shallow";
 import { cn } from "@/components/nodes/ui/cn";
 import { CHROME_SURFACE } from "@/components/chromeStyles";
 import { clearGenerationToasts } from "@/components/GenerationToast";
+import { onPosterReady } from "@/lib/assets/client/poster";
 import { getRecorderLibraryStatus, onAssetRecorded, onLibraryStatus } from "@/lib/assets/client/recorder";
 import { sameQuery } from "@/lib/assets/query";
 import { ARRIVALS_POLL_MS, buildAssetQuery, selectionCount, useAssetStore } from "@/store/assetStore";
@@ -275,6 +276,8 @@ export function AssetsView() {
       if (facetsTimer) clearTimeout(facetsTimer);
       facetsTimer = setTimeout(() => void useAssetStore.getState().refreshFacets(), FACETS_AFTER_RECORDING_MS);
     });
+    // A video's poster landed after its tile asked for a thumbnail: show it
+    const offPoster = onPosterReady((id) => useAssetStore.getState().markPosterReady(id));
     // A switched or moved library reloads the list (setLibrary compares roots)
     const offStatus = onLibraryStatus((next) => useAssetStore.getState().setLibrary(next));
     const offCanvas = useWorkflowStore.subscribe((state, previous) => {
@@ -291,6 +294,7 @@ export function AssetsView() {
     window.addEventListener("keydown", handleAssetsKey, { capture: true });
     return () => {
       offRecorded();
+      offPoster();
       offStatus();
       offCanvas();
       clearInterval(poll);
