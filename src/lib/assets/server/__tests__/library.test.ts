@@ -517,6 +517,27 @@ describe("existence", () => {
     expect(await assetExistence([onDrive.asset.id])).toEqual({ [onDrive.asset.id]: "unknown" });
   });
 
+  it("answers unknown, never gone, when the file can't be checked (no permission, I/O error)", async () => {
+    const r = await record();
+    const stat = fs.promises.stat;
+    const spy = vi.spyOn(fs.promises, "stat").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) =>
+      String(file) === r.asset.displayPath
+        ? Promise.reject(Object.assign(new Error("EACCES: permission denied, stat"), { code: "EACCES" }))
+        : (stat as (...args: unknown[]) => Promise<unknown>)(file, ...rest)) as typeof stat);
+    try {
+      expect(await openAssetFile(r.asset.id)).toBeNull();
+      expect(await assetExistence([r.asset.id])).toEqual({ [r.asset.id]: "unknown" });
+      expect((await getAsset(r.asset.id))?.missing).toBeUndefined();
+      expect(await ids({ scope: "missing" })).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    // Once it can be checked again, it is simply there.
+    const library = await __assetLibraryForTests();
+    await library.verifyFiles([library.get(r.asset.id)!], 0);
+    expect(await assetExistence([r.asset.id])).toEqual({ [r.asset.id]: "present" });
+  });
+
   it("answers unknown for everything when the library is unavailable", async () => {
     process.env.VERCEL = "1";
     try {

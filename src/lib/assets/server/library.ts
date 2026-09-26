@@ -278,7 +278,8 @@ export class AssetLibrary {
   private byPath = new Map<string, Set<string>>();
   private searchCache = new Map<string, string>();
   private tombstones = new Set<string>();
-  private missing = new Map<string, { missing: boolean; at: number }>();
+  /** The last file check per record; `unknown` when it failed for a reason other than "no such file". */
+  private missing = new Map<string, { missing: boolean; unknown?: boolean; at: number }>();
   private journalOffset = 0;
   /** The generation of the journal `journalOffset` points into (null before the first read). */
   private journalGen: string | null = null;
@@ -806,8 +807,8 @@ export class AssetLibrary {
         if (stat.isFile() && stat.size === record.bytes) {
           return { path: file, mime: record.mime, bytes: stat.size, filename: record.filename };
         }
-      } catch {
-        this.setMissing(record.id, true);
+      } catch (error) {
+        this.noteFileError(record.id, error);
       }
     }
     return null;
@@ -821,8 +822,29 @@ export class AssetLibrary {
     if ((previous?.missing ?? false) !== missing) this.bump();
   }
 
+  /**
+   * Records what a failed look at a record's file says: only "no such file"
+   * (ENOENT/ENOTDIR) means missing. Anything else — no permission, a busy
+   * or unreachable volume — means "can't tell", which is never reported as
+   * gone, so carousels never prune an entry whose file may still be there.
+   */
+  noteFileError(id: string, error: unknown): void {
+    if (isAbsent(error)) {
+      this.setMissing(id, true);
+      return;
+    }
+    const previous = this.missing.get(id);
+    this.missing.set(id, { missing: false, unknown: true, at: this.now() });
+    if (previous?.missing) this.bump();
+  }
+
   isMissing(id: string): boolean {
     return this.missing.get(id)?.missing === true;
+  }
+
+  /** The last file check of this record could not tell whether the file exists. */
+  isUnverifiable(id: string): boolean {
+    return this.missing.get(id)?.unknown === true;
   }
 
   /** Stats the files of `records` whose last check is older than `maxAgeMs`. */
@@ -842,8 +864,7 @@ export class AssetLibrary {
         const stat = await fs.stat(file);
         this.setMissing(record.id, !stat.isFile());
       } catch (error) {
-        const code = errnoCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") this.setMissing(record.id, true);
+        this.noteFileError(record.id, error);
       }
     });
   }
@@ -948,6 +969,10 @@ export class AssetLibrary {
     await this.verifyFiles(known);
     const unreachable = new Map<string, Promise<boolean>>();
     for (const record of known) {
+      if (this.isUnverifiable(record.id)) {
+        states[record.id] = "unknown";
+        continue;
+      }
       if (!this.isMissing(record.id)) {
         states[record.id] = "present";
         continue;

@@ -557,8 +557,9 @@ async function verifiedFile(library: AssetLibrary, record: AssetRecord): Promise
     }
     library.setMissing(record.id, false);
     return { file, bytes: stat.size };
-  } catch {
-    library.setMissing(record.id, true);
+  } catch (error) {
+    // Only "no such file" marks it missing; a permission or I/O error can't tell.
+    library.noteFileError(record.id, error);
     return null;
   }
 }
