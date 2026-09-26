@@ -226,11 +226,19 @@ export function AssetsView() {
       // A dialog closed over the view (Settings may have switched the library or started a job): ask again
       if (state.openModalCount < previous.openModalCount) void useAssetStore.getState().refreshLibrary();
     });
-    const poll = setInterval(() => {
+    const pollNow = () => {
       const current = useAssetStore.getState();
       void current.pollArrivals();
       void current.refreshLibrary();
+    };
+    // Nothing is asked while the page is hidden (a background tab, a minimised window); coming back asks at once
+    const poll = setInterval(() => {
+      if (document.visibilityState !== "hidden") pollNow();
     }, ARRIVALS_POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") pollNow();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("keydown", handleAssetsKey, { capture: true });
     return () => {
       offRecorded();
@@ -238,6 +246,7 @@ export function AssetsView() {
       offStatus();
       offCanvas();
       clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisibility);
       if (facetsTimer) clearTimeout(facetsTimer);
       window.removeEventListener("keydown", handleAssetsKey, { capture: true });
       useAssetStore.getState().closePopover();

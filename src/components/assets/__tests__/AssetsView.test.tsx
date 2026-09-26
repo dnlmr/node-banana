@@ -65,7 +65,7 @@ vi.mock("@/lib/assets/client/openWorkflow", () => openWorkflow);
 
 import { AssetsView } from "../AssetsView";
 import { __resetPosterRequestsForTests } from "../posterRequests";
-import { useAssetStore } from "@/store/assetStore";
+import { ARRIVALS_POLL_MS, useAssetStore } from "@/store/assetStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 
 const initial = useAssetStore.getState();
@@ -599,6 +599,42 @@ describe("AssetsView", () => {
       act(() => useWorkflowStore.getState().incrementModalCount());
       expect(document.exitFullscreen).toHaveBeenCalled();
       act(() => useWorkflowStore.getState().decrementModalCount());
+    });
+  });
+
+  describe("while the page is hidden", () => {
+    let visibility: DocumentVisibilityState = "visible";
+    beforeEach(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+    });
+    afterEach(() => {
+      visibility = "visible";
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    });
+
+    it("asks nothing every 5 s, and asks at once on coming back", async () => {
+      const intervals = vi.spyOn(globalThis, "setInterval");
+      try {
+        await renderView();
+        const tick = intervals.mock.calls.find(([, ms]) => ms === ARRIVALS_POLL_MS)![0] as () => void;
+        await waitFor(() => expect(api.fetchLibraryStatus).toHaveBeenCalled());
+        api.fetchLibraryStatus.mockClear();
+        api.fetchAssetPage.mockClear();
+
+        visibility = "hidden";
+        act(() => tick());
+        expect(api.fetchLibraryStatus).not.toHaveBeenCalled();
+        expect(api.fetchAssetPage).not.toHaveBeenCalled();
+
+        visibility = "visible";
+        act(() => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(1);
+        expect(api.fetchAssetPage).toHaveBeenCalledWith(expect.objectContaining({ newerThan: "h" }));
+      } finally {
+        intervals.mockRestore();
+      }
     });
   });
 
