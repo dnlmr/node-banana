@@ -1304,7 +1304,7 @@ export class AssetLibrary {
    * released: it was gone a moment ago, so one there now came back.
    * Bytes a surviving run's snapshot still references move into
    * `.nodebanana/media` instead of the OS Trash, so "open original workflow"
-   * keeps working; a kept project file is copied there for the same reason.
+   * keeps working; for a kept project file, a reference to it goes there.
    * `purge` (the automatic 30-day empty) unlinks instead of using the OS
    * Trash, so nothing asks for permissions at startup.
    */
@@ -1412,8 +1412,8 @@ export class AssetLibrary {
         if (!(await this.isOwnedFile(record, file))) continue;
         try {
           if (keep) {
-            // The project keeps its file; a snapshot that needs the bytes gets its own copy.
-            if (referenced.has(record.sha256)) await this.runs.retainCopy(record.sha256, record.ext, file);
+            // The project keeps its file; a snapshot that needs the bytes gets a checked reference to it.
+            if (referenced.has(record.sha256)) await this.runs.retainReference(record.sha256, file, record.bytes);
             continue;
           }
           // A snapshot that could not be read may need these bytes: keep them rather than guess.

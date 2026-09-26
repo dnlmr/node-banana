@@ -371,19 +371,41 @@ describe("permanent delete", () => {
     expect(fs.existsSync(runFile(run))).toBe(false);
   });
 
-  it("copies a kept project file into media/ when a surviving run references it", async () => {
+  it("keeps a checked reference to a kept project file a surviving run needs, not a second copy", async () => {
     const project = path.join(base, "Proj");
     fs.mkdirSync(project);
     const png = makePng(3, 3, 58);
+    const sha = sha256(png);
     const inProject = await record({ projectDir: project }, png);
+    const file = inProject.asset.displayPath;
     const later = await record();
-    await storeRun(later, [sha256(png)]);
+    await storeRun(later, [sha]);
     await deleteForGood([inProject.asset.id]);
-    expect(fs.existsSync(inProject.asset.displayPath)).toBe(true);
+    expect(fs.existsSync(file)).toBe(true);
     expect(trashedPaths()).toEqual([]);
-    const copy = path.join(root, ".nodebanana", "media", `${sha256(png)}.png`);
-    expect(fs.readFileSync(copy).equals(png)).toBe(true);
-    expect(await openMedia(sha256(png))).toMatchObject({ path: copy });
+    const media = path.join(root, ".nodebanana", "media");
+    expect(fs.readdirSync(media)).toEqual([`${sha}.ref`]);
+    expect(await openMedia(sha)).toMatchObject({ path: file, mime: "image/png", bytes: png.length });
+    expect(await mediaHas([sha])).toEqual([]);
+
+    // Changed in another app (same size): the reference no longer holds those bytes, so they are asked for.
+    const edited = Buffer.from(png);
+    edited[edited.length - 1] ^= 0xff;
+    fs.writeFileSync(file, edited);
+    fs.utimesSync(file, new Date(2026, 0, 1), new Date(2026, 0, 1));
+    expect(await openMedia(sha)).toBeNull();
+    expect(await mediaHas([sha])).toEqual([sha]);
+    fs.writeFileSync(file, png);
+    expect(await openMedia(sha)).toMatchObject({ path: file });
+
+    // The app removes the project file later (a new record of it, deleted with its project file):
+    // the bytes move into media/ first, replacing the reference.
+    const again = await record({ projectDir: project }, png);
+    expect(again).toMatchObject({ reusedFile: true, asset: { displayPath: file } });
+    await deleteForGood([again.asset.id], { deleteProjectFiles: true });
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readdirSync(media)).toEqual([`${sha}.png`]);
+    expect(await openMedia(sha)).toMatchObject({ path: path.join(media, `${sha}.png`) });
   });
 
   it("keeps bytes rather than trash them when a snapshot can't be read right now", async () => {

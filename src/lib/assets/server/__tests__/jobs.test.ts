@@ -663,6 +663,31 @@ describe("cleanup", () => {
     await expect(startCleanup({})).rejects.toMatchObject({ status: 400 });
   });
 
+  it("removes a reference to a project file once no snapshot needs it, leaving the file", async () => {
+    const project = path.join(base, "Referenced");
+    fs.mkdirSync(project);
+    const png = makePng(2, 2, 14);
+    const inProject = await record({ projectDir: project }, png);
+    const later = await record();
+    await putRun(later.asset.runId, {
+      meta: { id: later.asset.runId, workflowId: later.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "start",
+      workflow: { version: 1, name: "x", nodes: [], edges: [], edgeStyle: "curved" },
+      mediaHashes: [sha256(png)],
+    });
+    for (const id of [inProject.asset.id, later.asset.id]) {
+      await patchAsset(id, { trashed: true });
+      await bulkAssets({ selection: { mode: "ids", ids: [id] }, op: { action: "delete" } });
+    }
+    const library = await __assetLibraryForTests();
+    expect(fs.readdirSync(library.layout.media)).toEqual([`${sha256(png)}.ref`]);
+
+    const job = await finished(await startCleanup({ unusedMedia: true }));
+    expect(job.state).toBe("done");
+    expect(fs.readdirSync(library.layout.media)).toEqual([]);
+    expect(fs.readFileSync(inProject.asset.displayPath).equals(png)).toBe(true);
+  });
+
   it("removes old snapshots no asset belongs to, then the media only they referenced", async () => {
     const only = makePng(2, 2, 13);
     await putMedia(sha256(only), streamOf(only), "image/png");
