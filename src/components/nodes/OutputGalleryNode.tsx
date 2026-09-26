@@ -328,6 +328,19 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
         media={{ kind: "fixed", height: displayMedia.length === 0 ? EMPTY_HEIGHT : gridHeight }}
         inputs={INPUT_SOCKETS}
         minWidth={240}
+        // On the card, not in the clipped media, so the corner target can hang past the edge.
+        cardChildren={
+          displayMedia.length > 0 ? (
+            <CornerGrip
+              nodeId={id}
+              height={gridHeight}
+              minHeight={MIN_GRID_HEIGHT}
+              minWidth={240}
+              label="Resize gallery"
+              onHeightChange={(h) => updateNodeData(id, { mediaHeight: h })}
+            />
+          ) : undefined
+        }
         controls={
           displayMedia.length > 0 ? (
             <ControlsCard
@@ -387,22 +400,12 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
           </div>
         )}
         {displayMedia.length > 0 && (
-          <>
-            <HeightGrip
-              height={gridHeight}
-              min={MIN_GRID_HEIGHT}
-              label="Resize gallery height"
-              onChange={(h) => updateNodeData(id, { mediaHeight: h })}
-            />
-            <CornerGrip
-              nodeId={id}
-              height={gridHeight}
-              minHeight={MIN_GRID_HEIGHT}
-              minWidth={240}
-              label="Resize gallery"
-              onHeightChange={(h) => updateNodeData(id, { mediaHeight: h })}
-            />
-          </>
+          <HeightGrip
+            height={gridHeight}
+            min={MIN_GRID_HEIGHT}
+            label="Resize gallery height"
+            onChange={(h) => updateNodeData(id, { mediaHeight: h })}
+          />
         )}
       </NodeShell>
 

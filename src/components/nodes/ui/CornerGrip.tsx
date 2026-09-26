@@ -93,7 +93,7 @@ export function CornerGrip({
         // A generous target: 28px square, hanging a little past the card's
         // corner so the pointer catches it from outside too. The glyph stays
         // small and tucked in the corner.
-        "nodrag nopan absolute -bottom-1.5 -right-1.5 z-10 flex h-7 w-7 cursor-nwse-resize items-end justify-end p-[9px] group/corner",
+        "nodrag nopan absolute -bottom-2 -right-2 z-10 flex h-7 w-7 cursor-nwse-resize items-end justify-end p-[11px] group/corner",
         className
       )}
     >
