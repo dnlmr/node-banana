@@ -45,7 +45,7 @@ import {
   unlinkWithRetry,
   withFsRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, libraryLayout, type LibraryLayout } from "./layout";
+import { acquireLock, DATA_DIR, isLiveLock, libraryLayout, readLock, type LibraryLayout } from "./layout";
 import { RunStore } from "./runs";
 import {
   compareNewest,
@@ -84,6 +84,8 @@ const MAX_TAIL_BYTES = 32 * 1024 * 1024;
 /** How long a file check (stat) is trusted before a page stats it again. */
 export const MISSING_TTL_MS = 30_000;
 export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** How long a look at the lock for another process's move is trusted. */
+const MOVE_CHECK_MS = 1000;
 
 export type TrashHook = (files: string[]) => Promise<unknown>;
 
@@ -307,6 +309,7 @@ export class AssetLibrary {
   private statsCache: { revision: number; stats: { assets: number; trashed: number; bytes: number } } | null = null;
   private readonly background = new Set<Promise<unknown>>();
   private compacting = false;
+  private moveCheck: { at: number; moving: boolean } | null = null;
   /** Serialises this process's journal appends with compaction, so no line of ours is lost to the rewrite. */
   private readonly journalLock = new KeyedMutex();
   /** Mutations in flight; a full scan waits for them so it never reads a sidecar mid-change. */
@@ -372,6 +375,20 @@ export class AssetLibrary {
   private track(promise: Promise<unknown>): void {
     const tracked = promise.catch((error) => console.warn("[assets]", error)).finally(() => this.background.delete(tracked));
     this.background.add(tracked);
+  }
+
+  /**
+   * Another process (the other build) holds this library's lock for a move:
+   * writes here would miss its copy. Read from disk at most once a second;
+   * the move re-scans before it switches, which covers that second.
+   */
+  async movingElsewhere(): Promise<boolean> {
+    const now = Date.now();
+    if (this.moveCheck && now - this.moveCheck.at < MOVE_CHECK_MS) return this.moveCheck.moving;
+    const lock = await readLock(this.layout.lock);
+    const moving = Boolean(lock && lock.purpose === "move" && lock.pid !== process.pid && isLiveLock(lock, now));
+    this.moveCheck = { at: now, moving };
+    return moving;
   }
 
   /** Waits for background work (file checks, compaction). Tests and shutdown. */
