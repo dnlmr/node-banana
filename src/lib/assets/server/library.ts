@@ -828,7 +828,33 @@ export class AssetLibrary {
       else states[id] = this.tombstones.has(id) ? "gone" : "unknown";
     }
     await this.verifyFiles(known);
-    for (const record of known) states[record.id] = this.isMissing(record.id) ? "gone" : "present";
+    const unreachable = new Map<string, Promise<boolean>>();
+    for (const record of known) {
+      if (!this.isMissing(record.id)) {
+        states[record.id] = "present";
+        continue;
+      }
+      // A project file whose whole folder is gone (an unplugged drive, a moved project) is not
+      // verified absent — carousels must not prune it for good.
+      const file = record.file.root === "external" ? this.filePath(record) : null;
+      if (file) {
+        const dir = path.dirname(file);
+        if (!unreachable.has(dir)) {
+          unreachable.set(
+            dir,
+            fs.stat(dir).then(
+              (stat) => !stat.isDirectory(),
+              () => true,
+            ),
+          );
+        }
+        if (await unreachable.get(dir)) {
+          states[record.id] = "unknown";
+          continue;
+        }
+      }
+      states[record.id] = "gone";
+    }
     return states;
   }
 

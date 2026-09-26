@@ -331,6 +331,22 @@ describe("existence", () => {
     });
   });
 
+  it("answers unknown, not gone, for a project file whose folder is unreachable", async () => {
+    const project = path.join(base, "External Drive", "Proj");
+    fs.mkdirSync(project, { recursive: true });
+    const onDrive = await record({ projectDir: project });
+    const deletedFile = await record({ projectDir: project });
+    fs.unlinkSync(deletedFile.asset.displayPath);
+    const library = await __assetLibraryForTests();
+    // File checks are cached for 30 s; expire them as time would.
+    await library.verifyFiles([library.get(deletedFile.asset.id)!], 0);
+    expect(await assetExistence([deletedFile.asset.id])).toEqual({ [deletedFile.asset.id]: "gone" });
+
+    fs.rmSync(path.join(base, "External Drive"), { recursive: true, force: true });
+    await library.verifyFiles([library.get(onDrive.asset.id)!], 0);
+    expect(await assetExistence([onDrive.asset.id])).toEqual({ [onDrive.asset.id]: "unknown" });
+  });
+
   it("answers unknown for everything when the library is unavailable", async () => {
     process.env.VERCEL = "1";
     try {
