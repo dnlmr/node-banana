@@ -56,6 +56,8 @@ const CONCURRENCY = 2;
 const STATUS_RETRY_MS = 30_000;
 /** The same failure is reported at most once in this window. */
 const ERROR_REPEAT_MS = 60_000;
+/** Runs are sequential, so more open than this means some never got an endRun; the oldest are let go. */
+const MAX_OPEN_RUNS = 32;
 
 /* Library status ----------------------------------------------------- */
 
@@ -86,6 +88,8 @@ async function loadStatus(): Promise<LibraryStatus | null> {
 
 /** Idempotent: every call before the answer shares the one request. */
 export function initAssetLibrary(): Promise<LibraryStatus | null> {
+  // The library is the browser's to record into; a server render has nothing to ask.
+  if (typeof window === "undefined") return Promise.resolve(null);
   statusRequest ??= loadStatus();
   return statusRequest;
 }
@@ -149,10 +153,15 @@ function takeMedia(input: RecordAssetInput): TakenMedia {
   }
   if (/^https?:\/\//i.test(media)) return { kind: "url", url: media, mime: input.mime };
   if (isBlobUrl(media) || media.startsWith("/")) {
-    const blob = fetch(media).then((response) => {
-      if (!response.ok) throw new Error(`the media could not be read (${response.status})`);
-      return response.blob();
-    });
+    const blob = fetch(media).then(
+      (response) => {
+        if (!response.ok) throw new Error(`its media could not be read (${response.status})`);
+        return response.blob();
+      },
+      () => {
+        throw new Error("its media was gone before it could be read");
+      },
+    );
     // Handled when the job runs; until then the rejection is expected, not unhandled.
     blob.catch(() => {});
     return { kind: "bytes", blob, mime: input.mime, key: isBlobUrl(media) ? media : undefined };
@@ -331,6 +340,11 @@ function settle(state: RunState | undefined, result: RecordAssetResult | null): 
 
 export function beginRun(run: AssetRunContext, graph: CapturedGraph): void {
   if (knownUnavailable() || runs.has(run.runId)) return;
+  for (const [runId] of runs) {
+    if (runs.size < MAX_OPEN_RUNS) break;
+    endRun(runId, null);
+    runs.delete(runId);
+  }
   runs.set(run.runId, {
     run,
     start: graph,

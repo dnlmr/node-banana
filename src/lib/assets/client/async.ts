@@ -48,10 +48,9 @@ export interface RetryOptions {
    * long move does not drop the recordings made during it.
    */
   pausedBudgetMs?: number;
-  /** Called with the error before each wait. */
-  onRetry?: (error: unknown, attempt: number) => void;
 }
 
+/** `task` gets the attempt number; a paused wait does not use one up. */
 export async function withRetry<T>(task: (attempt: number) => Promise<T>, options: RetryOptions = {}): Promise<T> {
   const { attempts = 5, baseDelayMs = 1000, maxDelayMs = 30_000, pausedBudgetMs = 10 * 60 * 1000 } = options;
   let attempt = 0;
@@ -69,13 +68,11 @@ export async function withRetry<T>(task: (attempt: number) => Promise<T>, option
         if (pausedFor + wait > pausedBudgetMs) throw error;
         pausedFor += wait;
         attempt -= 1;
-        options.onRetry?.(error, attempt);
         await delay(wait);
         continue;
       }
       if (attempt >= attempts) throw error;
       const backoff = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1));
-      options.onRetry?.(error, attempt);
       await delay(retryAfter ?? backoff * (0.75 + Math.random() * 0.5));
     }
   }

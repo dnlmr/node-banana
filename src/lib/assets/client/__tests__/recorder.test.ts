@@ -533,6 +533,16 @@ describe("runs and snapshots", () => {
     expect(server.entries).toHaveLength(0);
   });
 
+  it("lets go of the oldest runs when endRun never came", async () => {
+    const server = fakeLibrary();
+    recorder.beginRun(RUN, graph());
+    for (let i = 0; i < 32; i++) recorder.beginRun({ ...RUN, runId: `r-other-${i}` }, graph());
+    await recorder.recordAsset(input(dataUrlOf("A")), RUN).done;
+    await recorder.recordAsset(input(dataUrlOf("B")), { ...RUN, runId: "r-other-31" }).done;
+    await settleAll();
+    expect(server.runs.map((run) => run.runId)).toEqual(["r-other-31"]);
+  });
+
   it("ignores endRun for a run it does not know", () => {
     const server = fakeLibrary();
     expect(() => recorder.endRun("r-unknown", graph())).not.toThrow();
