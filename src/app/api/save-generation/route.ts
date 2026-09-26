@@ -3,7 +3,9 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
 import { guardAssetRequest } from "@/lib/assets/server/guard";
+import { decodeBase64, parseDataUrl } from "@/utils/dataUrl";
 import { logger } from "@/utils/logger";
+import { sniffExtension } from "@/utils/mediaSniff";
 
 export const maxDuration = 300; // 5 minute timeout for large media operations
 
@@ -52,6 +54,16 @@ function getExtensionFromMime(mimeType: string): string {
 
   // Unknown type - use generic binary extension
   return "bin";
+}
+
+/** The bytes and declared media type of a data: URL, or of raw base64 (no type); null when it is neither. */
+function decodeInlineMedia(content: string): { bytes: Uint8Array; mime: string } | null {
+  if (content.slice(0, 5).toLowerCase() === "data:") {
+    const parsed = parseDataUrl(content);
+    return parsed ? { bytes: parsed.bytes, mime: parsed.mime } : null;
+  }
+  const bytes = decodeBase64(content);
+  return bytes ? { bytes, mime: "" } : null;
 }
 
 // Helper to detect if a string is an HTTP URL
@@ -243,19 +255,26 @@ export async function POST(request: NextRequest) {
         throw fetchError;
       }
     } else {
-      // Handle base64 data URL
-      const dataUrlMatch = content.match(/^data:([\w/+-]+);base64,/);
-      if (dataUrlMatch) {
-        const mimeType = dataUrlMatch[1];
-        extension = getExtensionFromMime(mimeType);
-        const base64Data = content.replace(/^data:[\w/+-]+;base64,/, "");
-        buffer = Buffer.from(base64Data, "base64");
-      } else {
-        // Fallback: assume it's raw base64 without data URL prefix
-        extension = isAudio ? "mp3" : isVideo ? "mp4" : "png";
-        buffer = Buffer.from(content, "base64");
+      // A data: URL (any media type, or none at all), else raw base64. Only the
+      // payload is decoded: decoding the whole string would write noise.
+      const decoded = decodeInlineMedia(content);
+      if (!decoded) {
+        logger.warn('file.save', 'Generation save failed: content is not a data URL or base64', {
+          directoryPath,
+          prefix: content.slice(0, 40),
+        });
+        return NextResponse.json(
+          { success: false, error: "The content is not a readable data URL or base64" },
+          { status: 400 }
+        );
       }
+      buffer = Buffer.from(decoded.bytes.buffer, decoded.bytes.byteOffset, decoded.bytes.byteLength);
+      // No declared type (raw base64, `data:;base64,`) resolves by kind below.
+      extension = decoded.mime ? getExtensionFromMime(decoded.mime) : "bin";
     }
+
+    // The bytes decide the extension when they prove a format; the declared type is only a label.
+    extension = sniffExtension(buffer, isModel ? "3d" : isAudio ? "audio" : isVideo ? "video" : "image") ?? extension;
 
     // Safety net: if extension resolved to "bin" but we know the media type, use correct extension
     if (extension === "bin") {
