@@ -88,7 +88,7 @@ export function BulkBar() {
   return (
     <div className="pointer-events-auto flex flex-col items-center gap-2">
       {(state.selectAllOffer || selection.mode === "query") && (
-        <div className="animate-drop-in flex items-center gap-2 rounded-lg bg-neutral-800/95 px-3 py-1.5 text-xs text-neutral-300 shadow-menu backdrop-blur">
+        <div className="animate-drop-in motion-reduce:animate-none flex items-center gap-2 rounded-lg bg-neutral-800/95 px-3 py-1.5 text-xs text-neutral-300 shadow-menu backdrop-blur">
           {selection.mode === "query" ? (
             <>
               <span>All {formatCount(state.selectionTotal, "matching asset", "matching assets")} are selected.</span>
@@ -106,7 +106,7 @@ export function BulkBar() {
           )}
         </div>
       )}
-      <MenuSurface variant="bar" floating={false} role="toolbar" aria-label="Selected assets" className="animate-drop-in">
+      <MenuSurface variant="bar" floating={false} role="toolbar" aria-label="Selected assets" className="animate-drop-in motion-reduce:animate-none">
         <MenuBarLabel className="py-1 text-[11px]">
           {count.toLocaleString("en-US")} selected
           {hidden > 0 && <span className="text-ink-3">({hidden.toLocaleString("en-US")} hidden by filters)</span>}

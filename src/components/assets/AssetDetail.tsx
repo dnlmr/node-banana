@@ -443,7 +443,7 @@ export function AssetDetail() {
       data-asset-detail=""
       role="dialog"
       aria-label={asset ? assetTitle(asset) : "Asset"}
-      className="animate-drop-in absolute inset-0 z-30 flex bg-canvas-bg"
+      className="animate-drop-in motion-reduce:animate-none absolute inset-0 z-30 flex bg-canvas-bg"
     >
       <div className="relative flex min-w-0 flex-1 flex-col bg-[#0f0f0f]">
         <div className="flex h-12 shrink-0 items-center gap-2 px-3">

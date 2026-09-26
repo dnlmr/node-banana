@@ -1727,12 +1727,13 @@ export function WorkflowCanvas() {
     }
 
     // A (bare) shows the Assets view; Shift+letters add nodes. Not while a
-    // dialog or the annotation editor is up over the canvas.
+    // dialog, the annotation editor or the tutorial is up over the canvas.
     if (
       event.key.toLowerCase() === "a" &&
       !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat &&
       !useWorkflowStore.getState().isModalOpen &&
       !useAnnotationStore.getState().isModalOpen &&
+      !useFTUXStore.getState().tutorialActive &&
       !(event.target instanceof Element && event.target.closest('[role="dialog"]'))
     ) {
       event.preventDefault();

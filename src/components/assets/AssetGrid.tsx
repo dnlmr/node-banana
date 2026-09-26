@@ -238,6 +238,21 @@ export function AssetGrid() {
   }, []);
 
   const onToggleFavorite = useCallback((asset: AssetView) => toggleFavorite(asset), []);
+  const onFocus = useCallback((id: string) => {
+    if (useAssetStore.getState().focusedId !== id) useAssetStore.getState().setFocused(id);
+  }, []);
+
+  // Membership in O(1): the selection can hold thousands of ids
+  const isSelected = useMemo(() => {
+    if (selection.mode === "ids") {
+      const ids = new Set(selection.ids);
+      return (id: string) => ids.has(id);
+    }
+    const excluded = new Set(selection.excludeIds);
+    return (id: string) => !excluded.has(id);
+  }, [selection]);
+  // One Tab stop into the grid: the focused tile while it is mounted, else the first in view
+  const tabStop = focusedId && visible.some((index) => items[index]?.id === focusedId) ? focusedId : items[visible[0] ?? -1]?.id;
 
   const remaining = Math.max(0, total - items.length);
   const perItem = items.length ? layout.height / items.length : 0;
@@ -259,7 +274,7 @@ export function AssetGrid() {
             const section = layout.sections[sectionIndex]!;
             const size = section.masonry.tiles.length;
             let selected = 0;
-            for (let i = section.start; i < section.start + size; i++) if (items[i] && selectionHas(selection, items[i]!.id)) selected++;
+            for (let i = section.start; i < section.start + size; i++) if (items[i] && isSelected(items[i]!.id)) selected++;
             const state = selected === 0 ? "none" : selected === size ? "all" : "some";
             return (
               <section
@@ -295,9 +310,11 @@ export function AssetGrid() {
                 height={tile.height}
                 left={SIDE_PADDING + tile.x}
                 top={section.top + HEADER_HEIGHT + tile.y}
-                selected={selectionHas(selection, item.id)}
+                selected={isSelected(item.id)}
                 focused={focusedId === item.id}
+                tabbable={item.id === tabStop}
                 selecting={selecting}
+                onFocus={onFocus}
                 onActivate={onActivate}
                 onToggleSelect={onToggleSelect}
                 onToggleFavorite={onToggleFavorite}
@@ -317,7 +334,7 @@ export function AssetGrid() {
         <button
           type="button"
           onClick={() => useAssetStore.getState().showArrivals()}
-          className="animate-drop-in absolute left-1/2 top-3 z-20 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full bg-neutral-200 px-3.5 font-display text-xs font-semibold text-neutral-900 shadow-menu transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
+          className="animate-drop-in motion-reduce:animate-none absolute left-1/2 top-3 z-20 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full bg-neutral-200 px-3.5 font-display text-xs font-semibold text-neutral-900 shadow-menu transition-colors hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
         >
           <ArrowUp size={14} strokeWidth={2} />
           {formatCount(arrivals.length, "new", "new")}

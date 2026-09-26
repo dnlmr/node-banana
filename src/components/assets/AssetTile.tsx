@@ -65,8 +65,11 @@ export interface AssetTileProps {
   top: number;
   selected: boolean;
   focused: boolean;
+  /** The grid's one Tab stop (roving tabindex): the focused tile, else the first in view. */
+  tabbable: boolean;
   /** Show the checkbox at rest (select mode, or something is selected). */
   selecting: boolean;
+  onFocus: (id: string) => void;
   onActivate: (id: string, event: ReactMouseEvent) => void;
   onToggleSelect: (id: string, event: ReactMouseEvent) => void;
   onToggleFavorite: (asset: AssetView) => void;
@@ -88,7 +91,9 @@ export const AssetTile = memo(function AssetTile({
   top,
   selected,
   focused,
+  tabbable,
   selecting,
+  onFocus,
   onActivate,
   onToggleSelect,
   onToggleFavorite,
@@ -127,11 +132,12 @@ export const AssetTile = memo(function AssetTile({
     >
       <button
         type="button"
-        tabIndex={focused ? 0 : -1}
+        tabIndex={tabbable ? 0 : -1}
         aria-label={title}
         aria-pressed={selecting ? selected : undefined}
         data-asset-tile={id}
         data-selected={selected || undefined}
+        onFocus={() => onFocus(id)}
         onClick={(event) => onActivate(id, event)}
         onContextMenu={(event) => onContextMenu(id, event)}
         className={cn(
