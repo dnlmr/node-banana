@@ -393,6 +393,8 @@ export interface LibraryStatus {
   /** The root is inside a cloud-synced folder. */
   synced: "onedrive" | "icloud" | "dropbox" | null;
   counts: { assets: number; trashed: number; bytes: number };
+  /** The library's first scan outlasted the request: `counts` are provisional zeros, so ask again shortly. */
+  counting?: boolean;
   /** No asset has been recorded yet (drives the first-run hint). */
   empty: boolean;
   job: LibraryJobStatus | null;
