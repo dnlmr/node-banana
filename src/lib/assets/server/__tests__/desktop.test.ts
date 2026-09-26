@@ -31,8 +31,9 @@ describe("revealFile", () => {
   it("selects the file in Explorer with one verbatim argument", async () => {
     const { calls, exec } = recorder();
     await revealFile(file, { platform: "win32", exec, bridge: null });
+    // Never hidden: Explorer would hand SW_HIDE on to the window it opens.
     expect(calls).toEqual([
-      { command: "explorer.exe", args: [`/select,"${file}"`], options: { windowsVerbatimArguments: true } },
+      { command: "explorer.exe", args: [`/select,"${file}"`], options: { windowsVerbatimArguments: true, windowsHide: false } },
     ]);
   });
 
@@ -63,7 +64,7 @@ describe("revealFile", () => {
   it("opens a folder", async () => {
     const { calls, exec } = recorder();
     await openFolder("D:\\Lib", { platform: "win32", exec, bridge: null });
-    expect(calls[0]).toMatchObject({ command: "explorer.exe", args: ["D:\\Lib"] });
+    expect(calls[0]).toMatchObject({ command: "explorer.exe", args: ["D:\\Lib"], options: { windowsHide: false } });
   });
 });
 

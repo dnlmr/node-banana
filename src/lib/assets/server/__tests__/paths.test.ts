@@ -12,6 +12,7 @@ import {
   parseXdgPictures,
   platformCacheDir,
   platformDefaultRoot,
+  queryWindowsPictures,
   readLibraryConfig,
   resolveLibraryLocation,
   userConfigFile,
@@ -201,6 +202,34 @@ describe("Windows defaults (simulated)", () => {
     expect(raw).toBe("%USERPROFILE%\\OneDrive\\Pictures");
     expect(expandWindowsEnv(raw!, win({}))).toBe("C:\\Users\\ada\\OneDrive\\Pictures");
     expect(parseRegistryPictures("ERROR: The system was unable to find the specified registry key")).toBeNull();
+  });
+
+  it("asks PowerShell for the Pictures folder in UTF-8, and falls back to reg query", async () => {
+    const calls: { command: string; args: string[] }[] = [];
+    const moved = await queryWindowsPictures(async (command, args) => {
+      calls.push({ command, args });
+      return "\uFEFFD:\\Médias\\Images\r\n";
+    });
+    expect(moved).toBe("D:\\Médias\\Images");
+    expect(calls.map((call) => call.command)).toEqual(["powershell.exe"]);
+    expect(calls[0].args.join(" ")).toMatch(/OutputEncoding = \[Text\.Encoding\]::UTF8/);
+    expect(calls[0].args.join(" ")).toMatch(/GetFolderPath\('MyPictures'\)/);
+
+    const reg = "    My Pictures    REG_EXPAND_SZ    %USERPROFILE%\\Pictures\r\n";
+    const viaRegistry = await queryWindowsPictures(async (command) => {
+      if (command === "powershell.exe") throw Object.assign(new Error("spawn powershell.exe ENOENT"), { code: "ENOENT" });
+      return reg;
+    });
+    expect(viaRegistry).toBe("%USERPROFILE%\\Pictures");
+  });
+
+  it("drops a Pictures path mangled in decoding rather than make it the library", async () => {
+    // reg.exe writes the OEM code page: 'é' arrives as U+FFFD.
+    const mangled = await queryWindowsPictures(async (command) =>
+      command === "powershell.exe" ? "" : "    My Pictures    REG_SZ    D:\\M\uFFFDdias\\Images\r\n",
+    );
+    expect(mangled).toBeNull();
+    expect(await platformDefaultRoot(win({}, "D:\\M\uFFFDdias\\Images"))).toBe("C:\\Users\\ada\\Pictures\\Node Banana");
   });
 });
 

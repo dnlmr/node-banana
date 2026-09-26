@@ -48,10 +48,14 @@ function resolveDeps(deps: DesktopDeps) {
   };
 }
 
-/** Explorer exits non-zero even when it opened the window, so its exit code means nothing. */
+/**
+ * Explorer exits non-zero even when it opened the window, so its exit code
+ * means nothing. It must not start hidden: a GUI program passes its
+ * startup show state (SW_HIDE under windowsHide) to the window it opens.
+ */
 async function runExplorer(exec: ExecRunner, args: string[], verbatim: boolean): Promise<void> {
   try {
-    await exec("explorer.exe", args, { windowsVerbatimArguments: verbatim });
+    await exec("explorer.exe", args, { windowsVerbatimArguments: verbatim, windowsHide: false });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && typeof (error as { code: unknown }).code === "number") {
       return;
