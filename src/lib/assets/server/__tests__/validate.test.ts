@@ -1,0 +1,146 @@
+// @vitest-environment node
+import path from "path";
+import { describe, expect, it } from "vitest";
+import type { AssetRecord } from "../../types";
+import {
+  libraryFileName,
+  librarySnippet,
+  localDay,
+  localTime,
+  mediaTypeForExt,
+  mediaTypeForMime,
+  normaliseProjectDir,
+  normaliseTags,
+  projectFileName,
+  scrubRecord,
+  validateRecordMeta,
+} from "../validate";
+
+const SHA = "a".repeat(64);
+const MD5 = "b".repeat(32);
+
+function baseRecord(overrides: Partial<AssetRecord> = {}): AssetRecord {
+  return {
+    v: 1,
+    id: "a0000000000001",
+    kind: "image",
+    origin: "generated",
+    mime: "image/png",
+    ext: "png",
+    bytes: 10,
+    sha256: SHA,
+    md5: MD5,
+    file: { root: "library", rel: "Generations/2026-09-27/x.png" },
+    filename: "x.png",
+    createdAt: Date.now(),
+    producer: { nodeId: "n1", nodeType: "nanoBanana" },
+    workflowId: "wf_1",
+    workflowName: null,
+    runId: "r0000000000001",
+    tags: [],
+    favorite: false,
+    ...overrides,
+  };
+}
+
+describe("file names", () => {
+  it("builds project names exactly like /api/save-generation", () => {
+    expect(projectFileName("A red fox, jumping!", MD5, "png")).toBe(`a_red_fox_jumping_${MD5}.png`);
+    expect(projectFileName(undefined, MD5, "mp4")).toBe(`generation_${MD5}.mp4`);
+    expect(projectFileName("!!!", MD5, "png")).toBe(`generation_${MD5}.png`);
+    expect(projectFileName("x".repeat(80), MD5, "png")).toBe(`${"x".repeat(30)}_${MD5}.png`);
+  });
+
+  it("builds library names that sort by time in a day folder", () => {
+    const at = new Date(2026, 8, 27, 9, 5, 7).getTime();
+    const meta = { prompt: "Neon Tokyo street at night", producer: { nodeId: "n", nodeType: "t" }, kind: "image" as const, createdAt: at };
+    expect(localDay(at)).toBe("2026-09-27");
+    expect(localTime(at)).toBe("090507");
+    expect(libraryFileName(meta, SHA, "png")).toBe(`090507_neon_tokyo_street_at_night_${SHA.slice(0, 8)}.png`);
+  });
+
+  it("falls back to the operation, then the kind", () => {
+    const producer = { nodeId: "n", nodeType: "t", operation: "removeBackground" };
+    expect(librarySnippet({ prompt: "", producer, kind: "image" })).toBe("removebackground");
+    expect(librarySnippet({ producer: { nodeId: "n", nodeType: "t" }, kind: "video" })).toBe("video");
+  });
+});
+
+describe("media types", () => {
+  it("maps MIME aliases and picks containers by kind", () => {
+    expect(mediaTypeForMime("audio/mp3")?.ext).toBe("mp3");
+    expect(mediaTypeForMime("image/jpeg; charset=binary")?.ext).toBe("jpg");
+    expect(mediaTypeForMime("application/x-evil")).toBeNull();
+    expect(mediaTypeForExt("webm", "audio")?.mime).toBe("audio/webm");
+    expect(mediaTypeForExt("webm", "video")?.mime).toBe("video/webm");
+    expect(mediaTypeForExt("jpeg")?.ext).toBe("jpg");
+    expect(mediaTypeForExt("exe")).toBeNull();
+  });
+});
+
+describe("normaliseProjectDir", () => {
+  it("fixes mixed separators on Windows and refuses '..' and relative paths", () => {
+    expect(normaliseProjectDir("C:\\p/x/", "win32")).toBe("C:\\p\\x");
+    expect(() => normaliseProjectDir("C:\\p\\..\\x", "win32")).toThrow(/\.\./);
+    expect(() => normaliseProjectDir("relative/dir", "linux")).toThrow(/absolute/);
+    expect(normaliseProjectDir("/a/./b/", "linux")).toBe(path.posix.resolve("/a/b"));
+  });
+});
+
+describe("tags", () => {
+  it("trims, collapses and de-duplicates case-insensitively", () => {
+    expect(normaliseTags(["  Hero ", "hero", "cover  art", "", 3, "data:x"])).toEqual(["Hero", "cover art"]);
+  });
+});
+
+describe("scrubRecord", () => {
+  it("drops inline media, clips long strings and keeps the sidecar under 64 KB", () => {
+    const record = scrubRecord(
+      baseRecord({
+        prompt: "p".repeat(40_000),
+        parameters: {
+          image: "data:image/png;base64,AAAA",
+          nested: { blob: "blob:http://x/1", keep: "ok", long: "l".repeat(5000) },
+          list: ["data:x", "fine"],
+        },
+      }),
+    );
+    expect(record.prompt!.length).toBe(16 * 1024);
+    expect(record.parameters).toEqual({ nested: { keep: "ok", long: "l".repeat(2048) }, list: ["fine"] });
+    expect(Buffer.byteLength(JSON.stringify(record))).toBeLessThan(64 * 1024);
+  });
+
+  it("drops parameters when they would push the sidecar over 64 KB", () => {
+    const parameters = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`k${i}`, "v".repeat(1000)]));
+    const record = scrubRecord(baseRecord({ parameters }));
+    expect(record.parameters).toBeUndefined();
+  });
+});
+
+describe("validateRecordMeta", () => {
+  const valid = {
+    id: "a0000000000001",
+    kind: "image",
+    origin: "generated",
+    createdAt: Date.now(),
+    producer: { nodeId: "n1", nodeType: "nanoBanana" },
+    workflowId: "wf_123_abc",
+    workflowName: "My flow",
+    runId: "r0000000000001",
+  };
+
+  it("accepts a well-formed meta", () => {
+    expect(validateRecordMeta({ ...valid, width: 10, height: 20, tags: ["a"] })).toMatchObject({ id: valid.id, width: 10, tags: ["a"] });
+  });
+
+  it("rejects ids that could reach a path", () => {
+    expect(() => validateRecordMeta({ ...valid, id: "../../etc" })).toThrow(/asset id/);
+    expect(() => validateRecordMeta({ ...valid, runId: "r/../x" })).toThrow(/run id/);
+    expect(() => validateRecordMeta({ ...valid, workflowId: "a/b" })).toThrow(/workflow id/);
+  });
+
+  it("clamps an implausible createdAt to now", () => {
+    const now = Date.now();
+    expect(validateRecordMeta({ ...valid, createdAt: 5 }, now).createdAt).toBe(now);
+  });
+});
