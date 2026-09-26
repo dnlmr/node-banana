@@ -383,6 +383,43 @@ describe("a re-run of a video edit", () => {
     expect(recordAsset).not.toHaveBeenCalled();
   });
 
+  it("made while the same video is still uploading, is recorded if that upload then fails", async () => {
+    (URL.createObjectURL as unknown as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce("blob:http://localhost/slow-1")
+      .mockReturnValueOnce("blob:http://localhost/slow-2")
+      .mockReturnValueOnce("blob:http://localhost/slow-3");
+    const { ctx } = makeCtx(trimNode("vt-slow"), { videos: ["data:video/mp4;base64,a"] });
+    let failFirst!: () => void;
+    const outcomes = [
+      new Promise<RecordAssetResult | null>((resolve) => (failFirst = () => resolve(null))),
+      Promise.resolve({} as RecordAssetResult),
+    ];
+    let count = 0;
+    const recordAsset = vi.fn(
+      (_input: RecordAssetInput): RecordedAssetHandle => ({ assetId: `a${String(++count).padStart(12, "0")}`, done: outcomes.shift()! })
+    );
+    ctx.recordAsset = recordAsset;
+
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(BIG, 4, 1));
+    await executeVideoTrim(ctx);
+    // Run again before the 300 MB upload is done: the same video, so nothing new yet
+    const second = encoded(BIG, 4, 2);
+    mocks.trimVideoAsync.mockResolvedValueOnce(second);
+    await executeVideoTrim(ctx);
+    expect(recordAsset).toHaveBeenCalledOnce();
+
+    // The first upload fails: the second run's copy goes instead, once
+    failFirst();
+    await vi.waitFor(() => expect(recordAsset).toHaveBeenCalledTimes(2));
+    expect(recordAsset.mock.calls[1][0].media).toBe(second);
+
+    // It landed, so a third identical run records nothing
+    mocks.trimVideoAsync.mockResolvedValueOnce(encoded(BIG, 4, 3));
+    await executeVideoTrim(ctx);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(recordAsset).toHaveBeenCalledTimes(2);
+  });
+
   it("is recorded again after a recording that failed", async () => {
     (URL.createObjectURL as unknown as ReturnType<typeof vi.fn>)
       .mockReturnValueOnce("blob:http://localhost/fail-1")
