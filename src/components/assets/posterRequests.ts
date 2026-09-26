@@ -9,7 +9,9 @@
  * So a tile asks here only while it is on screen, and withdraws when it
  * leaves or unmounts. At most MAX_ACTIVE_POSTERS requests are handed to
  * ensurePoster at a time, in the order the tiles came into view; the rest
- * wait here, where withdrawing costs nothing.
+ * wait here, where withdrawing costs nothing. A request gives its turn up
+ * while its capture waits out a failed try (5 s, then 30 s): a few videos
+ * this browser cannot decode must not keep every other tile waiting.
  */
 
 import { ensurePoster } from "@/lib/assets/client/poster";
@@ -18,14 +20,14 @@ import type { AssetView } from "@/lib/assets/types";
 type PosterAsset = Pick<AssetView, "id" | "kind" | "mime" | "hasPoster">;
 
 /**
- * A few: the capture queue stays busy (one drawing, the next ready) and a
- * request waiting out a failed capture's retry does not stall it, while
+ * A few: the capture queue stays busy (one drawing, the next ready) while
  * little is queued that may scroll away.
  */
 export const MAX_ACTIVE_POSTERS = 3;
 
 /** On screen and not handed on yet, in the order they came into view. */
 const waiting = new Map<string, PosterAsset>();
+/** Handed on and drawing or uploading (not waiting out a retry). */
 const active = new Set<string>();
 /** Handed to ensurePoster this session: once each, even when the capture fails (it tries again on its own). */
 const asked = new Set<string>();
@@ -36,12 +38,14 @@ function pump(): void {
     waiting.delete(id);
     asked.add(id);
     active.add(id);
-    void ensurePoster(asset)
+    // Once: at the first retry wait or at the end, whichever comes first. The
+    // try after a wait runs without a turn; poster.ts still draws one at a time.
+    const release = () => {
+      if (active.delete(id)) pump();
+    };
+    void ensurePoster(asset, { onRetryWait: release })
       .catch(() => false)
-      .finally(() => {
-        active.delete(id);
-        pump();
-      });
+      .finally(release);
   }
 }
 

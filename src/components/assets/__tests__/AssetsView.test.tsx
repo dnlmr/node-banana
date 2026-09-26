@@ -367,7 +367,11 @@ describe("AssetsView", () => {
   it("has a poster made for a video tile without one, and shows its thumbnail once stored", async () => {
     await renderView([asset("vid1", { kind: "video", mime: "video/mp4", ext: "mp4" }), asset("a1")]);
     expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
-    expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid1", kind: "video" }));
+    expect(poster.ensurePoster).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "vid1", kind: "video" }),
+      // Its turn goes to another tile while a failed capture waits to try again
+      { onRetryWait: expect.any(Function) },
+    );
     // Asked before the poster existed: the server had nothing (204)
     fireEvent.error(tile("vid1").querySelector("img")!);
     expect(tile("vid1").querySelector("img")).toBeNull();
@@ -389,7 +393,7 @@ describe("AssetsView", () => {
     const grid = screen.getByTestId("asset-grid");
     grid.scrollTop = 600;
     fireEvent.scroll(grid);
-    await waitFor(() => expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid9" })));
+    await waitFor(() => expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid9" }), expect.anything()));
   });
 
   it("prepends a recorded asset that matches while scrolled to the top", async () => {

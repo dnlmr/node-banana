@@ -206,6 +206,34 @@ describe("ensurePoster", () => {
     expect(calls).toHaveLength(3);
   });
 
+  it("says when a failed capture starts waiting to try again, at once to a caller joining the wait", async () => {
+    vi.useFakeTimers();
+    playableVideo({ width: 100, height: 100, duration: 1 });
+    drawableCanvas({ "image/webp": "image/webp" });
+    const { calls } = stubFetch(() => jsonResponse({ error: "Refused" }, { status: 400 }));
+    const first = vi.fn();
+    const joined = vi.fn();
+
+    const ensured = ensurePoster(video("e-wait"), { onRetryWait: first });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(1);
+    expect(first).toHaveBeenCalledTimes(1);
+    // Asked again (a tile after the recorder) while it waits out the 5 s
+    void ensurePoster(video("e-wait"), { onRetryWait: joined });
+    expect(joined).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toHaveLength(2);
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(joined).toHaveBeenCalledTimes(2);
+
+    // No wait follows the last try
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(ensured).resolves.toBe(false);
+    expect(calls).toHaveLength(3);
+    expect(first).toHaveBeenCalledTimes(2);
+  });
+
   it("shares one capture between callers", async () => {
     playableVideo({ width: 100, height: 100, duration: 1 });
     drawableCanvas({ "image/webp": "image/webp" });
