@@ -21,12 +21,29 @@ export const HISTORY_RIGHT_VAR = "--nb-history-right";
 /** STACK_RIGHT as CSS, following the history button when it moves. */
 export const STACK_RIGHT_CSS = `calc(${STACK_RIGHT - 16}px + var(${HISTORY_RIGHT_VAR}, 16px))`;
 
+/** A text button on the toast ("Show", "Change…"); choosing it also dismisses the toast. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+/** How long a toast stays up; one with actions gets longer, so there is time to reach them. */
+const AUTO_HIDE_MS = 4000;
+const AUTO_HIDE_WITH_ACTIONS_MS = 8000;
+
 interface ToastState {
   message: string | null;
   type: "info" | "success" | "warning" | "error";
   persistent: boolean;
   details: string | null;
-  show: (message: string, type?: "info" | "success" | "warning" | "error", persistent?: boolean, details?: string | null) => void;
+  actions: ToastAction[] | null;
+  show: (
+    message: string,
+    type?: "info" | "success" | "warning" | "error",
+    persistent?: boolean,
+    details?: string | null,
+    actions?: ToastAction[] | null
+  ) => void;
   hide: () => void;
 }
 
@@ -35,8 +52,10 @@ export const useToast = create<ToastState>((set) => ({
   type: "info",
   persistent: false,
   details: null,
-  show: (message, type = "info", persistent = false, details = null) => set({ message, type, persistent, details }),
-  hide: () => set({ message: null, persistent: false, details: null }),
+  actions: null,
+  show: (message, type = "info", persistent = false, details = null, actions = null) =>
+    set({ message, type, persistent, details, actions: actions && actions.length > 0 ? actions : null }),
+  hide: () => set({ message: null, persistent: false, details: null, actions: null }),
 }));
 
 const typeStyles = {
@@ -62,7 +81,7 @@ const typeIcons = {
 };
 
 export function Toast() {
-  const { message, type, persistent, details, hide } = useToast();
+  const { message, type, persistent, details, actions, hide } = useToast();
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -85,10 +104,10 @@ export function Toast() {
     if (message && !persistent) {
       const timer = setTimeout(() => {
         hide();
-      }, 4000);
+      }, actions ? AUTO_HIDE_WITH_ACTIONS_MS : AUTO_HIDE_MS);
       return () => clearTimeout(timer);
     }
-  }, [message, persistent, hide]);
+  }, [message, persistent, actions, hide]);
 
   return (
     <div
@@ -122,6 +141,24 @@ export function Toast() {
             <X size={16} strokeWidth={2} />
           </button>
         </div>
+        {actions && (
+          // Under the message, from the text's own left edge (px-4 + 20px icon + gap-3)
+          <div className="-mt-1.5 flex shrink-0 flex-wrap items-center gap-1 pb-2.5 pl-[42px] pr-4">
+            {actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => {
+                  hide();
+                  action.onClick();
+                }}
+                className="rounded px-1.5 py-1 text-xs font-semibold opacity-90 hover:bg-white/10 hover:opacity-100 transition-colors"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
         {details && (
           <>
             <button
