@@ -518,8 +518,6 @@ function jobDoneMessage(job: LibraryJobStatus): string {
       return "Library moved";
     case "cleanup":
       return job.message ?? "Cleaned up";
-    case "repair":
-      return job.message ?? `Repaired ${plural(job.done, "file")}`;
   }
 }
 
