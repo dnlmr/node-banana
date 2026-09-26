@@ -273,6 +273,16 @@ describe("selection", () => {
     expect(useAssetStore.getState().selection).toEqual({ mode: "ids", ids: [] });
   });
 
+  it("drops the selection when the Library view changes: Trash and Missing act on it for good", async () => {
+    useAssetStore.getState().toggleSelect("a3");
+    useAssetStore.getState().toggleSelect("a1");
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("t1", { trashedAt: 1 })]));
+    useAssetStore.getState().setLibraryView("trash");
+    expect(useAssetStore.getState().selection).toEqual({ mode: "ids", ids: [] });
+    expect(useAssetStore.getState().selectedRecords).toEqual({});
+    await vi.waitFor(() => expect(ids()).toEqual(["t1"]));
+  });
+
   it("favorites in bulk unless every selected asset already is one", () => {
     useAssetStore.getState().toggleSelect("a2");
     expect(bulkFavoriteOp(useAssetStore.getState())).toEqual({ action: "unfavorite" });
@@ -317,8 +327,11 @@ describe("asset actions and undo", () => {
   });
 
   it("does not offer Undo for a permanent delete", async () => {
-    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a1"], errors: [] });
-    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a1"] }, { action: "delete" });
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "trash" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("t1", { trashedAt: 1 })]));
+    await useAssetStore.getState().refresh();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["t1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["t1"] }, { action: "delete" });
     expect(useAssetStore.getState().undoStack).toHaveLength(0);
     expect(useAssetStore.getState().notice).toMatchObject({ message: "Deleted 1 asset", undo: false });
   });
@@ -349,6 +362,59 @@ describe("asset actions and undo", () => {
     await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a1"] }, { action: "trash" });
     expect(ids()).toEqual(["a3", "a2", "a1"]);
     expect(useAssetStore.getState().notice).toMatchObject({ message: "The library is busy", tone: "error" });
+  });
+});
+
+describe("actions stay inside the view", () => {
+  const live = asset("a2");
+  const trashed = asset("t1", { trashedAt: 1 });
+
+  it("deletes permanently from the Trash only what is in the Trash", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "trash" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([trashed]));
+    await useAssetStore.getState().refresh();
+    // However a live asset got into the selection, the delete never reaches it
+    useAssetStore.setState({ selection: { mode: "ids", ids: ["a2", "t1"] }, selectedRecords: { a2: live, t1: trashed } });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["t1"], errors: [] });
+    await useAssetStore.getState().runBulk(useAssetStore.getState().selection, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+    expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["t1"] }, op: { action: "delete" } });
+    expect(useAssetStore.getState().notice?.message).toBe("Deleted 1 asset · 1 not in this view left as they were");
+
+    // Nothing of it in the Trash: nothing is sent
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+    expect(useAssetStore.getState().notice).toMatchObject({ message: "None of the selected assets are in the Trash.", tone: "error" });
+  });
+
+  it("removes from the library only records whose file is missing, and never trashes from the Trash", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "missing" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("m1", { missing: true })]));
+    await useAssetStore.getState().refresh();
+    useAssetStore.setState({ selectedRecords: { a2: live } });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "delete" });
+    expect(api.bulkAssets).not.toHaveBeenCalled();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["m1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["m1"] }, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["m1"] }, op: { action: "delete" } });
+
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "trash" }, loadedQuery: { scope: "trash" }, items: [], selectedRecords: { t1: trashed } });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["t1"] }, { action: "trash" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a select-all made for another view, and a permanent delete from the library view", async () => {
+    api.fetchAssetPage.mockResolvedValueOnce(page([live]));
+    await useAssetStore.getState().refresh();
+    await useAssetStore.getState().runBulk({ mode: "query", query: {}, excludeIds: [] }, { action: "delete" });
+    await useAssetStore.getState().runBulk({ mode: "query", query: { scope: "trash" }, excludeIds: [] }, { action: "restore" });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "delete" });
+    expect(api.bulkAssets).not.toHaveBeenCalled();
+    // A missing file's record may still be removed from the library view (the detail's banner)
+    useAssetStore.setState({ selectedRecords: { m1: asset("m1", { missing: true }) } });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["m1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["m1"] }, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
   });
 });
 

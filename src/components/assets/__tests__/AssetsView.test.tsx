@@ -410,6 +410,21 @@ describe("AssetsView", () => {
     );
   });
 
+  it("leaves a selection behind when the Trash opens, so Delete there cannot reach live assets", async () => {
+    await renderView();
+    fireEvent.click(tile("a3"), { metaKey: true });
+    fireEvent.click(tile("a1"), { metaKey: true });
+    expect(screen.getByRole("toolbar", { name: "Selected assets" })).toHaveTextContent("2 selected");
+
+    api.fetchAssetPage.mockResolvedValue(page([asset("t1", { trashedAt: 1 })]));
+    fireEvent.click(screen.getByRole("button", { name: /^Trash\s*0$/ }));
+    await waitFor(() => expect(tile("t1")).toBeInTheDocument());
+    expect(screen.queryByRole("toolbar", { name: "Selected assets" })).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Delete" });
+    expect(useAssetStore.getState().confirm).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /permanently/ })).not.toBeInTheDocument();
+  });
+
   it("goes back to the canvas when a workflow opens or the tab changes, however that was asked for", async () => {
     await renderView();
     act(() => useWorkflowStore.setState({ canvasGeneration: useWorkflowStore.getState().canvasGeneration + 1 }));

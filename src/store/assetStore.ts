@@ -9,6 +9,7 @@ import type {
   AssetKind,
   AssetOrigin,
   AssetQuery,
+  AssetScope,
   AssetSelection,
   AssetSort,
   AssetView,
@@ -332,6 +333,59 @@ export function selectionHas(selection: AssetSelection, id: string): boolean {
   return selection.mode === "ids" ? selection.ids.includes(id) : !selection.excludeIds.includes(id);
 }
 
+/** The slice of the library a Library view lists. */
+export function viewScope(view: AssetLibraryView): AssetScope {
+  return view === "trash" ? "trash" : view === "missing" ? "missing" : "library";
+}
+
+/** Whether `op` suits an asset in that state: what each view's actions are for. */
+function opSuits(op: AssetBulkOp, trashed: boolean, missing: boolean): boolean {
+  switch (op.action) {
+    case "trash":
+      return !trashed;
+    case "restore":
+      return trashed;
+    // For good: from the Trash, or a record whose file is already gone
+    case "delete":
+      return trashed || missing;
+    default:
+      return true;
+  }
+}
+
+type ScopeState = Pick<AssetStoreState, "filters" | "items" | "selectedRecords" | "detailAsset" | "loadedQuery">;
+
+/**
+ * The part of a selection that belongs to the current view and that `op`
+ * may act on. A selection never carries over to another view (setFilters
+ * clears it), so this is the guard behind that: Delete permanently in the
+ * Trash never reaches a live asset. Null when nothing is left to act on.
+ */
+export function selectionInView(
+  state: ScopeState,
+  selection: AssetSelection,
+  op: AssetBulkOp,
+): { selection: AssetSelection; skipped: number } | null {
+  const scope = viewScope(state.filters.view);
+  if (selection.mode === "query") {
+    const fits = (selection.query.scope ?? "library") === scope && opSuits(op, scope === "trash", scope === "missing");
+    return fits ? { selection, skipped: 0 } : null;
+  }
+  const listed = new Map(state.items.map((item) => [item.id, item.asset]));
+  const listScope = state.loadedQuery ? state.loadedQuery.scope ?? "library" : null;
+  const ids = selection.ids.filter((id) => {
+    const record = listed.get(id) ?? state.selectedRecords[id] ?? (state.detailAsset?.id === id ? state.detailAsset : null);
+    if (record) return matchesAssetQuery(record, { scope }) && opSuits(op, !!record.trashedAt, !!record.missing);
+    // A slot whose page is not loaded: the list it sits in says what it is
+    return listed.has(id) && listScope === scope && opSuits(op, scope === "trash", scope === "missing");
+  });
+  if (ids.length === 0) return null;
+  return {
+    selection: ids.length === selection.ids.length ? selection : { mode: "ids", ids },
+    skipped: selection.ids.length - ids.length,
+  };
+}
+
 function gridItem(asset: AssetView, page: number): AssetGridItem {
   return {
     id: asset.id,
@@ -345,6 +399,13 @@ function gridItem(asset: AssetView, page: number): AssetGridItem {
 }
 
 const EMPTY_SELECTION: AssetSelection = { mode: "ids", ids: [] };
+
+/** Said when a selection has nothing the current view's action may touch. */
+export const NOT_IN_VIEW: Record<AssetScope, string> = {
+  library: "Nothing selected can be changed that way from this view.",
+  trash: "None of the selected assets are in the Trash.",
+  missing: "None of the selected assets are missing their files.",
+};
 
 function loadTileSize(): AssetTileSize {
   try {
@@ -585,6 +646,9 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     toggleAppView: () => get().setAppView(get().appView === "assets" ? "canvas" : "assets"),
 
     setFilters: (patch) => {
+      // A selection belongs to the Library view it was made in: Trash and
+      // Missing offer other, permanent actions on whatever is selected
+      if (patch.view !== undefined && patch.view !== get().filters.view) get().clearSelection();
       set((state) => ({ filters: { ...state.filters, ...patch } }));
       void get().refresh();
     },
@@ -1045,10 +1109,16 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     showNotice: (notice) => set({ notice: { ...notice, id: ++noticeSeq } }),
     dismissNotice: () => set({ notice: null }),
 
-    runBulk: async (selection, op) => {
+    runBulk: async (requested, op) => {
+      if (requested.mode === "ids" && requested.ids.length === 0) return null;
+      const targetsSelection = requested === get().selection;
+      const scoped = selectionInView(get(), requested, op);
+      if (!scoped) {
+        get().showNotice({ message: NOT_IN_VIEW[viewScope(get().filters.view)], tone: "error" });
+        return null;
+      }
+      const { selection, skipped } = scoped;
       const targetIds = selection.mode === "ids" ? selection.ids : [];
-      if (selection.mode === "ids" && targetIds.length === 0) return null;
-      const targetsSelection = selection === get().selection;
       // Records as they were, for Undo and for putting them back on the grid
       const before = new Map<string, AssetView>();
       if (selection.mode === "ids") {
@@ -1096,10 +1166,11 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         set((state) => ({ undoStack: [...state.undoStack, entry].slice(-UNDO_LIMIT) }));
       }
       const failed = result.errors.length;
+      const left = skipped ? ` · ${skipped.toLocaleString("en-US")} not in this view left as they were` : "";
       get().showNotice(
         failed
-          ? { message: `${describe(op, result.affected)} · ${failed} could not be changed`, tone: "error", undo: steps.length > 0 }
-          : { message: describe(op, result.affected), tone: "info", undo: steps.length > 0 },
+          ? { message: `${describe(op, result.affected)} · ${failed} could not be changed${left}`, tone: "error", undo: steps.length > 0 }
+          : { message: `${describe(op, result.affected)}${left}`, tone: "info", undo: steps.length > 0 },
       );
       scheduleFacets();
       // "All matching" reached past the loaded pages: counts and paging start over

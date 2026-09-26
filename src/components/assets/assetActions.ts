@@ -8,7 +8,7 @@ import JSZip from "jszip";
 import * as api from "@/lib/assets/client/api";
 import { openAssetWorkflow, type OpenWorkflowMode } from "@/lib/assets/client/openWorkflow";
 import type { AssetSelection, AssetView } from "@/lib/assets/types";
-import { bulkFavoriteOp, selectionCount, useAssetStore } from "@/store/assetStore";
+import { NOT_IN_VIEW, bulkFavoriteOp, selectionCount, selectionInView, useAssetStore, viewScope } from "@/store/assetStore";
 import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 import { baseName, formatCount } from "./assetFormat";
 
@@ -193,18 +193,37 @@ export function removeSelection(selection: AssetSelection) {
   }
 }
 
+/**
+ * What of `selection` a permanent delete may reach from this view (only
+ * trashed assets in the Trash, only missing ones otherwise), and how many
+ * that is; null, said in a notice, when nothing.
+ */
+function deletable(selection: AssetSelection, count: number): { selection: AssetSelection; count: number } | null {
+  const state = useAssetStore.getState();
+  const scoped = selectionInView(state, selection, { action: "delete" });
+  if (!scoped) {
+    notice(NOT_IN_VIEW[viewScope(state.filters.view)], "error");
+    return null;
+  }
+  return { selection: scoped.selection, count: scoped.selection.mode === "ids" ? scoped.selection.ids.length : count };
+}
+
 /** For records whose file is gone: drop the record (there is nothing to put in any Trash). */
 export function requestRemoveFromLibrary(selection: AssetSelection, count: number) {
-  useAssetStore.getState().requestConfirm({ kind: "remove", selection, count, projectCount: 0 });
+  const target = deletable(selection, count);
+  if (!target) return;
+  useAssetStore.getState().requestConfirm({ kind: "remove", selection: target.selection, count: target.count, projectCount: 0 });
 }
 
 export function requestPermanentDelete(selection: AssetSelection, count: number) {
+  const target = deletable(selection, count);
+  if (!target) return;
   // Files in project folders are kept unless the user opts in; say how many
   // there are, when every record of the selection is at hand
-  const records = recordsOf(selection);
+  const records = recordsOf(target.selection);
   const inProjects = records.filter((asset) => asset.file.root === "external").length;
-  const projectCount = records.length >= count ? inProjects : null;
-  useAssetStore.getState().requestConfirm({ kind: "delete", selection, count, projectCount });
+  const projectCount = records.length >= target.count ? inProjects : null;
+  useAssetStore.getState().requestConfirm({ kind: "delete", selection: target.selection, count: target.count, projectCount });
 }
 
 export function restoreSelection(selection: AssetSelection) {
