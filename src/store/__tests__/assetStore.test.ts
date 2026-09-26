@@ -114,6 +114,16 @@ describe("filters", () => {
     expect(matchesAssetQuery({ ...cat, trashedAt: 1 }, { scope: "trash" })).toBe(true);
     expect(matchesAssetQuery({ ...cat, trashedAt: 1 }, {})).toBe(false);
   });
+
+  it("searches the way the server does: every word somewhere, tags and (on macOS) projects without case", () => {
+    const lake = asset("a1", { prompt: "Golden light over a lakeside", tags: ["Hero"], workflow: { id: "wf_1", name: "Ads", projectPath: "/Users/me/Ads" } });
+    expect(matchesAssetQuery(lake, { q: "golden lakeside" })).toBe(true);
+    expect(matchesAssetQuery(lake, { q: "  golden   ads " })).toBe(true);
+    expect(matchesAssetQuery(lake, { q: "golden forest" })).toBe(false);
+    expect(matchesAssetQuery(lake, { tags: ["hero"] })).toBe(true);
+    expect(matchesAssetQuery(lake, { projects: ["/users/me/ads/"] }, "darwin")).toBe(true);
+    expect(matchesAssetQuery(lake, { projects: ["/users/me/ads"] }, "linux")).toBe(false);
+  });
 });
 
 describe("paging", () => {
@@ -324,6 +334,84 @@ describe("asset actions and undo", () => {
     expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["a1"] }, op: { action: "untag", tags: ["hero"] } });
     expect(useAssetStore.getState().items.find((item) => item.id === "a1")!.asset!.tags).toEqual([]);
     expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.tags).toEqual(["hero"]);
+  });
+
+  it("undoes favorites and unfavorites only where they changed something", async () => {
+    useAssetStore.setState({ items: useAssetStore.getState().items.map((item) => (item.id === "a3" ? { ...item, asset: { ...item.asset!, favorite: true } } : item)) });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 3, ids: ["a3", "a2", "a1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a3", "a2", "a1"] }, { action: "favorite" });
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a2", "a1"] }, op: { action: "unfavorite" } }]);
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 3, ids: ["a3", "a2", "a1"], errors: [] });
+    await useAssetStore.getState().undo();
+    expect(useAssetStore.getState().items.map((item) => item.asset!.favorite)).toEqual([true, false, false]);
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 3, ids: ["a3", "a2", "a1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a3", "a2", "a1"] }, { action: "unfavorite" });
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a3"] }, op: { action: "favorite" } }]);
+  });
+
+  it("compares tags without case, as the server does, and puts an untagged one back as it was spelled", async () => {
+    // a2 already carries "hero": tagging "Hero" does not change it
+    api.bulkAssets.mockResolvedValueOnce({ affected: 2, ids: ["a2", "a1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2", "a1"] }, { action: "tag", tags: ["Hero"] });
+    expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.tags).toEqual(["hero"]);
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a1"] }, op: { action: "untag", tags: ["Hero"] } }]);
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "untag", tags: ["HERO"] });
+    expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.tags).toEqual([]);
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a2"] }, op: { action: "tag", tags: ["hero"] } }]);
+  });
+
+  it("offers no Undo for a favorite or tag that reached assets it never loaded, rather than guess what they had", async () => {
+    useAssetStore.setState({ total: 10 });
+    useAssetStore.getState().selectAllMatching();
+    const everything = ["a3", "a2", "a1", "u1", "u2", "u3", "u4", "u5", "u6", "u7"];
+    api.bulkAssets.mockResolvedValueOnce({ affected: 10, ids: everything, errors: [] });
+    await useAssetStore.getState().runBulk(useAssetStore.getState().selection, { action: "tag", tags: ["hero"] });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 10, ids: everything, errors: [] });
+    await useAssetStore.getState().runBulk(useAssetStore.getState().selection, { action: "favorite" });
+    expect(useAssetStore.getState().undoStack).toHaveLength(0);
+    expect(useAssetStore.getState().notice).toMatchObject({
+      message: "Added 10 assets to Favorites · Undo isn't available: not all of them were loaded",
+      undo: false,
+    });
+  });
+
+  it("keeps a tile that stops matching the filters after a favorite or tag change, and Undo restores it in place", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "favorites" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("f2", { favorite: true }), asset("f1", { favorite: true })]));
+    await useAssetStore.getState().refresh();
+    useAssetStore.getState().openDetail("f2");
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["f2"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["f2"] }, { action: "unfavorite" });
+    // Still there, count unchanged, and the detail can still step through the list
+    expect(ids()).toEqual(["f2", "f1"]);
+    expect(useAssetStore.getState().total).toBe(2);
+    expect(useAssetStore.getState().detailAsset?.favorite).toBe(false);
+    // Selected there, it is not "hidden by filters" either: it is on screen
+    useAssetStore.getState().toggleSelect("f2");
+    expect(hiddenSelectionCount(useAssetStore.getState())).toBe(0);
+    await useAssetStore.getState().stepDetail(1);
+    expect(useAssetStore.getState().detailId).toBe("f1");
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["f2"], errors: [] });
+    await useAssetStore.getState().undo();
+    expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["f2"] }, op: { action: "favorite" } });
+    expect(useAssetStore.getState().items[0]!.asset!.favorite).toBe(true);
+    expect(useAssetStore.getState().total).toBe(2);
+  });
+
+  it("keeps a search result that is favorited, whatever the client makes of the search", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, q: "golden lakeside" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("g1", { prompt: "golden light over a lakeside", favorite: true })]));
+    await useAssetStore.getState().refresh();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["g1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["g1"] }, { action: "unfavorite" });
+    expect(ids()).toEqual(["g1"]);
+    expect(useAssetStore.getState().total).toBe(1);
   });
 
   it("does not offer Undo for a permanent delete", async () => {

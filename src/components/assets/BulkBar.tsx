@@ -65,6 +65,7 @@ export function BulkBar() {
       total: s.total,
       totalBytes: s.totalBytes,
       items: s.items,
+      library: s.library,
     })),
   );
   const tagsButton = useRef<HTMLButtonElement>(null);
