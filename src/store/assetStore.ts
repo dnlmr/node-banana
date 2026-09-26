@@ -782,6 +782,10 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
           status: "ready",
           loadedQuery: query,
           arrivals: [],
+          // A new list starts at the top, even when no grid is mounted to scroll
+          // (an empty result shows no grid, and the next one mounts it afresh)
+          scrollTop: 0,
+          atTop: true,
           scrollToTopSeq: state.scrollToTopSeq + 1,
           focusedId: state.focusedId && seen.has(state.focusedId) ? state.focusedId : null,
         }));
@@ -954,9 +958,13 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         } else {
           set({ total: state.total + fresh.length, totalBytes: state.totalBytes + bytes });
         }
-      } else if (state.atTop && state.arrivals.length === 0) {
+      } else if ((state.atTop && state.arrivals.length === 0) || state.items.length === 0) {
+        // At the top, or nothing on screen to keep in place (the empty state shows)
+        const incoming = [...fresh, ...state.arrivals].sort((a, b) => compareAssets(a, b, state.sort));
         set({
-          items: [...fresh.map((asset) => gridItem(asset, -1)), ...state.items],
+          items: [...incoming.map((asset) => gridItem(asset, -1)), ...state.items],
+          arrivals: [],
+          ...(state.items.length === 0 ? { scrollTop: 0, atTop: true } : {}),
           layoutVersion: state.layoutVersion + 1,
           total: state.total + fresh.length,
           totalBytes: state.totalBytes + bytes,

@@ -248,6 +248,21 @@ describe("new arrivals", () => {
     expect(ids()).toEqual(["a3", "a2", "a1"]);
   });
 
+  it("start a new list at the top, and go straight into a list that was empty", async () => {
+    useAssetStore.getState().setScroll(4000, false);
+    // Trash is empty: no grid is mounted to scroll back up
+    api.fetchAssetPage.mockResolvedValueOnce(page([]));
+    useAssetStore.getState().setLibraryView("trash");
+    await vi.waitFor(() => expect(useAssetStore.getState().loadedQuery).toEqual({ scope: "trash" }));
+    expect(useAssetStore.getState()).toMatchObject({ scrollTop: 0, atTop: true });
+
+    // Even if the grid last reported being scrolled down, an arrival into nothing shows
+    useAssetStore.setState({ atTop: false, scrollTop: 900 });
+    useAssetStore.getState().receiveArrivals([asset("t1", { trashedAt: 5, createdAt: T0 + 9 })]);
+    expect(ids()).toEqual(["t1"]);
+    expect(useAssetStore.getState()).toMatchObject({ arrivals: [], total: 1, atTop: true, scrollTop: 0 });
+  });
+
   it("take recorder results only when they match the current query, once", () => {
     useAssetStore.getState().receiveArrivals([asset("v1", { kind: "video", createdAt: T0 + 5, trashedAt: 3 })]);
     expect(ids()).toEqual(["a2", "a1"]);
