@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { toast } from "sonner";
 import {
   GENERATION_TOAST_BATCH_MS,
   GENERATION_TOAST_DURATION_MS,
@@ -72,6 +73,21 @@ describe("GenerationToaster", () => {
     useAssetStore.setState({ appView: "canvas" });
     push();
     expect(screen.getByTestId("generation-toast")).toBeInTheDocument();
+  });
+
+  it("clears only generation cards, leaving another toast (the library's first-run hint) up", () => {
+    render(<GenerationToaster />);
+    push();
+    act(() => {
+      toast.custom(() => <div data-testid="other-toast">Saved to Pictures › Node Banana</div>, { id: "other", duration: 60_000 });
+      vi.advanceTimersByTime(0);
+    });
+    act(() => clearGenerationToasts());
+    settle();
+    expect(screen.queryByTestId("generation-toast")).not.toBeInTheDocument();
+    expect(screen.getByTestId("other-toast")).toBeInTheDocument();
+    act(() => toast.dismiss("other"));
+    settle();
   });
 
   it("collapses a burst from one producer into a single stacked card", () => {
