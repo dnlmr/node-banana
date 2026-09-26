@@ -149,11 +149,20 @@ export async function copyPrompt(asset: Pick<AssetView, "prompt">) {
   }
 }
 
-/** Open the asset's workflow (or project) and go back to the canvas when it opened. */
+/**
+ * Open the asset's workflow (or project) and go back to the canvas when it
+ * opened. The detail closes with it, so coming back to Assets lands on the
+ * grid (where it was, on that tile) rather than on a stale detail.
+ */
 export async function openWorkflowFor(asset: AssetView, mode: OpenWorkflowMode) {
   const result = await openAssetWorkflow(asset, mode);
-  if (result.ok) useAssetStore.getState().setAppView("canvas");
-  else notice(result.reason, "error");
+  if (result.ok) {
+    const store = useAssetStore.getState();
+    store.closeDetail();
+    store.setAppView("canvas");
+  } else {
+    notice(result.reason, "error");
+  }
 }
 
 /** Toggle one asset's favorite. */

@@ -223,6 +223,8 @@ describe("AssetsView", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Open workflow" }));
     await waitFor(() => expect(openWorkflow.openAssetWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: "a2" }), "snapshot"));
     await waitFor(() => expect(useAssetStore.getState().appView).toBe("canvas"));
+    // Coming back lands on the grid, on that tile, not on the detail left behind
+    expect(useAssetStore.getState()).toMatchObject({ detailId: null, detailAsset: null, focusedId: "a2" });
   });
 
   it("offers a project asset its project, and the copy as it was when made", async () => {
