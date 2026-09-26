@@ -223,9 +223,14 @@ function encodeNode(node: unknown, refs: Map<string, MediaInfo | null>): unknown
   return result;
 }
 
+/** The bytes behind one media string; null when a blob: URL can no longer be read. */
+async function mediaBlob(media: string, prefetched: PrefetchedMedia): Promise<Blob | null> {
+  return isBlobUrl(media) ? await (prefetched.get(media) ?? fetchBlobUrl(media)) : dataUrlToBlob(media);
+}
+
 /** Bytes, hash and type of one media string. */
 async function hashMedia(media: string, prefetched: PrefetchedMedia): Promise<{ info: MediaInfo; blob: Blob } | null> {
-  const blob = isBlobUrl(media) ? await (prefetched.get(media) ?? fetchBlobUrl(media)) : dataUrlToBlob(media);
+  const blob = await mediaBlob(media, prefetched);
   if (!blob) return null;
   const bytes = await readBlobBytes(blob);
   const mime = (isDataUrl(media) ? dataUrlMime(media) : null) || blob.type || "application/octet-stream";
@@ -284,7 +289,9 @@ export async function encodeSnapshot(graph: CapturedGraph, options: { prefetched
     const media = sources.get(sha256);
     if (!media) return null;
     try {
-      return (await hashMedia(media, prefetched))?.blob ?? null;
+      const blob = await mediaBlob(media, prefetched);
+      const mime = refs.get(media)?.mime;
+      return blob && mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob;
     } catch {
       return null;
     }
