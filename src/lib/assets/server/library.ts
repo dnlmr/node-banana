@@ -267,6 +267,13 @@ export class AssetLibrary {
   private statsCache: { revision: number; stats: { assets: number; trashed: number; bytes: number } } | null = null;
   private readonly background = new Set<Promise<unknown>>();
   private compacting = false;
+  /** Serialises this process's journal appends with compaction, so no line of ours is lost to the rewrite. */
+  private readonly journalLock = new KeyedMutex();
+  /** Mutations in flight; a full scan waits for them so it never reads a sidecar mid-change. */
+  private mutations = 0;
+  private mutationWaiters: (() => void)[] = [];
+  /** Set while a full scan runs; mutations wait for it so none lands in maps the scan is replacing. */
+  private scanGate: Promise<void> | null = null;
 
   constructor(root: string, options: AssetLibraryOptions = {}) {
     this.layout = libraryLayout(root);
@@ -332,7 +339,36 @@ export class AssetLibrary {
     while (this.background.size) await Promise.all([...this.background]);
   }
 
+  /** Marks a mutation as in flight (after any running scan); call the result when it is done. */
+  private async beginMutation(): Promise<() => void> {
+    while (this.scanGate) await this.scanGate;
+    this.mutations++;
+    return () => {
+      this.mutations--;
+      if (this.mutations === 0) {
+        const waiters = this.mutationWaiters;
+        this.mutationWaiters = [];
+        waiters.forEach((wake) => wake());
+      }
+    };
+  }
+
   private async fullScan(): Promise<void> {
+    while (this.scanGate) await this.scanGate;
+    let open!: () => void;
+    this.scanGate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    try {
+      while (this.mutations > 0) await new Promise<void>((resolve) => this.mutationWaiters.push(resolve));
+      await this.scanNow();
+    } finally {
+      this.scanGate = null;
+      open();
+    }
+  }
+
+  private async scanNow(): Promise<void> {
     await fs.mkdir(this.layout.assets, { recursive: true });
     let journal = Buffer.alloc(0);
     try {
@@ -423,10 +459,13 @@ export class AssetLibrary {
         puts.push(id);
       }
     }
-    const reread = await mapConcurrent(puts, 32, (id) => this.readSidecar(id));
-    reread.forEach((record) => {
-      if (record) this.upsertIndex(record);
-    });
+    // Under the id lock, so a stale read can't land after one of our own writes to the same record.
+    await mapConcurrent(puts, 32, (id) =>
+      this.idLocks.run(id, async () => {
+        const record = await this.readSidecar(id);
+        if (record) this.upsertIndex(record);
+      }),
+    );
   }
 
   private journalLine(op: "put" | "del", id: string): string {
@@ -436,7 +475,7 @@ export class AssetLibrary {
 
   private async appendJournal(lines: string[]): Promise<void> {
     if (!lines.length) return;
-    await fs.appendFile(this.layout.journal, lines.join(""));
+    await this.journalLock.run("journal", () => fs.appendFile(this.layout.journal, lines.join("")));
     if (this.compacting) return;
     try {
       const { size } = await fs.stat(this.layout.journal);
@@ -458,19 +497,21 @@ export class AssetLibrary {
     const lock = await acquireLock(this.layout.lock);
     try {
       if (!lock) return false;
-      const buffer = await fs.readFile(this.layout.journal);
-      const deleted: JournalLine[] = [];
-      const seen = new Set<string>();
-      const lines = this.parseJournal(buffer);
-      for (let index = lines.length - 1; index >= 0 && deleted.length < MAX_TOMBSTONES; index--) {
-        const line = lines[index];
-        if (seen.has(line.id)) continue;
-        seen.add(line.id);
-        if (line.op === "del") deleted.push(line);
-      }
-      deleted.reverse();
-      const body = deleted.map((line) => `${JSON.stringify(line)}\n`).join("");
-      await atomicWriteFile(this.layout.journal, body, { fsync: false });
+      await this.journalLock.run("journal", async () => {
+        const buffer = await fs.readFile(this.layout.journal);
+        const deleted: JournalLine[] = [];
+        const seen = new Set<string>();
+        const lines = this.parseJournal(buffer);
+        for (let index = lines.length - 1; index >= 0 && deleted.length < MAX_TOMBSTONES; index--) {
+          const line = lines[index];
+          if (seen.has(line.id)) continue;
+          seen.add(line.id);
+          if (line.op === "del") deleted.push(line);
+        }
+        deleted.reverse();
+        const body = deleted.map((line) => `${JSON.stringify(line)}\n`).join("");
+        await atomicWriteFile(this.layout.journal, body, { fsync: false });
+      });
       this.journalOffset = Number.MAX_SAFE_INTEGER;
       return true;
     } finally {
@@ -804,10 +845,22 @@ export class AssetLibrary {
 
   /* Mutations -------------------------------------------------------- */
 
+  /** Runs a change to one record under its lock, counted as a mutation so a full scan waits for it. */
+  private mutate<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    return this.idLocks.run(id, async () => {
+      const done = await this.beginMutation();
+      try {
+        return await fn();
+      } finally {
+        done();
+      }
+    });
+  }
+
   /** Writes a new record (sidecar fsynced, then the journal line). */
   async addRecord(record: AssetRecord): Promise<AssetRecord> {
     const clean = scrubRecord(record);
-    return this.idLocks.run(clean.id, async () => {
+    return this.mutate(clean.id, async () => {
       await fs.mkdir(this.layout.assets, { recursive: true });
       await this.writeSidecar(clean, true);
       this.upsertIndex(clean);
@@ -826,7 +879,7 @@ export class AssetLibrary {
     id: string,
     mutate: (record: AssetRecord) => AssetRecord,
   ): Promise<{ record: AssetRecord | null; line?: string }> {
-    return this.idLocks.run(id, async () => {
+    return this.mutate(id, async () => {
       const current = await this.readSidecar(id);
       if (!current) {
         this.removeFromIndex(id);
@@ -932,7 +985,7 @@ export class AssetLibrary {
     const errors: AssetBulkResult["errors"] = [];
     const lines: string[] = [];
     await mapConcurrent([...new Set(ids.filter(isAssetId))], 8, (id) =>
-      this.idLocks.run(id, async () => {
+      this.mutate(id, async () => {
         try {
           const record = await this.readSidecar(id);
           if (!record) {

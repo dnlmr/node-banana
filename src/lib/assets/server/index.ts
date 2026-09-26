@@ -92,7 +92,7 @@ export interface ServedFile {
 
 const RUNTIME_VERSION = 1;
 const HOSTED_REASON = "The asset library needs Node Banana running on your own computer.";
-/** How often a healthy location is re-probed (a drive can be unplugged). */
+/** How often a healthy location is checked for its data folder (a drive can be unplugged). */
 const RECHECK_OK_MS = 60_000;
 /** How often an unavailable location is retried (a drive can be plugged back in). */
 const RECHECK_FAILED_MS = 10_000;
@@ -196,7 +196,12 @@ async function activeLocation(rt: Runtime): Promise<LocationResult> {
   const state = rt.resolved;
   if (state && state.key === key) {
     const age = now - state.checkedAt;
-    const fresh = state.result.ok ? age < RECHECK_OK_MS : age < RECHECK_FAILED_MS;
+    let fresh = state.result.ok ? true : age < RECHECK_FAILED_MS;
+    if (state.result.ok && age >= RECHECK_OK_MS) {
+      // A cheap look rather than a write probe, so a synced folder doesn't churn.
+      fresh = (await fileStamp(path.join(state.result.location.root, ".nodebanana"))) !== "absent";
+      if (fresh) state.checkedAt = now;
+    }
     if (fresh) {
       if (now - state.stampAt < CONFIG_STAMP_MS) return state.result;
       const stamp = await fileStamp(state.result.location?.configFile);
@@ -548,7 +553,9 @@ export async function getThumbnail(sha256: string, width: 320 | 640): Promise<Se
   if (!isSha256(sha256)) return null;
   const rt = runtime();
   try {
-    await readyLibrary();
+    // Tiles don't need the journal replayed first; the thumbnail is keyed by content.
+    const { library } = await availableLibrary(rt);
+    await library.ensureLoaded();
   } catch {
     return null;
   }
