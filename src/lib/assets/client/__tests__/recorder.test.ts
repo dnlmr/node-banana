@@ -507,6 +507,57 @@ describe("recordAsset", () => {
     expect(checks).toBeLessThanOrEqual(10);
   });
 
+  it("says when a library move holds a recording up, and still records it once the move ends", async () => {
+    vi.useFakeTimers();
+    let refusals = 3;
+    fakeLibrary({
+      route: (call) =>
+        call.url === "/api/assets" && refusals-- > 0
+          ? jsonResponse({ error: "The library is being moved.", code: "paused" }, { status: 503, headers: { "Retry-After": "5" } })
+          : undefined,
+    });
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
+    let held = false;
+    void handle.held.then(() => (held = true));
+    await vi.advanceTimersByTimeAsync(10);
+    // A project run can save to its own folder now rather than wait out the move
+    expect(held).toBe(true);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(handle.done).resolves.not.toBeNull();
+  });
+
+  it("says when the library is gone for now, at once for a recording made while it is known to be", async () => {
+    vi.useFakeTimers();
+    const reason = "The library folder is not reachable.";
+    fakeLibrary({
+      status: libraryStatus({ available: false, reason, reasonCode: "unavailable" }),
+      route: (call) => (call.url === "/api/assets" ? jsonResponse({ error: reason, code: "unavailable" }, { status: 503 }) : undefined),
+    });
+    const first = recorder.recordAsset(input(dataUrlOf("A")), RUN);
+    let firstHeld = false;
+    void first.held.then(() => (firstHeld = true));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(firstHeld).toBe(true);
+
+    const second = recorder.recordAsset(input(dataUrlOf("B")), RUN);
+    let secondHeld = false;
+    void second.held.then(() => (secondHeld = true));
+    await Promise.resolve();
+    expect(secondHeld).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(Promise.all([first.done, second.done])).resolves.toEqual([null, null]);
+  });
+
+  it("does not say a recording that goes straight through was held up", async () => {
+    fakeLibrary();
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
+    let held = false;
+    void handle.held.then(() => (held = true));
+    await expect(handle.done).resolves.not.toBeNull();
+    await settleAll();
+    expect(held).toBe(false);
+  });
+
   it("stops waiting for a move once the status says the library is gone", async () => {
     vi.useFakeTimers();
     const errors: string[] = [];

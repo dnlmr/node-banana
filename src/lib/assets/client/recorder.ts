@@ -19,7 +19,9 @@
  *   reported once through `onRecorderError`. One answer that the library is
  *   gone is not enough to drop the bytes (a disk remounting after sleep is
  *   back within seconds): the write backs off and tries again, and only a
- *   library that is off for good (hosted, guard) fails it at once.
+ *   library that is off for good (hosted, guard) fails it at once. The
+ *   handle's `held` says when the library holds a recording up (a move, an
+ *   outage), so a project run can save to its own folder rather than wait.
  * - `beginRun()` / `endRun()` bracket a run. The start graph is held by
  *   reference and only encoded/uploaded when the run records its first
  *   asset. `endRun(id, graph)` writes the final snapshot if the run recorded
@@ -272,18 +274,27 @@ function libraryGoneForNow(fallback: unknown): AssetApiError {
  * longer than any fixed budget. The bytes are already held, so the write
  * keeps waiting, checking the status every few minutes, and gives up only
  * when the status says the library is no longer available.
+ *
+ * `onHeld` hears whenever the library makes the write wait (a pause, or a
+ * library gone for now), so a caller with a folder of its own can save there
+ * rather than wait with it.
  */
-function retry<T>(task: (attempt: number) => Promise<T>): Promise<T> {
+function retry<T>(task: (attempt: number) => Promise<T>, onHeld?: () => void): Promise<T> {
   return withRetry(
     async (attempt) => {
       if (offForGood()) throw libraryOff();
+      if (knownUnavailable()) onHeld?.();
       let result: T;
       try {
         result = await task(attempt);
       } catch (error) {
         if (mayMeanLibraryGone(error)) {
           const status = await recheckStatus();
-          if (status && !status.available) throw offForGood(status) ? libraryOff(error) : libraryGoneForNow(error);
+          if (status && !status.available) {
+            if (offForGood(status)) throw libraryOff(error);
+            onHeld?.();
+            throw libraryGoneForNow(error);
+          }
         }
         throw error;
       }
@@ -293,6 +304,7 @@ function retry<T>(task: (attempt: number) => Promise<T>): Promise<T> {
     },
     {
       pausedBudgetMs: PAUSED_CHECK_MS,
+      onPaused: onHeld,
       keepWaiting: async () => {
         const status = await recheckStatus();
         // Unreachable is not "gone": the server may be restarting mid-move.
@@ -393,7 +405,7 @@ function resultFromView(asset: AssetView): RecordAssetResult {
   return { asset, filename: asset.filename, legacyId: asset.filename.replace(/\.[^.]+$/, ""), reusedFile: false };
 }
 
-async function upload(meta: RecordAssetMeta, media: TakenMedia): Promise<RecordAssetResult> {
+async function upload(meta: RecordAssetMeta, media: TakenMedia, onHeld: () => void): Promise<RecordAssetResult> {
   const blob = media.kind === "bytes" ? await media.blob : null;
   if (blob && !meta.mime && blob.type) meta.mime = blob.type;
   return retry(async (attempt) => {
@@ -413,7 +425,7 @@ async function upload(meta: RecordAssetMeta, media: TakenMedia): Promise<RecordA
       }
       throw error;
     }
-  });
+  }, onHeld);
 }
 
 /* Queue --------------------------------------------------------------- */
@@ -552,28 +564,47 @@ export function endRun(runId: string, graph: CapturedGraph | null): void {
 
 /* Recording ----------------------------------------------------------- */
 
-export function recordAsset(input: RecordAssetInput, run: AssetRunContext): RecordedAssetHandle {
+/** What `recordAsset` hands back: the contract's handle, and word of the library holding it up. */
+export interface RecordingHandle extends RecordedAssetHandle {
+  /**
+   * Resolves once the library makes this recording wait: a move pauses its
+   * writes, or the library is gone for now. The recording carries on and
+   * `done` still settles, but a caller with a folder of its own need not wait
+   * with it. Never rejects; stays pending for a recording that goes through.
+   */
+  held: Promise<void>;
+}
+
+/** For a recording that settled at once: nothing will hold it up. */
+const NOT_HELD = new Promise<void>(() => {});
+
+export function recordAsset(input: RecordAssetInput, run: AssetRunContext): RecordingHandle {
   const assetId = newAssetId();
   // Known to be off for now is not off for good: the write tries, and backs off
-  if (offForGood()) return { assetId, done: Promise.resolve(null) };
+  if (offForGood()) return { assetId, done: Promise.resolve(null), held: NOT_HELD };
 
   let media: TakenMedia;
   try {
     media = takeMedia(input);
   } catch (error) {
     reportError(error);
-    return { assetId, done: Promise.resolve(null) };
+    return { assetId, done: Promise.resolve(null), held: NOT_HELD };
   }
 
   const meta = buildMeta(assetId, input, run, media.mime);
   const state = runs.get(run.runId);
   if (state) state.pending += 1;
 
+  let hold!: () => void;
+  const held = new Promise<void>((resolve) => (hold = resolve));
+  // Queued behind other recordings, it would not hear so until its turn
+  if (knownUnavailable()) hold();
+
   const done = new Promise<RecordAssetResult | null>((resolve) => {
     queue.push(async () => {
       let result: RecordAssetResult | null = null;
       try {
-        result = await upload(meta, media);
+        result = await upload(meta, media, hold);
       } catch (error) {
         reportError(error);
       }
@@ -589,7 +620,7 @@ export function recordAsset(input: RecordAssetInput, run: AssetRunContext): Reco
     });
     pump();
   });
-  return { assetId, done };
+  return { assetId, done, held };
 }
 
 /** Recordings queued or uploading, plus snapshot writes (for beforeunload). */
