@@ -203,6 +203,25 @@ describe("LibrarySettingsTab", () => {
       expect(screen.getByRole("progressbar", { name: "Moving the library" })).toBeInTheDocument();
     });
 
+    it("reads the status again when a small move ends before the answer arrives", async () => {
+      mockBrowse({ success: true, path: NEW_ROOT });
+      api.setLibraryRoot.mockResolvedValue(
+        makeStatus({ job: makeJob({ id: "move-3", type: "move", state: "done", done: 3, total: 3, finishedAt: 2 }) })
+      );
+      await renderTab();
+      api.fetchLibraryStatus.mockResolvedValue(makeStatus({ root: NEW_ROOT, source: "config" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move my library there/ }));
+      await flush();
+
+      expect(screen.getByText("Moving the library")).toBeInTheDocument();
+      expect(screen.getByText("Done")).toBeInTheDocument();
+      expect(screen.getByText(NEW_ROOT)).toBeInTheDocument();
+      expect(api.fetchJob).not.toHaveBeenCalled();
+    });
+
     it("switches to the folder as it is and says the old library stays", async () => {
       mockBrowse({ success: true, path: NEW_ROOT });
       api.setLibraryRoot.mockResolvedValue(makeStatus({ root: NEW_ROOT, source: "config" }));

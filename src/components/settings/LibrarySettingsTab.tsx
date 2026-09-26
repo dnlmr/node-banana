@@ -420,7 +420,13 @@ export function LibrarySettingsTab() {
     try {
       const next = await setLibraryRoot({ root: pendingRoot, mode });
       setStatus(next);
-      if (next.job) setJob(next.job);
+      if (mode === "move" && next.job) {
+        setJob(next.job);
+        // A small library can finish moving before the answer arrives
+        if (next.job.state !== "running") void refresh();
+      } else if (next.job?.state === "running") {
+        setJob(next.job);
+      }
       setPendingRoot(null);
       if (mode === "switch") {
         setFeedback({

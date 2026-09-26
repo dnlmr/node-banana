@@ -142,7 +142,7 @@ export function Toast() {
           </button>
         </div>
         {actions && (
-          // Under the message, from the text's own left edge (px-4 + 20px icon + gap-3)
+          // Under the message, the labels on its left edge: px-4 + 20px icon + gap-3, less the buttons' own 6px
           <div className="-mt-1.5 flex shrink-0 flex-wrap items-center gap-1 pb-2.5 pl-[42px] pr-4">
             {actions.map((action) => (
               <button
