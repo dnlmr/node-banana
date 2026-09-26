@@ -866,10 +866,14 @@ export class AssetLibrary {
 
     let page: AssetRecord[];
     let nextCursor: string | null = null;
+    let headCursor = matched.length ? encodeCursor(matched[0]) : null;
     if (request.newerThan) {
       // New arrivals, nearest the client's head first so they join up with what it holds.
       const end = indexAtOrAfter(matched, decodeCursor(request.newerThan), compare);
-      page = matched.slice(Math.max(0, end - limit), end);
+      const start = Math.max(0, end - limit);
+      page = matched.slice(start, end);
+      // More arrived than fit: the head is the newest item returned, so the next poll continues from there.
+      if (start > 0 && page.length) headCursor = encodeCursor(page[0]);
     } else {
       const start = request.cursor ? indexAfter(matched, decodeCursor(request.cursor), compare) : 0;
       page = matched.slice(start, start + limit);
@@ -879,7 +883,7 @@ export class AssetLibrary {
     return {
       assets: page.map((record) => this.toView(record)),
       nextCursor,
-      headCursor: matched.length ? encodeCursor(matched[0]) : null,
+      headCursor,
       total: matched.length,
       totalBytes,
     };

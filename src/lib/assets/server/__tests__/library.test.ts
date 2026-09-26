@@ -134,6 +134,24 @@ describe("queries", () => {
     expect((await listAssets({ newerThan: arrivals.headCursor! })).assets).toEqual([]);
   });
 
+  it("hands out more arrivals than fit one poll over several, newest last, with no gap", async () => {
+    const head = (await listAssets({ limit: 1 })).headCursor!;
+    const arrived: string[] = [];
+    for (let i = 1; i <= 5; i++) arrived.push((await record({ createdAt: T0 + 10 * HOUR + i })).asset.id);
+    const seen: string[] = [];
+    let cursor = head;
+    for (let poll = 0; poll < 5; poll++) {
+      const page = await listAssets({ newerThan: cursor, limit: 2 });
+      if (!page.assets.length) break;
+      seen.push(...page.assets.map((asset) => asset.id));
+      // The head moves to the newest item returned, never past what the client holds.
+      expect(page.headCursor).not.toBeNull();
+      cursor = page.headCursor!;
+    }
+    expect(seen.sort()).toEqual([...arrived].sort());
+    expect((await listAssets({ newerThan: cursor, limit: 2 })).assets).toEqual([]);
+  });
+
   it("pages oldest-first too", async () => {
     const first = await listAssets({ sort: "oldest", limit: 3 });
     expect(first.assets.map((x) => x.id)).toEqual([a, b, c].map((r) => r.asset.id));
