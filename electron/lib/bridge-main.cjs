@@ -20,7 +20,7 @@ function createServerMessageHandler({ shell, dialog, fs, getWindow, log = () => 
     const window = getWindow();
     const options = { title: pickerTitle(title), properties: ['openDirectory', 'createDirectory'] };
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
-    return { cancelled: result.canceled, path: result.filePaths?.[0] || null };
+    return { cancelled: result.canceled === true, path: result.filePaths?.[0] || null };
   }
 
   // An absolute path with no parent-directory segments, or nothing.
@@ -36,7 +36,7 @@ function createServerMessageHandler({ shell, dialog, fs, getWindow, log = () => 
     switch (request?.type) {
       case 'reveal': {
         const file = target(payload);
-        if (!file) return fail('Show in folder needs the full path of a file.');
+        if (!file) return fail('Show in folder needs a full path.');
         if (!fs.existsSync(file)) return fail('That file is no longer on disk.');
         shell.showItemInFolder(file);
         return { ok: true };

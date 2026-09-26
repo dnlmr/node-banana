@@ -111,7 +111,7 @@ test('main reveals existing paths only', () => withTemp(async temp => {
   const refused = async payload => (await handle({ type: 'bridge', id: 3, request: { type: 'reveal', payload } })).result;
   assert.deepEqual(await refused({ path: path.join(temp, 'gone.png') }), { ok: false, error: 'That file is no longer on disk.' });
   for (const payload of [{ path: 'image.png' }, { path: `${temp}${path.sep}..${path.sep}${path.basename(temp)}${path.sep}image.png` }, { path: `${file}\0` }, { path: '' }, { path: 42 }, {}, null]) {
-    assert.deepEqual(await refused(payload), { ok: false, error: 'Show in folder needs the full path of a file.' });
+    assert.deepEqual(await refused(payload), { ok: false, error: 'Show in folder needs a full path.' });
   }
   assert.equal(calls.shown.length, 2);
 }));
@@ -183,7 +183,7 @@ test('the server client and main agree on the wire protocol', () => withTemp(asy
   assert.deepEqual(await bridge.request('trash', { path: file }), { ok: true });
   assert.deepEqual(await bridge.request('choose-directory', { title: LIBRARY_PICKER_TITLE }), { ok: true, value: { cancelled: false, path: '/picked' } });
   assert.deepEqual(await bridge.pickDirectory({ title: LIBRARY_PICKER_TITLE }).result, { success: true, cancelled: false, path: '/picked' });
-  assert.deepEqual(await bridge.request('reveal', { path: 'relative.png' }), { ok: false, error: 'Show in folder needs the full path of a file.' });
+  assert.deepEqual(await bridge.request('reveal', { path: 'relative.png' }), { ok: false, error: 'Show in folder needs a full path.' });
   assert.deepEqual(calls.shown, [file]);
   assert.deepEqual(calls.trashed, [file]);
   assert.deepEqual(calls.dialogs.map(args => args[1].title), [LIBRARY_PICKER_TITLE, LIBRARY_PICKER_TITLE]);
