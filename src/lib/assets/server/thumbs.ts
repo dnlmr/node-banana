@@ -16,7 +16,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { THUMB_WIDTHS, type AssetRecord } from "../types";
-import { LibraryError } from "./errors";
+import { errnoCode, LibraryError } from "./errors";
 import { atomicWriteFile, mapConcurrent, Semaphore, unlinkWithRetry } from "./fsutil";
 import type { AssetLibrary } from "./library";
 import { sniffFamily } from "./media";
@@ -59,6 +59,15 @@ export interface ServedThumb {
 
 export function isThumbWidth(value: number): value is ThumbWidth {
   return (THUMB_WIDTHS as readonly number[]).includes(value);
+}
+
+/**
+ * A failure of the decoder itself — the bytes — as opposed to the file
+ * system (an errno code: ENOENT, EACCES, EMFILE…), memory, or time.
+ */
+export function isDecodeError(error: unknown): boolean {
+  if (!(error instanceof Error) || errnoCode(error)) return false;
+  return !/time(d)?\s?out|memory|cancel|abort|EMFILE|ENOENT|EACCES|EBUSY/i.test(error.message);
 }
 
 export class Thumbnailer {

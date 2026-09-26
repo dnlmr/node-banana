@@ -301,6 +301,13 @@ describe("new arrivals", () => {
     useAssetStore.getState().receiveArrivals([asset("a3", { createdAt: T0 + 3 })]);
     expect(ids()).toEqual(["a3", "a2", "a1"]);
   });
+
+  it("never take a recorder result whose file is unreadable (the server never lists it)", () => {
+    useAssetStore.getState().receiveArrivals([asset("u1", { createdAt: T0 + 7, unreadable: true })]);
+    expect(ids()).toEqual(["a2", "a1"]);
+    expect(matchesAssetQuery(asset("u1", { unreadable: true }), {})).toBe(false);
+    expect(matchesAssetQuery(asset("u1", { unreadable: true, trashedAt: 1 }), { scope: "trash" })).toBe(false);
+  });
 });
 
 describe("selection", () => {

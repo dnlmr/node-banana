@@ -7,6 +7,9 @@
  * goes. URL sources are downloaded the same way. Then, serialised per
  * SHA-256: reuse a file with the same bytes in the destination if there is
  * one, else rename the partial into place; measure it; write the sidecar.
+ * Bytes nothing can open (readable.ts) are still written and recorded — a
+ * recording is never refused or lost for that — but the record is marked
+ * `unreadable`, so it is not listed.
  *
  * Every recording gets its own record under the client-minted id — records
  * are never collapsed, only bytes are shared.
@@ -37,6 +40,7 @@ import {
 } from "./fsutil";
 import { relFromPath, type AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, type ProbeResult } from "./media";
+import { isUnreadableFile } from "./readable";
 import type { Thumbnailer } from "./thumbs";
 import {
   libraryFileName,
@@ -347,6 +351,11 @@ export class Ingestor {
             : { root: "library", rel: relFromPath(library.root, absolute) };
         measured = await this.measure(type.kind, ext, absolute, streamed.head);
       }
+      // Bytes nothing can open are still kept, file and record, but not listed. Reused bytes have
+      // their answer already.
+      const unreadable = reusable?.source
+        ? reusable.source.unreadable === true
+        : await isUnreadableFile(absolute, type, measured);
 
       const record: AssetRecord = withoutUndefined({
         v: 1,
@@ -379,6 +388,7 @@ export class Ingestor {
         runId: meta.runId,
         tags: meta.tags ?? [],
         favorite: false,
+        ...(unreadable ? { unreadable: true as const } : {}),
       } satisfies AssetRecord);
 
       let saved: AssetRecord;

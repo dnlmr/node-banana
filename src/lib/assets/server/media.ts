@@ -7,6 +7,7 @@
 import { promises as fs } from "fs";
 import type { AssetKind } from "../types";
 import { sniffFamily } from "@/utils/mediaSniff";
+import { errnoCode } from "./errors";
 import { defaultMediaType, mediaTypeForExt, mediaTypeForMime, type MediaType } from "./validate";
 
 /* ------------------------------------------------------------------ */
@@ -275,6 +276,45 @@ export async function probeAudioVideo(
     return await Promise.race([work, timeout]);
   } catch {
     return {};
+  } finally {
+    clearTimeout(timer);
+    try {
+      input?.dispose();
+    } catch {
+      // Already disposed.
+    }
+  }
+}
+
+/**
+ * Whether mediabunny knows the container at all. `unreadable` only when it
+ * read the bytes and no format it has can open them; a file it could not
+ * read (missing, locked, offline), a probe that ran out of time, or any
+ * other failure is `unknown`. The input is always disposed. Never throws.
+ */
+export async function probeContainer(
+  file: string,
+  timeoutMs: number = PROBE_TIMEOUT_MS,
+): Promise<"readable" | "unreadable" | "unknown"> {
+  let input: import("mediabunny").Input | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const { Input, ALL_FORMATS, FilePathSource } = await import("mediabunny");
+    const created = new Input({ source: new FilePathSource(file), formats: ALL_FORMATS });
+    input = created;
+    const work = created.getFormat().then(
+      () => "readable" as const,
+      (error: unknown) =>
+        error instanceof Error && !errnoCode(error) && /unsupported or unrecognizable format/i.test(error.message)
+          ? ("unreadable" as const)
+          : ("unknown" as const),
+    );
+    const timeout = new Promise<"unknown">((resolve) => {
+      timer = setTimeout(() => resolve("unknown"), timeoutMs);
+    });
+    return await Promise.race([work, timeout]);
+  } catch {
+    return "unknown";
   } finally {
     clearTimeout(timer);
     try {

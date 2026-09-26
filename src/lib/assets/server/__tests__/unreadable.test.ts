@@ -1,0 +1,234 @@
+// @vitest-environment node
+/**
+ * Files no decoder can read are kept but never shown.
+ *
+ * The damaged files are the ones older save routes wrote: a data URL with an
+ * empty (or octet-stream) media type was base64-decoded whole, header
+ * included, so every byte after it was shifted. They are made here exactly
+ * that way.
+ */
+import fs from "fs";
+import path from "path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { AssetKind, RecordAssetMeta, RecordAssetResult } from "../../types";
+import {
+  __resetAssetLibraryForTests,
+  assetExistence,
+  beginRecord,
+  bulkAssets,
+  completeUpload,
+  getAsset,
+  getFacets,
+  getLibraryStatus,
+  getThumbnail,
+  listAssets,
+  patchAsset,
+} from "../index";
+import { assessReadable } from "../readable";
+import { isDecodeError, loadSharp } from "../thumbs";
+import { installBridge, makePng, makeWav, meta, streamOf, tempDir, TINY_MP4 } from "./helpers";
+
+/** A file as the old save routes wrote it: the whole data URL decoded as base64. */
+function damage(bytes: Buffer, mime = ""): Buffer {
+  return Buffer.from(`data:${mime};base64,` + bytes.toString("base64"), "base64");
+}
+
+const png = makePng(8, 6, 3);
+const damagedPng = damage(png);
+const damagedOctetPng = damage(png, "application/octet-stream");
+const damagedMp4 = damage(TINY_MP4);
+const damagedWav = damage(makeWav());
+
+/** Small valid files of every format the library keeps, whose sizes the pure-JS readers find. */
+const jpeg = Buffer.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+  0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x03, 0x00, 0x04, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
+  0xff, 0xd9,
+]);
+const gif = Buffer.concat([Buffer.from("GIF89a", "latin1"), Buffer.from([4, 0, 3, 0, 0, 0, 0]), Buffer.from(";", "latin1")]);
+const webp = (() => {
+  const buffer = Buffer.alloc(30);
+  buffer.write("RIFF", 0, "latin1");
+  buffer.writeUInt32LE(22, 4);
+  buffer.write("WEBPVP8X", 8, "latin1");
+  buffer.writeUInt32LE(10, 16);
+  buffer.writeUIntLE(3, 24, 3);
+  buffer.writeUIntLE(2, 27, 3);
+  return buffer;
+})();
+const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3"><rect width="4" height="3"/></svg>');
+const glb = Buffer.concat([Buffer.from("glTF", "latin1"), Buffer.from([2, 0, 0, 0, 12, 0, 0, 0])]);
+
+let hasSharp = false;
+beforeAll(async () => {
+  hasSharp = (await loadSharp()) !== null;
+});
+
+let base: string;
+let root: string;
+let bridge: ReturnType<typeof installBridge>;
+
+beforeEach(async () => {
+  base = tempDir();
+  root = path.join(base, "Library");
+  process.env.NODE_BANANA_ASSET_LIBRARY = root;
+  bridge = installBridge(path.join(base, "OS Trash"));
+  await __resetAssetLibraryForTests();
+});
+
+afterEach(async () => {
+  await __resetAssetLibraryForTests();
+  bridge.remove();
+  delete process.env.NODE_BANANA_ASSET_LIBRARY;
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+function write(name: string, bytes: Buffer): string {
+  const file = path.join(base, "files", name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, bytes);
+  return file;
+}
+
+async function record(buffer: Buffer, overrides: Partial<RecordAssetMeta> = {}, contentType: string | null = "image/png"): Promise<RecordAssetResult> {
+  const started = await beginRecord({ meta: meta(overrides), source: { type: "upload" } });
+  if ("result" in started) return started.result;
+  return completeUpload(started.ticket.uploadId, streamOf(buffer), contentType);
+}
+
+const listedIds = async (scope?: "library" | "trash" | "missing") => (await listAssets(scope ? { scope } : {})).assets.map((asset) => asset.id);
+
+describe("assessReadable", () => {
+  it("never calls a valid PNG, JPEG, WebP, GIF, SVG, MP4, WAV or GLB unreadable", async () => {
+    const cases: [string, Buffer, AssetKind][] = [
+      ["a.png", png, "image"],
+      ["a.jpg", jpeg, "image"],
+      ["a.webp", webp, "image"],
+      ["a.gif", gif, "image"],
+      ["a.svg", svg, "image"],
+      ["a.mp4", TINY_MP4, "video"],
+      ["a.m4a", TINY_MP4, "audio"],
+      ["a.wav", makeWav(), "audio"],
+      ["a.glb", glb, "3d"],
+    ];
+    for (const [name, bytes, kind] of cases) {
+      expect([name, await assessReadable(write(name, bytes), kind)]).toEqual([name, "readable"]);
+    }
+  });
+
+  it("never calls sharp-made JPEG, WebP and GIF unreadable", async () => {
+    if (!hasSharp) return;
+    const sharp = (await loadSharp())!;
+    const image = () => sharp({ create: { width: 30, height: 20, channels: 3, background: "#227744" } });
+    for (const [name, bytes] of [
+      ["s.jpg", await image().jpeg().toBuffer()],
+      ["s.webp", await image().webp().toBuffer()],
+      ["s.gif", await image().gif().toBuffer()],
+      ["s.png", await image().png().toBuffer()],
+    ] as const) {
+      expect([name, await assessReadable(write(name, bytes), "image")]).toEqual([name, "readable"]);
+    }
+  });
+
+  it("calls a PNG decoded together with its data: header unreadable", async () => {
+    if (!hasSharp) return;
+    expect(await assessReadable(write("d1.png", damagedPng), "image")).toBe("unreadable");
+    expect(await assessReadable(write("d2.png", damagedOctetPng), "image")).toBe("unreadable");
+  });
+
+  it("calls video and audio decoded together with their data: header unreadable", async () => {
+    expect(await assessReadable(write("d.mp4", damagedMp4), "video")).toBe("unreadable");
+    expect(await assessReadable(write("d.wav", damagedWav), "audio")).toBe("unreadable");
+  });
+
+  it("answers unknown, never unreadable, when it can't be sure", async () => {
+    // Not there (or offline): can't tell.
+    expect(await assessReadable(path.join(base, "nowhere.png"), "image")).toBe("unknown");
+    // A format the first bytes name, even one it can't measure or doesn't keep.
+    const heic = Buffer.alloc(32);
+    heic.writeUInt32BE(24, 0);
+    heic.write("ftypheic", 4, "latin1");
+    expect(await assessReadable(write("h.heic", heic), "image")).not.toBe("unreadable");
+    const bmp = Buffer.concat([Buffer.from("BM", "latin1"), Buffer.alloc(60)]);
+    expect(await assessReadable(write("b.png", bmp), "image")).not.toBe("unreadable");
+    // 3D is never judged.
+    expect(await assessReadable(write("m.glb", damagedPng), "3d")).toBe("readable");
+    // An empty file is nothing at all.
+    expect(await assessReadable(write("e.png", Buffer.alloc(0)), "image")).toBe("unreadable");
+  });
+});
+
+describe("isDecodeError", () => {
+  it("is the decoder refusing the bytes, not the file system, memory or time", () => {
+    expect(isDecodeError(new Error("Input buffer contains unsupported image format"))).toBe(true);
+    expect(isDecodeError(Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }))).toBe(false);
+    expect(isDecodeError(Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" }))).toBe(false);
+    expect(isDecodeError(new Error("timeout: 10% complete"))).toBe(false);
+    expect(isDecodeError(new Error("Timed out"))).toBe(false);
+    expect(isDecodeError(new Error("out of memory"))).toBe(false);
+    expect(isDecodeError("not an error")).toBe(false);
+  });
+});
+
+describe("live recordings", () => {
+  it("keep an unreadable file and its record, but never list it", async () => {
+    if (!hasSharp) return;
+    const good = await record(makePng(4, 4, 1));
+    const { headCursor } = await listAssets({});
+    const bad = await record(damagedPng, { createdAt: Date.now() + 1000 });
+
+    // Nothing is lost: the bytes are on disk as they came, with a record.
+    expect(bad.asset.unreadable).toBe(true);
+    expect(fs.readFileSync(bad.asset.displayPath).equals(damagedPng)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "assets", `${bad.asset.id}.json`), "utf8"))).toMatchObject({
+      unreadable: true,
+    });
+    expect(good.asset.unreadable).toBeUndefined();
+
+    // Not listed, in any scope, nor as a new arrival.
+    expect(await listedIds()).toEqual([good.asset.id]);
+    expect((await listAssets({ newerThan: headCursor! })).assets).toEqual([]);
+    await patchAsset(bad.asset.id, { trashed: true });
+    expect(await listedIds("trash")).toEqual([]);
+    await patchAsset(bad.asset.id, { trashed: false });
+
+    // Not counted.
+    const facets = await getFacets();
+    expect(facets).toMatchObject({ total: 1, trash: 0, kinds: { image: 1 } });
+    expect((await getLibraryStatus()).counts).toEqual({ assets: 1, trashed: 0, bytes: good.asset.bytes });
+
+    // Not caught up in "select all".
+    const bulk = await bulkAssets({ selection: { mode: "query", query: {}, excludeIds: [] }, op: { action: "favorite" } });
+    expect(bulk.ids).toEqual([good.asset.id]);
+
+    // Whoever holds its id still gets it.
+    expect((await getAsset(bad.asset.id))?.unreadable).toBe(true);
+    expect(await assetExistence([bad.asset.id])).toEqual({ [bad.asset.id]: "present" });
+    // And no thumbnail is attempted for it.
+    expect(await getThumbnail(bad.asset.sha256, 320)).toBeNull();
+  });
+
+  it("keep and hide unreadable video and audio (declared with no type, or octet-stream)", async () => {
+    const video = await record(damagedMp4, { kind: "video" }, null);
+    const audio = await record(damagedWav, { kind: "audio" }, "application/octet-stream");
+    expect(video.asset.unreadable).toBe(true);
+    expect(audio.asset.unreadable).toBe(true);
+    expect(fs.readFileSync(video.asset.displayPath).equals(damagedMp4)).toBe(true);
+    expect(await listedIds()).toEqual([]);
+  });
+
+  it("never mark valid PNG, JPEG, WebP, GIF, SVG, MP4, WAV or GLB", async () => {
+    const results = [
+      await record(png),
+      await record(jpeg, {}, "image/jpeg"),
+      await record(webp, {}, "image/webp"),
+      await record(gif, {}, "image/gif"),
+      await record(svg, {}, "image/svg+xml"),
+      await record(TINY_MP4, { kind: "video" }, "video/mp4"),
+      await record(makeWav(), { kind: "audio" }, "audio/wav"),
+      await record(glb, { kind: "3d" }, "model/gltf-binary"),
+    ];
+    expect(results.map((result) => result.asset.unreadable)).toEqual(results.map(() => undefined));
+    expect((await listAssets({})).total).toBe(results.length);
+  });
+});

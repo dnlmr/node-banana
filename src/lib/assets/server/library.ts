@@ -212,6 +212,8 @@ export function parseRecord(value: unknown, expectedId: string, root: string, ra
     favorite: raw.favorite === true,
   };
   if (optionalNumber(raw.trashedAt) === undefined) delete record.trashedAt;
+  if (raw.unreadable === true) record.unreadable = true;
+  else delete record.unreadable;
   for (const key of ["width", "height", "durationSec"] as const) {
     if (optionalNumber(raw[key]) === undefined) delete record[key];
   }
@@ -223,6 +225,7 @@ function sameMutableState(a: AssetRecord, b: AssetRecord): boolean {
     a.favorite === b.favorite &&
     a.trashedAt === b.trashedAt &&
     a.hasPoster === b.hasPoster &&
+    a.unreadable === b.unreadable &&
     a.tags.length === b.tags.length &&
     a.tags.every((tag, index) => tag === b.tags[index])
   );
@@ -355,7 +358,7 @@ export class AssetLibrary {
    * records use — their run, their file, their poster — is unknown until
    * they read, so nothing is deleted on the strength of the index alone.
    */
-  private unreadable = new Set<string>();
+  private unreadableSidecars = new Set<string>();
   private unreadableCheckedAt = 0;
   /** The last file check per record; `unknown` when it failed for a reason other than "no such file". */
   private missing = new Map<string, { missing: boolean; unknown?: boolean; at: number }>();
@@ -437,7 +440,7 @@ export class AssetLibrary {
       try {
         await this.replayJournal();
         if (await this.workflowTable.refresh()) this.bump();
-        if (this.unreadable.size && this.now() - this.unreadableCheckedAt >= UNREADABLE_RECHECK_MS) await this.hasUnreadable();
+        if (this.unreadableSidecars.size && this.now() - this.unreadableCheckedAt >= UNREADABLE_RECHECK_MS) await this.hasUnreadable();
       } finally {
         this.refreshPromise = null;
       }
@@ -631,7 +634,7 @@ export class AssetLibrary {
     }
     this.sorted = [...this.records.values()].sort(compareNewest);
     this.tombstones = tombstones;
-    this.unreadable = unreadable;
+    this.unreadableSidecars = unreadable;
     this.unreadableCheckedAt = this.now();
     for (const id of this.missing.keys()) if (!this.records.has(id)) this.missing.delete(id);
     this.journalOffset = complete.length;
@@ -710,7 +713,7 @@ export class AssetLibrary {
         this.removeFromIndex(id);
         this.tombstones.add(id);
         this.missing.delete(id);
-        this.unreadable.delete(id);
+        this.unreadableSidecars.delete(id);
       } else {
         puts.push(id);
       }
@@ -724,7 +727,7 @@ export class AssetLibrary {
         } catch (error) {
           // Unreadable for now: keep the copy we hold.
           console.warn("[assets] could not read sidecar", id, error);
-          if (!this.records.has(id)) this.unreadable.add(id);
+          if (!this.records.has(id)) this.unreadableSidecars.add(id);
         }
       }),
     );
@@ -853,7 +856,7 @@ export class AssetLibrary {
     this.sorted.splice(indexAtOrAfter(this.sorted, record, compareNewest), 0, record);
     this.searchCache.delete(record.id);
     this.tombstones.delete(record.id);
-    this.unreadable.delete(record.id);
+    this.unreadableSidecars.delete(record.id);
     this.bump();
   }
 
@@ -888,7 +891,7 @@ export class AssetLibrary {
       text = await withFsRetry(() => fs.readFile(this.sidecarPath(id), "utf8"));
     } catch (error) {
       if (!isAbsent(error)) throw error;
-      this.unreadable.delete(id);
+      this.unreadableSidecars.delete(id);
       return null;
     }
     let record: AssetRecord | null = null;
@@ -898,19 +901,20 @@ export class AssetLibrary {
       record = null;
     }
     // Read at last: either nothing to know (no valid record) or its caller indexes it.
-    if (!record) this.unreadable.delete(id);
+    if (!record) this.unreadableSidecars.delete(id);
     return record;
   }
 
   /**
    * Reads again the sidecars the index could not read. True while any still
    * can't be: until then a run, a shared file or a poster may belong to a
-   * record the index doesn't know, so cleanup and deletes keep them.
+   * record the index doesn't know, so cleanup and deletes keep them. (About
+   * sidecars; a record whose media file is `unreadable` is held like any other.)
    */
   async hasUnreadable(): Promise<boolean> {
-    if (!this.unreadable.size) return false;
+    if (!this.unreadableSidecars.size) return false;
     this.unreadableCheckedAt = this.now();
-    await mapConcurrent([...this.unreadable], 8, (id) =>
+    await mapConcurrent([...this.unreadableSidecars], 8, (id) =>
       this.idLocks.run(id, async () => {
         try {
           const record = await this.readSidecar(id);
@@ -920,7 +924,7 @@ export class AssetLibrary {
         }
       }),
     );
-    return this.unreadable.size > 0;
+    return this.unreadableSidecars.size > 0;
   }
 
   /** Whether a sidecar exists for `id` (true when that can't be told, so nothing is thrown away on a guess). */
@@ -1158,7 +1162,7 @@ export class AssetLibrary {
     return this.facetsCache.facets;
   }
 
-  /** Live and trashed counts, and the bytes of distinct files (deduplicated files count once). */
+  /** Live and trashed counts, and the bytes of distinct files (deduplicated files count once), of what the Assets view can show. */
   stats(): { assets: number; trashed: number; bytes: number } {
     if (this.statsCache?.revision !== this.revision) {
       let assets = 0;
@@ -1166,6 +1170,7 @@ export class AssetLibrary {
       let bytes = 0;
       const files = new Set<string>();
       for (const record of this.sorted) {
+        if (record.unreadable) continue;
         if (record.trashedAt === undefined) assets++;
         else trashed++;
         const file = this.filePath(record);
@@ -1343,6 +1348,28 @@ export class AssetLibrary {
     const { record, line } = await this.updateRecord(id, (current) => ({ ...current, hasPoster: true }));
     if (line) await this.publish([line]);
     return record;
+  }
+
+  /**
+   * Marks records whose file's bytes nothing can read (see readable.ts): the
+   * sidecar says `unreadable`, then a journal line tells other processes.
+   * The record and its file are kept; it just isn't listed any more. Returns
+   * the ids now marked.
+   */
+  async markUnreadable(ids: readonly string[]): Promise<string[]> {
+    const marked: string[] = [];
+    const lines: string[] = [];
+    await mapConcurrent([...new Set(ids.filter(isAssetId))], 8, async (id) => {
+      try {
+        const { record, line } = await this.updateRecord(id, (current) => ({ ...current, unreadable: true }));
+        if (record?.unreadable) marked.push(id);
+        if (line) lines.push(line);
+      } catch (error) {
+        console.warn("[assets] could not mark", id, "as unreadable", error);
+      }
+    });
+    await this.publish(lines);
+    return marked;
   }
 
   /** The ids a selection covers right now (a query selection is evaluated at call time). */

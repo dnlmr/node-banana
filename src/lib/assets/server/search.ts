@@ -117,7 +117,7 @@ export function recordSearchText(record: AssetRecord): string {
 /**
  * A predicate for a query: AND across groups, OR within one. The scope
  * decides trashed vs live, and `missing` narrows live records to those whose
- * file was last found absent.
+ * file was last found absent. No scope matches an `unreadable` record.
  */
 export function compileQuery(query: AssetQuery, ctx: QueryContext): (record: AssetRecord) => boolean {
   const scope = query.scope ?? "library";
@@ -134,6 +134,7 @@ export function compileQuery(query: AssetQuery, ctx: QueryContext): (record: Ass
   const to = typeof query.to === "number" ? query.to : null;
 
   return (record) => {
+    if (record.unreadable) return false;
     if (scope === "trash") {
       if (record.trashedAt === undefined) return false;
     } else {
@@ -179,8 +180,9 @@ export function projectName(projectPath: string): string {
 
 /**
  * Counts for the filter rail, over live assets (trash only contributes its
- * own count). `records` is in newest-first order, so the first spelling seen
- * of a model label or workflow name is the most recent.
+ * own count; `unreadable` records nothing). `records` is in newest-first
+ * order, so the first spelling seen of a model label or workflow name is the
+ * most recent.
  */
 export function computeFacets(records: Iterable<AssetRecord>, ctx: QueryContext): AssetFacets {
   const facets: AssetFacets = {
@@ -201,6 +203,7 @@ export function computeFacets(records: Iterable<AssetRecord>, ctx: QueryContext)
   const projects = new Map<string, AssetFacets["projects"][number]>();
 
   for (const record of records) {
+    if (record.unreadable) continue;
     if (record.trashedAt !== undefined) {
       facets.trash++;
       continue;

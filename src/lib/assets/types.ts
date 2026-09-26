@@ -122,6 +122,12 @@ export interface AssetRecord {
   hasPoster?: boolean;
   /** The asset came from "Import existing projects" rather than a live run (no run snapshot). */
   imported?: boolean;
+  /**
+   * The file's bytes are not a readable image/video/audio file; the record is
+   * kept but never listed. Set only when nothing can read them (no format in
+   * the first bytes, and sharp or mediabunny can't open them either).
+   */
+  unreadable?: true;
 }
 
 /** PUT /api/assets/workflows/[id] body. */
@@ -163,7 +169,7 @@ export interface AssetView extends AssetRecord {
 /* ------------------------------------------------------------------ */
 
 export type AssetSort = "newest" | "oldest";
-/** Which slice of the library: live assets, the in-app Trash, or live assets whose file is missing. */
+/** Which slice of the library: live assets, the in-app Trash, or live assets whose file is missing. No scope lists an `unreadable` record. */
 export type AssetScope = "library" | "trash" | "missing";
 
 /**
@@ -210,6 +216,7 @@ export interface AssetPage {
   totalBytes: number;
 }
 
+/** Counts over the records the Assets view can show (never an `unreadable` one). */
 export interface AssetFacets {
   /** Live (not trashed) assets. */
   total: number;
@@ -407,6 +414,7 @@ export interface LibraryStatus {
   platform: string;
   /** The root is inside a cloud-synced folder. */
   synced: "onedrive" | "icloud" | "dropbox" | null;
+  /** What the Assets view can show: `unreadable` records are not counted. */
   counts: { assets: number; trashed: number; bytes: number };
   /** The library's first scan outlasted the request: `counts` are provisional zeros, so ask again shortly. */
   counting?: boolean;
