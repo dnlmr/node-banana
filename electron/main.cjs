@@ -14,6 +14,7 @@ const { visibleBounds } = require('./lib/window-state.cjs');
 const { pickHostEnvironment } = require('./lib/env.cjs');
 const { libraryEnv } = require('./lib/library.cjs');
 const { createServerMessageHandler } = require('./lib/bridge-main.cjs');
+const { UNLOAD_PROMPT } = require('./lib/unload-prompt.cjs');
 let root = path.resolve(__dirname, '..');
 let runtime, backend, window, credentialStore, recoveryStore, diagnostics;
 let quitting = false, rendererCrashed = false, starting;
@@ -130,7 +131,7 @@ async function createWindow() {
   });
   current.webContents.on('will-attach-webview', event => event.preventDefault());
   current.webContents.on('will-prevent-unload', event => {
-    const choice = dialog.showMessageBoxSync(current, { type: 'question', buttons: ['Keep editing', 'Discard and close'], defaultId: 0, cancelId: 0, message: 'Close without saving your workflows?' });
+    const choice = dialog.showMessageBoxSync(current, { ...UNLOAD_PROMPT, buttons: [...UNLOAD_PROMPT.buttons] });
     if (choice === 1) {
       try { recoveryStore.markClean(true); event.preventDefault(); } catch (error) { log(error); quitting = false; }
     } else quitting = false;
