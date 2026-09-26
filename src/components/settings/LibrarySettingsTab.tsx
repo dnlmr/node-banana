@@ -52,6 +52,8 @@ import { cn } from "@/components/nodes/ui/cn";
 
 /** How often a running library job is polled. */
 export const JOB_POLL_MS = 1000;
+/** How often the status is read again while the library is still counting its assets. */
+export const COUNT_POLL_MS = 2000;
 /** Consecutive failed polls before the page stops following a job. */
 const MAX_POLL_FAILURES = 10;
 
@@ -187,14 +189,15 @@ function LibraryNotice({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+/** A count, or null while the library is still counting (its zeros are not real yet). */
+function Stat({ label, value }: { label: string; value: string | null }) {
   return (
     <div className="min-w-0">
       <dt>
         <DialogEyebrow>{label}</DialogEyebrow>
       </dt>
       <dd className="mt-1 font-display text-xl leading-6 font-semibold tracking-[-0.02em] text-neutral-100 tabular-nums truncate">
-        {value}
+        {value ?? <span className="font-sans text-sm font-normal tracking-normal text-ink-3">Counting…</span>}
       </dd>
     </div>
   );
@@ -307,6 +310,24 @@ export function LibrarySettingsTab() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // A big library's first scan outlasts the status request, whose counts are
+  // then provisional zeros: read again until the real ones are in.
+  const counting = status?.available === true && status.counting === true;
+  useEffect(() => {
+    if (!counting) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      await refresh();
+      if (!stopped) timer = setTimeout(tick, COUNT_POLL_MS);
+    };
+    timer = setTimeout(tick, COUNT_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [counting, refresh]);
 
   // Follow a running job once a second; refresh the counts when it ends.
   const runningJobId = job?.state === "running" ? job.id : null;
@@ -516,6 +537,13 @@ export function LibrarySettingsTab() {
   );
 
   const assetCount = status.counts.assets;
+  // The server refuses to move a library it cannot read; while it is still
+  // counting, the move is offered without numbers that are not real yet.
+  const moveDescription = !status.available
+    ? "The current library isn't available, so there is nothing to move."
+    : counting
+      ? "Copies your library there, checks every file, then removes them from the current folder. Project folders stay where they are."
+      : `Copies your ${assetCount.toLocaleString()} ${assetCount === 1 ? "asset" : "assets"} (${formatBytes(status.counts.bytes)}) there, checks every file, then removes them from the current folder. Project folders stay where they are.`;
 
   return (
     <div onKeyDown={keepEnter}>
@@ -593,10 +621,17 @@ export function LibrarySettingsTab() {
 
       {status.available && (
         <>
-          <dl aria-label="Library contents" className="grid grid-cols-3 gap-4 py-3.5 border-t border-card">
-            <Stat label={assetCount === 1 ? "Asset" : "Assets"} value={assetCount.toLocaleString()} />
-            <Stat label="Size" value={formatBytes(status.counts.bytes)} />
-            <Stat label="In Trash" value={status.counts.trashed.toLocaleString()} />
+          <dl
+            aria-label="Library contents"
+            aria-busy={counting || undefined}
+            className="grid grid-cols-3 gap-4 py-3.5 border-t border-card"
+          >
+            <Stat
+              label={assetCount === 1 && !counting ? "Asset" : "Assets"}
+              value={counting ? null : assetCount.toLocaleString()}
+            />
+            <Stat label="Size" value={counting ? null : formatBytes(status.counts.bytes)} />
+            <Stat label="In Trash" value={counting ? null : status.counts.trashed.toLocaleString()} />
           </dl>
 
           <DialogRow
@@ -712,14 +747,12 @@ export function LibrarySettingsTab() {
             type="button"
             className={cn(dialogCardClass, "px-3.5 py-3 disabled:opacity-50 disabled:cursor-not-allowed")}
             onClick={() => void applyRoot("move")}
-            disabled={applying !== null}
+            disabled={applying !== null || !status.available}
           >
             <span className="block font-display text-sm leading-[18px] font-semibold tracking-[-0.01em] text-neutral-100">
               {applying === "move" ? "Starting the move…" : "Move my library there"}
             </span>
-            <span className="mt-0.5 block text-xs leading-4 text-ink-3">
-              {`Copies your ${assetCount.toLocaleString()} ${assetCount === 1 ? "asset" : "assets"} (${formatBytes(status.counts.bytes)}) there, checks every file, then removes them from the current folder. Project folders stay where they are.`}
-            </span>
+            <span className="mt-0.5 block text-xs leading-4 text-ink-3">{moveDescription}</span>
           </button>
           <button
             type="button"
