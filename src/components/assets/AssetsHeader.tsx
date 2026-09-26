@@ -33,6 +33,7 @@ const JOB_VERBS: Record<LibraryJobStatus["type"], string> = {
   import: "Importing",
   move: "Moving library",
   cleanup: "Cleaning up",
+  repair: "Repairing files",
 };
 
 /** A running library job: what, how far, and Cancel. */

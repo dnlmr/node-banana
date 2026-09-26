@@ -75,6 +75,7 @@ const JOB_LABELS: Record<LibraryJobType, string> = {
   import: "Importing generations",
   cleanup: "Cleaning up",
   export: "Exporting",
+  repair: "Repairing damaged files",
 };
 
 const JOB_STATES: Record<Exclude<LibraryJobStatus["state"], "running">, { label: string; tone: "ok" | "error" | "neutral" }> = {
