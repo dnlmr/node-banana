@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon, ChevronDownIcon, HistoryIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, HistoryIcon, SquarePenIcon, XIcon, SparklesIcon } from "lucide-react";
 import { cn } from "@/components/agent/lib/utils";
 import {
   DropdownMenu,
@@ -18,6 +18,8 @@ import { HarnessIcon } from "./HarnessIcon";
 export interface AgentPanelHeaderProps {
   harness: AgentHarnessId;
   readiness: Record<AgentHarnessId, AgentReadiness>;
+  /** No harness chosen yet (first open, checking or the chooser): the trigger reads "Agent". */
+  neutral?: boolean;
   /** Switching harness or model is locked while a turn runs. */
   switchDisabled: boolean;
   onHarnessChange: (harness: AgentHarnessId) => void;
@@ -81,6 +83,7 @@ function RowCheck({ checked }: { checked: boolean }) {
 
 export function AgentPanelHeader({
   harness,
+  neutral = false,
   readiness,
   switchDisabled,
   onHarnessChange,
@@ -94,8 +97,8 @@ export function AgentPanelHeader({
   onClose,
 }: AgentPanelHeaderProps) {
   const modelLabel = models.find((option) => option.id === model)?.label;
-  const issue = hasIssue(readiness[harness]);
-  const triggerLabel = [HARNESS_LABELS[harness], modelLabel].filter(Boolean).join(", ");
+  const issue = !neutral && hasIssue(readiness[harness]);
+  const triggerLabel = neutral ? "Agent" : [HARNESS_LABELS[harness], modelLabel].filter(Boolean).join(", ");
 
   return (
     <div className="flex h-10 shrink-0 items-center gap-2 border-b fade-rule px-1.5">
@@ -108,10 +111,14 @@ export function AgentPanelHeader({
             "focus-visible:ring-2 focus-visible:ring-selection",
           )}
         >
-          <HarnessIcon harness={harness} />
-          <span className="shrink-0 font-semibold text-neutral-100">{HARNESS_LABELS[harness]}</span>
+          {neutral ? (
+            <SparklesIcon className="size-4 shrink-0 text-neutral-400" {...AGENT_ICON} />
+          ) : (
+            <HarnessIcon harness={harness} />
+          )}
+          <span className="shrink-0 font-semibold text-neutral-100">{neutral ? "Agent" : HARNESS_LABELS[harness]}</span>
           {issue && <StatusDot tone="blocked" />}
-          {modelLabel && <span className="truncate text-neutral-400">{modelLabel}</span>}
+          {!neutral && modelLabel && <span className="truncate text-neutral-400">{modelLabel}</span>}
           <ChevronDownIcon className="size-4 shrink-0 text-neutral-400" {...AGENT_ICON} />
         </DropdownMenuTrigger>
         <DropdownMenuContent

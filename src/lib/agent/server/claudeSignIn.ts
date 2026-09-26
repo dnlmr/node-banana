@@ -194,12 +194,18 @@ export class ClaudeSignIn {
     };
   }
 
-  /** Stop a running attempt (e.g. on server shutdown). */
-  cancel(): void {
+  /**
+   * Stop a running attempt: kill the CLI and forget the attempt, so the status
+   * reads idle rather than failed (the person asked for this; it is not an
+   * error to report). Returns whether one was running.
+   */
+  cancel(): boolean {
     const attempt = this.attempt;
-    if (attempt?.state !== "pending") return;
+    if (attempt?.state !== "pending") return false;
     attempt.process?.kill("SIGTERM");
     this.finish(attempt, "failed", "Sign-in was cancelled.");
+    this.attempt = null;
+    return true;
   }
 
   private finish(attempt: SignInAttempt, state: "succeeded" | "failed", error?: string): void {

@@ -36,7 +36,7 @@ vi.mock("@/utils/logger", () => ({
 
 const { POST: chatPOST } = await import("../chat/route");
 const { GET: statusGET } = await import("../status/route");
-const { POST: signInPOST } = await import("../sign-in/route");
+const { POST: signInPOST, DELETE: signInDELETE } = await import("../sign-in/route");
 const { AGENT_CHAT_MAX_BODY_BYTES, AGENT_SIGN_IN_MAX_BODY_BYTES } = await import("../shared");
 
 const LABELS: Record<AgentHarnessId, string> = { claude: "Claude Code", codex: "Codex" };
@@ -62,6 +62,7 @@ function fakeHarness(id: AgentHarnessId, events: HarnessEvent[] = []) {
     label: LABELS[id],
     getStatus: vi.fn(async () => status(id)),
     startSignIn: vi.fn(async (): Promise<AgentSignInStart> => ({ state: "pending", message: "Finish signing in in your browser." })),
+    cancelSignIn: vi.fn(async () => {}),
     async *runTurn(params) {
       turns.push(params);
       for (const event of events) yield event;
@@ -160,6 +161,10 @@ function endlessBody(chunkBytes = 64 * 1024) {
     },
   });
   return { stream, seen };
+}
+
+function del(path: string, body: unknown, headers: Record<string, string> = SAME_ORIGIN) {
+  return new NextRequest(`http://localhost:3000${path}`, { method: "DELETE", headers, body: JSON.stringify(body) });
 }
 
 function postStream(path: string, stream: ReadableStream<Uint8Array>) {
@@ -578,5 +583,24 @@ describe("POST /api/agent/sign-in", () => {
     expect(response.status).toBe(403);
     expect((await response.json()).state).toBe("failed");
     expect(getHarness).not.toHaveBeenCalled();
+  });
+});
+
+describe("DELETE /api/agent/sign-in", () => {
+  it("cancels the harness's running sign-in", async () => {
+    const { harness } = fakeHarness("claude");
+    getHarness.mockReturnValue(harness);
+    const response = await signInDELETE(del("/api/agent/sign-in", { harness: "claude" }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ cancelled: true });
+    expect(harness.cancelSignIn).toHaveBeenCalledOnce();
+  });
+
+  it("refuses an unknown harness and a cross-site request", async () => {
+    const { harness } = fakeHarness("claude");
+    getHarness.mockReturnValue(harness);
+    expect((await signInDELETE(del("/api/agent/sign-in", { harness: "gemini" }))).status).toBe(400);
+    expect((await signInDELETE(del("/api/agent/sign-in", { harness: "claude" }, { ...SAME_ORIGIN, origin: "https://evil.example" }))).status).toBe(403);
+    expect(harness.cancelSignIn).not.toHaveBeenCalled();
   });
 });

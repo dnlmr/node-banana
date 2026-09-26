@@ -109,6 +109,7 @@ describe("useAgentSettings", () => {
 
     expect(result.current.settings).toEqual({
       harness: "codex",
+      harnessChosen: true,
       models: { codex: "gpt-5.6-luna", claude: "haiku" },
       efforts: { claude: "max" },
     });

@@ -29,6 +29,7 @@ import {
 } from "@/lib/agent/client/readiness";
 import { findLatestAgentSession } from "@/lib/agent/client/session";
 import { resolveAgentEffort, resolveAgentModel } from "@/lib/agent/client/settings";
+import { decideFirstOpen } from "@/lib/agent/client/readiness";
 import { useAgentSettings } from "@/lib/agent/client/useAgentSettings";
 import { useAgentStatus } from "@/lib/agent/client/useAgentStatus";
 import { useAgentHistory } from "@/lib/agent/client/useAgentHistory";
@@ -44,7 +45,8 @@ import { AgentComposer, type AgentComposerProps } from "./AgentComposer";
 import { AgentHistory } from "./AgentHistory";
 import { AgentBillingNote, AgentConversation, AgentEmptyState } from "./AgentConversation";
 import { AgentPanelHeader } from "./AgentPanelHeader";
-import { AgentAlreadySignedInHint, AgentSignInCard, type AgentBlockedReadiness } from "./AgentSignInCard";
+import { AgentAlreadySignedInHint, AgentSignInCard, AgentSignedInBanner, type AgentBlockedReadiness } from "./AgentSignInCard";
+import { AgentChooserCard, type AgentChooserAction } from "./AgentChooserCard";
 import { useAgentCanvasView } from "./hooks/useAgentCanvasView";
 import { useAgentShimmer } from "./hooks/useAgentShimmer";
 import { useAgentChat } from "./hooks/useAgentChat";
@@ -99,6 +101,30 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
   const current = readiness[harness];
   const ready = current.kind === "ready";
 
+  // First open: nobody has picked a harness yet. One with a paid subscription
+  // wins (the saved one when both have one); with none, the chooser.
+  const firstOpen = !settings.harnessChosen;
+  const firstOpenDecision = firstOpen ? decideFirstOpen(readiness, harness) : null;
+  useEffect(() => {
+    if (firstOpenDecision?.kind === "open" && firstOpenDecision.harness !== harness) {
+      setHarness(firstOpenDecision.harness, { chosen: false });
+    }
+  }, [firstOpenDecision, harness, setHarness]);
+  const mode: "checking" | "chooser" | "harness" =
+    firstOpenDecision?.kind === "checking" ? "checking" : firstOpenDecision?.kind === "choose" ? "chooser" : "harness";
+
+  // Once, right after a sign-in lands: who is in, on what.
+  const [signedInBanner, setSignedInBanner] = useState<AgentHarnessId | null>(null);
+  const previousKinds = useRef<Partial<Record<AgentHarnessId, AgentReadiness["kind"]>>>({});
+  useEffect(() => {
+    for (const id of AGENT_HARNESS_IDS) {
+      const was = previousKinds.current[id];
+      const now = readiness[id].kind;
+      if (now === "ready" && (was === "signing_in" || was === "sign_in_failed")) setSignedInBanner(id);
+      previousKinds.current[id] = now;
+    }
+  }, [readiness]);
+
   // Poll only the harness the user is signing in to, only while it is pending.
   const pollTarget = shouldPollReadiness(current) ? harness : null;
   useEffect(() => setPollHarness(pollTarget), [pollTarget]);
@@ -108,11 +134,23 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
   const checkAgain = useCallback(async () => {
     setChecking(true);
     try {
-      await refreshStatus(harness);
+      // On the chooser, both harnesses are on the table.
+      await refreshStatus(mode === "harness" ? harness : undefined);
     } finally {
       setChecking(false);
     }
-  }, [refreshStatus, harness]);
+  }, [refreshStatus, harness, mode]);
+  const cancelSignIn = useCallback(async () => {
+    await signIn.cancel(harness);
+    await refreshStatus(harness);
+  }, [signIn, harness, refreshStatus]);
+  // When the running flow started: the panel's own request, else when the status first said so.
+  const signingSince = useRef<Partial<Record<AgentHarnessId, number>>>({});
+  for (const id of AGENT_HARNESS_IDS) {
+    if (readiness[id].kind === "signing_in") signingSince.current[id] ??= Date.now();
+    else delete signingSince.current[id];
+  }
+  const signInStartedAt = signIn.attempts[harness]?.startedAt ?? signingSince.current[harness];
 
   const models = status.statuses[harness]?.models ?? [];
   const model = resolveAgentModel(models, settings.models[harness]);
@@ -195,6 +233,7 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
     async (target: AgentHarnessId, noticeCode?: AgentErrorCode) => {
       // A notice's "Sign in" may name the other harness: switch to it first.
       if (target !== harness && !busy) setHarness(target);
+      setSignedInBanner(null);
       setAlreadySignedIn(null);
       // After a turn the vendor rejected, the CLI's own status may still read
       // signed in: force the vendor's sign-in rather than be told it's fine.
@@ -353,10 +392,19 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
         variant={variant}
         startingSignIn={signIn.starting === harness}
         checking={checking}
+        signInStartedAt={signInStartedAt}
         onSignIn={() => void startSignIn(harness)}
         onCheckAgain={() => void checkAgain()}
+        onCancelSignIn={() => void cancelSignIn()}
       />
     );
+  const pickHarness = useCallback(
+    (target: AgentHarnessId, action: AgentChooserAction) => {
+      setHarness(target, { chosen: true });
+      if (action === "sign_in") void startSignIn(target);
+    },
+    [setHarness, startSignIn],
+  );
 
   let body;
   if (historyOpen) {
@@ -382,14 +430,37 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
         onSignIn={(target, noticeCode) => void startSignIn(target, noticeCode)}
       />
     );
+  } else if (mode === "checking") {
+    body = (
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <AgentSignInCard harness={harness} readiness={{ kind: "loading" }} eyebrow="Agent" onSignIn={() => {}} onCheckAgain={() => {}} />
+      </div>
+    );
+  } else if (mode === "chooser") {
+    body = (
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <AgentChooserCard readiness={readiness} onPick={pickHarness} onCheckAgain={() => void checkAgain()} checking={checking} />
+      </div>
+    );
   } else {
     body = (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {ready ? (
-          <AgentEmptyState
-            suggestions={agentSuggestions(canvasHasNodes)}
-            onSuggestion={sendSuggestion}
-          />
+          <>
+            {signedInBanner === harness && (
+              <AgentSignedInBanner
+                harness={harness}
+                email={status.statuses[harness]?.account?.email}
+                plan={status.statuses[harness]?.account?.plan}
+                model={modelOption?.label}
+                onDismiss={() => setSignedInBanner(null)}
+              />
+            )}
+            <AgentEmptyState
+              suggestions={agentSuggestions(canvasHasNodes)}
+              onSuggestion={sendSuggestion}
+            />
+          </>
         ) : (
           signInCard("full")
         )}
@@ -434,6 +505,7 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
       >
         <AgentPanelHeader
           harness={harness}
+          neutral={mode !== "harness"}
           readiness={readiness}
           switchDisabled={busy}
           onHarnessChange={setHarness}
@@ -447,7 +519,7 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
           onClose={close}
         />
         {body}
-        {!historyOpen && !hasMessages && ready && <AgentBillingNote harness={harness} />}
+        {!historyOpen && !hasMessages && ready && mode === "harness" && <AgentBillingNote harness={harness} />}
         {alreadySignedIn?.harness === harness && (
           <div className="shrink-0 px-4 pb-3">
             <AgentAlreadySignedInHint
@@ -461,7 +533,7 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
             />
           </div>
         )}
-        {historyOpen ? null : ready || busy ? (
+        {historyOpen || mode !== "harness" ? null : ready || busy ? (
           <AgentComposer
             status={chat.status}
             busy={busy}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { startAgentSignIn } from "@/lib/agent/client/api";
+import { cancelAgentSignIn, startAgentSignIn } from "@/lib/agent/client/api";
 import { HARNESS_CLI_OPENS_BROWSER, type AgentSignInAttempt } from "@/lib/agent/client/readiness";
 import { safeExternalUrl } from "@/lib/agent/client/request";
 import type { AgentHarnessId, AgentSignInOptions } from "@/lib/agent/types";
@@ -13,6 +13,8 @@ export interface UseAgentSignInResult {
   starting: AgentHarnessId | null;
   /** `force`: after a turn the vendor rejected, when the CLI's own status may still read signed in. */
   start: (harness: AgentHarnessId, options?: AgentSignInOptions) => Promise<AgentSignInAttempt>;
+  /** Stop the running flow (DELETE /api/agent/sign-in) and forget the attempt. */
+  cancel: (harness: AgentHarnessId) => Promise<void>;
 }
 
 /**
@@ -48,5 +50,14 @@ export function useAgentSignIn(): UseAgentSignInResult {
     return attempt;
   }, []);
 
-  return { attempts, starting, start };
+  const cancel = useCallback(async (harness: AgentHarnessId) => {
+    await cancelAgentSignIn(harness);
+    setAttempts((previous) => {
+      const next = { ...previous };
+      delete next[harness];
+      return next;
+    });
+  }, []);
+
+  return { attempts, starting, start, cancel };
 }

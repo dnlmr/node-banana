@@ -857,6 +857,10 @@ export function createClaudeHarness(overrides: Partial<ClaudeHarnessDeps> = {}):
     label: LABEL,
     getStatus: () => getStatus(),
     startSignIn: (options?: AgentSignInOptions) => startSignIn(options),
+    cancelSignIn: async () => {
+      deps.signIn.cancel();
+      cached = null;
+    },
     runTurn,
   };
 }

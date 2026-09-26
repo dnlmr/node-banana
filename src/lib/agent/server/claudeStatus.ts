@@ -96,10 +96,10 @@ function effortFields(row: ClaudeModelInfo): Pick<AgentModelOption, "efforts" | 
 export const CLAUDE_SIGN_IN_COMMAND = "claude auth login";
 
 const SIGNED_OUT_PROBLEM =
-  "Claude Code isn't signed in. Sign in with your Claude Pro or Max account to use the agent.";
+  "Claude Code isn't signed in. Sign in with your paid Claude subscription to use the agent.";
 
 const NO_PLAN_PROBLEM =
-  "Claude Code is signed in, but no Claude Pro or Max plan was found on the account. " +
+  "Claude Code is signed in, but no paid Claude subscription was found on the account. " +
   "The agent runs only on a Claude subscription.";
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -114,14 +114,14 @@ const PROVIDER_NAMES: Record<string, string> = {
 function providerProblem(provider: string): string {
   if (provider === "gateway") {
     return (
-      "Claude Code is set up to sign in through an enterprise gateway, which isn't a Claude " +
-      "Pro or Max subscription. The agent runs only on a Claude subscription."
+      "Claude Code is set up to sign in through an enterprise gateway, which isn't a paid Claude " +
+      "subscription. The agent runs only on a Claude subscription."
     );
   }
   const name = PROVIDER_NAMES[provider] ?? provider;
   return (
     `Claude Code is set up to use ${name}, which bills that cloud account rather than a Claude ` +
-    "subscription. Turn that off in Claude Code's settings and sign in with your Claude Pro or Max account."
+    "subscription. Turn that off in Claude Code's settings and sign in with your paid Claude subscription."
   );
 }
 
@@ -130,29 +130,29 @@ function apiKeyProblem(source: string): string {
     case "/login managed key":
       return (
         "Claude Code is signed in with an Anthropic Console account, which bills API credits. " +
-        "Sign in with your Claude Pro or Max account instead."
+        "Sign in with your paid Claude subscription instead."
       );
     case "ANTHROPIC_API_KEY":
       return (
         "Claude Code would use an Anthropic API key (ANTHROPIC_API_KEY), which bills API credits. " +
-        "Remove it and sign in with your Claude Pro or Max account."
+        "Remove it and sign in with your paid Claude subscription."
       );
     case "apiKeyHelper":
       return (
         "Claude Code is configured to get an API key from an apiKeyHelper, which bills API credits. " +
-        "Remove the helper from Claude Code's settings and sign in with your Claude Pro or Max account."
+        "Remove the helper from Claude Code's settings and sign in with your paid Claude subscription."
       );
     default:
       return (
         `Claude Code would use an API key (${source}), which bills API credits. ` +
-        "Sign in with your Claude Pro or Max account instead."
+        "Sign in with your paid Claude subscription instead."
       );
   }
 }
 
 const BEARER_TOKEN_PROBLEM =
   "Claude Code is using a bearer token from its settings (such as ANTHROPIC_AUTH_TOKEN or a " +
-  "federation profile), which isn't a Claude Pro or Max login. Remove it and sign in with your Claude account.";
+  "federation profile), which isn't a paid Claude subscription login. Remove it and sign in with your Claude account.";
 
 /** "max" → "Max", "Claude Max" → "Max". */
 export function formatClaudePlan(subscriptionType: string | null | undefined): string | undefined {
@@ -198,7 +198,7 @@ export function classifyClaudeAuthStatus(raw: unknown, context: ClaudeBillingCon
         billing: "api",
         problem:
           "Your organization's Claude Code settings only allow Anthropic Console sign-in, which bills " +
-          "API credits. The agent runs only on a Claude Pro or Max subscription.",
+          "API credits. The agent runs only on a paid Claude subscription.",
       };
     }
     return { signedIn: false, billing: "none", problem: SIGNED_OUT_PROBLEM };

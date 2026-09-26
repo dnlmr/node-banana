@@ -76,3 +76,18 @@ export async function startAgentSignIn(
   }
   return { state: "failed", message: `Couldn't start sign-in: ${await describeFailure(fallback)}` };
 }
+
+/** Stop a running sign-in (`DELETE /api/agent/sign-in`). Resolves once the server has answered; never throws on a refusal. */
+export async function cancelAgentSignIn(harness: AgentHarnessId): Promise<boolean> {
+  try {
+    const response = await fetch(AGENT_SIGN_IN_API, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ harness }),
+    });
+    const body = (await response.json().catch(() => null)) as { cancelled?: boolean } | null;
+    return Boolean(body?.cancelled);
+  } catch {
+    return false;
+  }
+}

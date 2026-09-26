@@ -12,6 +12,12 @@ export const AGENT_SETTINGS_KEY = "node-banana-agent-settings";
 
 export interface AgentClientSettings {
   harness: AgentHarnessId;
+  /**
+   * The person picked `harness` themselves (header menu or the first-open
+   * chooser). Until then the panel may open on whichever harness has a paid
+   * subscription, and shows the chooser when none does.
+   */
+  harnessChosen?: boolean;
   /** The model last picked per harness. Absent means the harness default. */
   models: Partial<Record<AgentHarnessId, string>>;
   /** The thinking effort last picked per harness; kept across models, used where the model offers it. */
@@ -34,6 +40,7 @@ export function sanitizeAgentSettings(raw: unknown): AgentClientSettings {
   const record = raw as Record<string, unknown>;
   return {
     harness: isAgentHarnessId(record.harness) ? record.harness : DEFAULT_AGENT_SETTINGS.harness,
+    ...(record.harnessChosen === true ? { harnessChosen: true } : {}),
     models: perHarness(record.models),
     efforts: perHarness(record.efforts),
   };

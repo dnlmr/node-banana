@@ -6,7 +6,8 @@ import { loadAgentSettings, saveAgentSettings, type AgentClientSettings } from "
 
 export interface UseAgentSettingsResult {
   settings: AgentClientSettings;
-  setHarness: (harness: AgentHarnessId) => void;
+  /** `chosen` (default true): the person picked it; false when the panel opened on it by itself. */
+  setHarness: (harness: AgentHarnessId, options?: { chosen?: boolean }) => void;
   setModel: (harness: AgentHarnessId, model: string) => void;
   setEffort: (harness: AgentHarnessId, effort: string) => void;
 }
@@ -25,8 +26,13 @@ export function useAgentSettings(): UseAgentSettingsResult {
     saveAgentSettings(settings);
   }, [settings]);
 
-  const setHarness = useCallback((harness: AgentHarnessId) => {
-    setSettings((previous) => (previous.harness === harness ? previous : { ...previous, harness }));
+  const setHarness = useCallback((harness: AgentHarnessId, options: { chosen?: boolean } = {}) => {
+    const chosen = options.chosen ?? true;
+    setSettings((previous) =>
+      previous.harness === harness && Boolean(previous.harnessChosen) === (chosen || Boolean(previous.harnessChosen))
+        ? previous
+        : { ...previous, harness, harnessChosen: chosen || Boolean(previous.harnessChosen) },
+    );
   }, []);
 
   const setModel = useCallback((harness: AgentHarnessId, model: string) => {

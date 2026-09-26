@@ -133,7 +133,7 @@ describe("classifyClaudeAuthStatus", () => {
       NO_OAUTH_ENV,
     );
     expect(verdict.billing).toBe("unknown");
-    expect(verdict.problem).toMatch(/no Claude Pro or Max plan/);
+    expect(verdict.problem).toMatch(/no paid Claude subscription/);
   });
 
   it("refuses when organization policy forces Console sign-in", () => {

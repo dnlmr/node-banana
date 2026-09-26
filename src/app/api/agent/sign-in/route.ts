@@ -10,6 +10,10 @@
  *
  * Every answer, errors included, is an `AgentSignInStart`, so the panel can
  * read `state` and `message` whatever the HTTP status.
+ *
+ * `DELETE /api/agent/sign-in {harness}` stops a running flow: the CLI is
+ * killed (or its login cancelled) and the status reads idle again. Answers
+ * `{ cancelled: true }`.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -33,6 +37,38 @@ export const dynamic = "force-dynamic";
 
 function failed(message: string, status: number): NextResponse<AgentSignInStart> {
   return NextResponse.json<AgentSignInStart>({ state: "failed", message }, { status });
+}
+
+export interface AgentSignInCancelResponse {
+  cancelled: boolean;
+  error?: string;
+}
+
+export async function DELETE(request: NextRequest) {
+  const origin = checkSameOrigin(request);
+  if (!origin.ok) {
+    logger.warn("api.llm", "Agent sign-in cancel blocked", { reason: origin.reason });
+    return NextResponse.json<AgentSignInCancelResponse>({ cancelled: false, error: origin.reason }, { status: 403 });
+  }
+  const read = await readJsonBody(request, AGENT_SIGN_IN_MAX_BODY_BYTES);
+  const fields = read.ok && typeof read.value === "object" && read.value !== null && !Array.isArray(read.value)
+    ? (read.value as Record<string, unknown>)
+    : {};
+  const harnessId = fields.harness;
+  if (!isAgentHarnessId(harnessId)) {
+    return NextResponse.json<AgentSignInCancelResponse>(
+      { cancelled: false, error: `Invalid request: ${unknownHarnessMessage(harnessId)}` },
+      { status: 400 }
+    );
+  }
+  try {
+    await getHarness(harnessId).cancelSignIn();
+    logger.info("api.llm", "Agent sign-in cancelled", { harness: harnessId });
+    return NextResponse.json<AgentSignInCancelResponse>({ cancelled: true });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return NextResponse.json<AgentSignInCancelResponse>({ cancelled: false, error: reason }, { status: 500 });
+  }
 }
 
 export async function POST(request: NextRequest) {
