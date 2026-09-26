@@ -67,6 +67,21 @@ export function downloadAsset(asset: Pick<AssetView, "id" | "filename">) {
   clickDownload(api.assetFileUrl(asset.id, true), asset.filename);
 }
 
+/** The zip's name, dated by the user's own calendar (not UTC's, which is a day off half the day in some zones). */
+export function zipFileName(now: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `Node Banana assets ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.zip`;
+}
+
+/**
+ * Zip entry times in local wall-clock time: JSZip writes the DOS date/time
+ * fields from the UTC parts of the date it is given, and unzip tools read
+ * them as local time.
+ */
+function zipEntryDate(now: Date = new Date()): Date {
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+}
+
 /** Whether the browser may zip this much. */
 export function canZip(count: number, bytes: number): boolean {
   return count > 0 && count <= ZIP_MAX_FILES && bytes <= ZIP_MAX_BYTES;
@@ -87,16 +102,17 @@ export async function downloadZip(assets: Pick<AssetView, "id" | "filename" | "b
   try {
     const zip = new JSZip();
     const used = new Set<string>();
+    const date = zipEntryDate();
     for (const asset of assets) {
       let name = asset.filename;
       for (let n = 2; used.has(name.toLowerCase()); n++) name = asset.filename.replace(/(\.[^.]*)?$/, ` ${n}$1`);
       used.add(name.toLowerCase());
       // Stored, not deflated: the media is already compressed
-      zip.file(name, await api.fetchAssetBlob(asset.id), { compression: "STORE" });
+      zip.file(name, await api.fetchAssetBlob(asset.id), { compression: "STORE", date });
     }
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
-    clickDownload(url, `Node Banana assets ${new Date().toISOString().slice(0, 10)}.zip`);
+    clickDownload(url, zipFileName());
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     notice(`Downloaded ${formatCount(assets.length, "file")}`);
   } catch (error) {
