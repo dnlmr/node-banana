@@ -1485,7 +1485,9 @@ export class AssetLibrary {
       await this.deferRelease(runIds, files);
     } else {
       await this.collectRuns(runIds);
-      await this.releaseFiles(files, { purge: options.purge === true });
+      const { retry } = await this.releaseFiles(files, { purge: options.purge === true });
+      // A file that couldn't be checked or trashed right now (locked, offline) is noted, not forgotten.
+      if (retry.length) await this.deferRelease([], retry);
       await this.releaseDeferred({ purge: options.purge === true });
     }
     const affected = [...new Set(ids)].filter((id) => done.has(id));
@@ -1559,7 +1561,10 @@ export class AssetLibrary {
         notes.push(note);
       }
       await this.collectRuns([...runIds]);
-      const released = await this.releaseFiles(files, { purge: options.purge === true, checkHash: true });
+      const { retry, ...released } = await this.releaseFiles(files, { purge: options.purge === true, checkHash: true });
+      // Entries that couldn't be checked or trashed this time go into a fresh note first,
+      // so a crash between the two steps can't lose them.
+      if (retry.length) await this.deferRelease([], retry);
       for (const note of notes) await unlinkWithRetry(note).catch(() => {});
       return released;
     });
@@ -1586,27 +1591,34 @@ export class AssetLibrary {
    * or trashes it: where it should be, and its size — and with `checkHash`
    * (a release kept for later, so the file had time to change) its bytes.
    */
-  private async isOwnedFile(release: FileRelease, file: string, checkHash: boolean): Promise<boolean> {
+  private async isOwnedFile(release: FileRelease, file: string, checkHash: boolean): Promise<"owned" | "not-owned" | "unknown"> {
     if (release.file.root === "library") {
-      if (!isInsideRoot(this.layout.generations, file, { platform: this.platform })) return false;
+      if (!isInsideRoot(this.layout.generations, file, { platform: this.platform })) return "not-owned";
     } else if (file !== release.file.path || !isMediaExtension(extOf(file))) {
-      return false;
+      return "not-owned";
     }
     try {
       const stat = await fs.stat(file);
-      if (!stat.isFile() || stat.size !== release.bytes) return false;
-      return !checkHash || (await hashFile(file)).sha256 === release.sha256;
-    } catch {
-      return false;
+      if (!stat.isFile() || stat.size !== release.bytes) return "not-owned";
+      if (!checkHash) return "owned";
+      return (await hashFile(file)).sha256 === release.sha256 ? "owned" : "not-owned";
+    } catch (error) {
+      // Gone is an answer; anything else (locked, offline placeholder, permissions) is "not now".
+      const code = errnoCode(error);
+      return code === "ENOENT" || code === "ENOTDIR" ? "not-owned" : "unknown";
     }
   }
 
-  /** Releases each file no record uses any more; returns what went to the OS Trash. */
+  /**
+   * Releases each file no record uses any more. Returns what went to the OS
+   * Trash, and `retry`: the entries that couldn't be checked or trashed right
+   * now, for the caller to keep for a later pass.
+   */
   private async releaseFiles(
     releases: FileRelease[],
     options: { purge: boolean; checkHash?: boolean },
-  ): Promise<{ files: number; bytes: number }> {
-    const released = { files: 0, bytes: 0 };
+  ): Promise<{ files: number; bytes: number; retry: FileRelease[] }> {
+    const released = { files: 0, bytes: 0, retry: [] as FileRelease[] };
     const byFile = new Map<string, { release: FileRelease; file: string }>();
     for (const release of releases) {
       const file = this.locationPath(release.file);
@@ -1621,10 +1633,13 @@ export class AssetLibrary {
     for (const sha256 of hashes) unlocks.push(await this.shaLocks.acquire(sha256));
     try {
       const toTrash: string[] = [];
+      const trashing: FileRelease[] = [];
       let trashBytes = 0;
       for (const [key, { release, file }] of byFile) {
         if (this.byPath.get(key)?.size) continue;
-        if (!(await this.isOwnedFile(release, file, options.checkHash === true))) continue;
+        const owned = await this.isOwnedFile(release, file, options.checkHash === true);
+        if (owned === "unknown") released.retry.push(release);
+        if (owned !== "owned") continue;
         try {
           if (release.keep) {
             // The project keeps its file; a snapshot that needs the bytes gets a checked reference to it.
@@ -1635,6 +1650,7 @@ export class AssetLibrary {
           const needed = referenced.has(release.sha256) || incomplete;
           if (needed && (await this.runs.adoptFile(release.sha256, release.ext, file))) continue;
           toTrash.push(file);
+          trashing.push(release);
           trashBytes += release.bytes;
         } catch (error) {
           console.warn("[assets] could not remove", file, error);
@@ -1648,6 +1664,10 @@ export class AssetLibrary {
         released.bytes = trashBytes;
       } catch (error) {
         console.warn("[assets] could not remove", toTrash, error);
+        // Whatever is still there is kept for a later pass.
+        for (const [index, file] of toTrash.entries()) {
+          if (await fs.stat(file).then(() => true, () => false)) released.retry.push(trashing[index]);
+        }
       }
       return released;
     } finally {

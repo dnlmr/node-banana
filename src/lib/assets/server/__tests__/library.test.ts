@@ -884,6 +884,27 @@ describe("unreadable sidecars", () => {
     await fresh.drain();
   });
 
+  // chmod can't make a file unreadable on Windows or for root.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps the note for a kept file it can't read right now, and releases it on a later pass",
+    async () => {
+      const { deleted, trashed, fresh } = await deleteWhileUnreadable();
+      // Offline placeholder, antivirus lock…: stat works, reading fails.
+      fs.chmodSync(deleted.asset.displayPath, 0o000);
+      try {
+        expect(await runCleanup(jobContext(), { library: fresh, thumbs: null }, { unusedMedia: true })).toBe("Nothing to clean up.");
+        expect(trashed).toEqual([]);
+        expect(pendingReleases()).toHaveLength(1);
+      } finally {
+        fs.chmodSync(deleted.asset.displayPath, 0o644);
+      }
+      expect(await runCleanup(jobContext(), { library: fresh, thumbs: null }, { unusedMedia: true })).toMatch(/^Removed 1 file \(/);
+      expect(trashed).toEqual([deleted.asset.displayPath]);
+      expect(pendingReleases()).toEqual([]);
+      await fresh.drain();
+    },
+  );
+
   it("reports an error for a sidecar it can't read right now, without dropping the record", async () => {
     const r = await record();
     const sidecar = path.join(root, ".nodebanana", "assets", `${r.asset.id}.json`);
