@@ -327,6 +327,22 @@ describe("nanoBanana", () => {
     expect(entry).not.toHaveProperty("assetId");
   });
 
+  it("outside a project, leaves a recorded entry's id alone: it loads by its asset id", async () => {
+    const { recordAsset, handles } = makeRecorder({ legacyId: "143200_a_red_fox_aaaaaaaa" });
+    const { ctx, nodes, updateNodeData } = makeCtx(imageNode(), { recordAsset });
+    mockFetch.mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }));
+
+    await executeNanoBanana(ctx);
+    await handles[0].done;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // One write with the output, and no rename after it (which would be an undo step that changes nothing)
+    expect(updateNodeData.mock.calls.filter((c) => "imageHistory" in (c[1] as Record<string, unknown>))).toHaveLength(1);
+    const [entry] = (nodes.get("gen-1")!.data as { imageHistory: { id: string; assetId?: string }[] }).imageHistory;
+    expect(entry.id).not.toBe("143200_a_red_fox_aaaaaaaa");
+    expect(entry.assetId).toBe(handles[0].assetId);
+  });
+
   it("outside a project, takes a failed recording's entry back out of the carousel", async () => {
     const { recordAsset } = makeRecorder(null);
     const older = { id: "older", assetId: "a-older", timestamp: 1, prompt: "", aspectRatio: "1:1", model: "m" };

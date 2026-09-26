@@ -223,7 +223,9 @@ export function followRecording(
   const settled = recordingResult(handle)
     .then(async (recorded) => {
       if (recorded) {
-        adoptLegacyId(ctx, field, handle.assetId, recorded);
+        // Outside a project the entry loads by its asset id: a rename there
+        // would change nothing but add an undo step
+        if (saveToFolder) adoptLegacyId(ctx, field, handle.assetId, recorded);
         return;
       }
       forgetFailedAsset(ctx, field, handle.assetId, saveToFolder !== null);
