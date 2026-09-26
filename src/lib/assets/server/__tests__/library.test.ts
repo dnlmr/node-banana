@@ -219,6 +219,10 @@ describe("mutations", () => {
 });
 
 describe("permanent delete", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   function trashedPaths(): string[] {
     return bridge.calls.filter((call) => call.type === "trash").map((call) => call.path!);
   }
@@ -247,22 +251,105 @@ describe("permanent delete", () => {
     expect(trashedPaths()).toEqual([first.asset.displayPath]);
   });
 
-  it("moves bytes a stored workflow snapshot references into media/", async () => {
+  async function storeRun(owner: RecordAssetResult, mediaHashes: string[], phase: "start" | "final" = "start") {
+    await putRun(owner.asset.runId, {
+      meta: { id: owner.asset.runId, workflowId: owner.asset.workflowId, workflowName: null, projectPath: null, startedAt: Date.now() },
+      phase,
+      workflow: snapshot(),
+      mediaHashes,
+    });
+  }
+
+  function runFile(runId: string): string {
+    return path.join(root, ".nodebanana", "runs", `${runId}.json.gz`);
+  }
+
+  it("moves bytes a surviving run's snapshot references into media/", async () => {
     const png = makePng(3, 3, 56);
     const r = await record({}, png);
+    const next = await record();
     const sha = sha256(png);
-    await putRun(r.asset.runId, {
-      meta: { id: r.asset.runId, workflowId: r.asset.workflowId, workflowName: null, projectPath: null, startedAt: Date.now() },
-      phase: "start",
-      workflow: snapshot(),
-      mediaHashes: [sha],
-    });
+    // The next run started with r's output still on the canvas.
+    await storeRun(next, [sha, next.asset.sha256]);
     await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
     expect(trashedPaths()).toEqual([]);
     expect(fs.existsSync(r.asset.displayPath)).toBe(false);
     const kept = path.join(root, ".nodebanana", "media", `${sha}.png`);
     expect(fs.readFileSync(kept).equals(png)).toBe(true);
     expect(await openMedia(sha)).toMatchObject({ path: kept, mime: "image/png", bytes: png.length });
+  });
+
+  it("deletes the run of its last asset, so the asset's own bytes go to the OS Trash", async () => {
+    const png = makePng(3, 3, 57);
+    const r = await record({}, png);
+    // Every run's final snapshot holds its own output.
+    await storeRun(r, [sha256(png)], "final");
+    expect(fs.existsSync(runFile(r.asset.runId))).toBe(true);
+    await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
+    expect(trashedPaths()).toEqual([r.asset.displayPath]);
+    expect(fs.existsSync(runFile(r.asset.runId))).toBe(false);
+    expect(fs.existsSync(path.join(root, ".nodebanana", "media", `${sha256(png)}.png`))).toBe(false);
+    expect(await openMedia(sha256(png))).toBeNull();
+  });
+
+  it("keeps a run while any of its assets (even a trashed one) remains", async () => {
+    const run = runId();
+    const first = await record({ runId: run });
+    const second = await record({ runId: run });
+    await storeRun(first, [first.asset.sha256, second.asset.sha256], "final");
+    await patchAsset(second.asset.id, { trashed: true });
+    await bulkAssets({ selection: { mode: "ids", ids: [first.asset.id] }, op: { action: "delete" } });
+    expect(fs.existsSync(runFile(run))).toBe(true);
+    // The survivor's snapshot still shows the deleted asset's output.
+    expect(await openMedia(first.asset.sha256)).not.toBeNull();
+    await bulkAssets({ selection: { mode: "ids", ids: [second.asset.id] }, op: { action: "delete" } });
+    expect(fs.existsSync(runFile(run))).toBe(false);
+  });
+
+  it("copies a kept project file into media/ when a surviving run references it", async () => {
+    const project = path.join(base, "Proj");
+    fs.mkdirSync(project);
+    const png = makePng(3, 3, 58);
+    const inProject = await record({ projectDir: project }, png);
+    const later = await record();
+    await storeRun(later, [sha256(png)]);
+    await bulkAssets({ selection: { mode: "ids", ids: [inProject.asset.id] }, op: { action: "delete" } });
+    expect(fs.existsSync(inProject.asset.displayPath)).toBe(true);
+    expect(trashedPaths()).toEqual([]);
+    const copy = path.join(root, ".nodebanana", "media", `${sha256(png)}.png`);
+    expect(fs.readFileSync(copy).equals(png)).toBe(true);
+    expect(await openMedia(sha256(png))).toMatchObject({ path: copy });
+  });
+
+  it("keeps bytes rather than trash them when a snapshot can't be read right now", async () => {
+    const png = makePng(3, 3, 59);
+    const r = await record({}, png);
+    const later = await record();
+    await storeRun(later, [sha256(png)]);
+    // Another process, with nothing cached, meets a snapshot it can't read (and no usable hash list).
+    fs.rmSync(path.join(root, ".nodebanana", "runs", `${later.asset.runId}.hashes.json`));
+    const readFile = fs.promises.readFile;
+    vi.spyOn(fs.promises, "readFile").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) =>
+      String(file) === runFile(later.asset.runId)
+        ? Promise.reject(Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }))
+        : (readFile as (...args: unknown[]) => Promise<unknown>)(file, ...rest)) as typeof readFile);
+    const other = new AssetLibrary(root, { trash: async () => {} });
+    await other.deleteRecords([r.asset.id]);
+    await other.drain();
+    vi.restoreAllMocks();
+    expect(fs.existsSync(path.join(root, ".nodebanana", "media", `${sha256(png)}.png`))).toBe(true);
+    // Not remembered as "references nothing": once readable, the reference is there.
+    expect((await other.runs.referencedHashes()).hashes.has(sha256(png))).toBe(true);
+  });
+
+  it("reads each run's small hash list rather than inflating the snapshot", async () => {
+    const r = await record();
+    await storeRun(r, [r.asset.sha256]);
+    const other = new AssetLibrary(root);
+    const readFile = vi.spyOn(fs.promises, "readFile");
+    expect((await other.runs.referencedHashes()).hashes).toEqual(new Set([r.asset.sha256]));
+    expect(readFile.mock.calls.map(([file]) => String(file))).not.toContain(runFile(r.asset.runId));
+    vi.restoreAllMocks();
   });
 
   it("keeps project files unless asked, then trashes them too", async () => {

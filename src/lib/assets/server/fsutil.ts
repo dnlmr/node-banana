@@ -336,12 +336,13 @@ export async function hashFile(file: string, signal?: AbortSignal): Promise<File
 /**
  * Copies a file through a `.partial` next to the destination, hashing the
  * source as it is read, then re-reads the copy and checks size and hash
- * before renaming it into place. Returns the verified digest.
+ * (and `expectSha256`, when given) before renaming it into place. Returns
+ * the verified digest.
  */
 export async function copyFileVerified(
   source: string,
   destination: string,
-  options: { signal?: AbortSignal; onBytes?: (bytes: number) => void } = {},
+  options: { signal?: AbortSignal; onBytes?: (bytes: number) => void; expectSha256?: string } = {},
 ): Promise<FileDigest> {
   const stream = createReadStream(source, { highWaterMark: 1024 * 1024 });
   const counted = (async function* () {
@@ -362,7 +363,11 @@ export async function copyFileVerified(
   }
   try {
     const check = await hashFile(written.partialPath, options.signal);
-    if (check.bytes !== written.bytes || check.sha256 !== written.sha256) {
+    if (
+      check.bytes !== written.bytes ||
+      check.sha256 !== written.sha256 ||
+      (options.expectSha256 !== undefined && check.sha256 !== options.expectSha256)
+    ) {
       throw new LibraryError(`The copy of ${path.basename(source)} did not verify.`, 500, "hash_mismatch");
     }
     await commitPartial(written.partialPath, destination);

@@ -1122,10 +1122,12 @@ export class AssetLibrary {
 
   /**
    * Removes records for good. Sidecars go first (with `del` journal lines);
-   * then each file no remaining record uses is released — library files and,
-   * with `deleteProjectFiles`, project files. Bytes a stored workflow
-   * snapshot still references move into `.nodebanana/media` instead of the
-   * OS Trash, so "open original workflow" keeps working.
+   * then the snapshot of every run none of the remaining records (live or
+   * trashed) belongs to; then each file no remaining record uses is
+   * released — library files and, with `deleteProjectFiles`, project files.
+   * Bytes a surviving run's snapshot still references move into
+   * `.nodebanana/media` instead of the OS Trash, so "open original workflow"
+   * keeps working; a kept project file is copied there for the same reason.
    */
   async deleteRecords(ids: string[], options: { deleteProjectFiles?: boolean } = {}): Promise<AssetBulkResult> {
     await this.ready();
@@ -1156,9 +1158,26 @@ export class AssetLibrary {
       }),
     );
     await this.publish(lines);
+    await this.collectRuns(removed.map((record) => record.runId));
     await this.releaseFiles(removed, options.deleteProjectFiles === true);
     const affected = [...new Set(ids)].filter((id) => done.has(id));
     return { affected: affected.length, ids: affected, errors };
+  }
+
+  /** Deletes the snapshots of these runs that no record (live or trashed) belongs to any more. */
+  private async collectRuns(runIds: readonly string[]): Promise<void> {
+    const orphaned = new Set(runIds);
+    for (const record of this.sorted) {
+      if (!orphaned.size) break;
+      orphaned.delete(record.runId);
+    }
+    for (const runId of orphaned) {
+      try {
+        await this.runs.remove(runId);
+      } catch (error) {
+        console.warn("[assets] could not remove the snapshot of", runId, error);
+      }
+    }
   }
 
   /** Re-checks that a file is the one the record describes before anything moves or trashes it. */
@@ -1178,19 +1197,26 @@ export class AssetLibrary {
 
   private async releaseFiles(removed: AssetRecord[], deleteProjectFiles: boolean): Promise<void> {
     if (!removed.length) return;
-    const byFile = new Map<string, { record: AssetRecord; file: string }>();
+    const byFile = new Map<string, { record: AssetRecord; file: string; keep: boolean }>();
     for (const record of removed) {
-      if (record.file.root === "external" && !deleteProjectFiles) continue;
       const file = this.filePath(record);
-      if (file) byFile.set(pathKey(file, this.platform), { record, file });
+      const keep = record.file.root === "external" && !deleteProjectFiles;
+      if (file) byFile.set(pathKey(file, this.platform), { record, file, keep });
     }
     if (!byFile.size) return;
-    const referenced = await this.runs.referencedHashes();
-    for (const [key, { record, file }] of byFile) {
+    const { hashes: referenced, incomplete } = await this.runs.referencedHashes();
+    for (const [key, { record, file, keep }] of byFile) {
       if (this.byPath.get(key)?.size) continue;
       if (!(await this.isOwnedFile(record, file))) continue;
       try {
-        if (referenced.has(record.sha256) && (await this.runs.adoptFile(record.sha256, record.ext, file))) continue;
+        if (keep) {
+          // The project keeps its file; a snapshot that needs the bytes gets its own copy.
+          if (referenced.has(record.sha256)) await this.runs.retainCopy(record.sha256, record.ext, file);
+          continue;
+        }
+        // A snapshot that could not be read may need these bytes: keep them rather than guess.
+        const needed = referenced.has(record.sha256) || incomplete;
+        if (needed && (await this.runs.adoptFile(record.sha256, record.ext, file))) continue;
         await this.trash(file);
       } catch (error) {
         console.warn("[assets] could not remove", file, error);

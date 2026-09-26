@@ -1,7 +1,7 @@
 // @vitest-environment node
 import fs from "fs";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LibraryJobStatus, RecordAssetMeta, RecordAssetResult } from "../../types";
 import {
   __assetLibraryForTests,
@@ -371,6 +371,58 @@ describe("cleanup", () => {
     expect(fs.readdirSync(library.layout.media)).toEqual([`${sha256(keep)}.png`]);
     expect(fs.readdirSync(posters)).toEqual([`${r.asset.sha256}.webp`]);
     await expect(startCleanup({})).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("removes old snapshots no asset belongs to, then the media only they referenced", async () => {
+    const only = makePng(2, 2, 13);
+    await putMedia(sha256(only), streamOf(only), "image/png");
+    const r = await record();
+    const orphanRun = `r${"0".repeat(12)}orphan`;
+    await putRun(orphanRun, {
+      meta: { id: orphanRun, workflowId: r.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "final",
+      workflow: { version: 1, name: "x", nodes: [], edges: [], edgeStyle: "curved" },
+      mediaHashes: [sha256(only)],
+    });
+    const library = await __assetLibraryForTests();
+    const orphanFile = path.join(library.layout.runs, `${orphanRun}.json.gz`);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(orphanFile, old, old);
+
+    const job = await finished(await startCleanup({ unusedMedia: true }));
+    expect(job.state).toBe("done");
+    expect(fs.existsSync(orphanFile)).toBe(false);
+    expect(fs.readdirSync(library.layout.runs)).toEqual([]);
+    expect(fs.readdirSync(library.layout.media)).toEqual([]);
+  });
+
+  it("deletes no snapshot media while a snapshot can't be read", async () => {
+    const needed = makePng(2, 2, 14);
+    await putMedia(sha256(needed), streamOf(needed), "image/png");
+    const r = await record();
+    await putRun(r.asset.runId, {
+      meta: { id: r.asset.runId, workflowId: r.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "start",
+      workflow: { version: 1, name: "x", nodes: [], edges: [], edgeStyle: "curved" },
+      mediaHashes: [sha256(needed)],
+    });
+    const library = await __assetLibraryForTests();
+    const file = path.join(library.layout.runs, `${r.asset.runId}.json.gz`);
+    // Changed since it was last read (say, by a sync client), and unreadable right now.
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(file, later, later);
+    const readFile = fs.promises.readFile;
+    const spy = vi.spyOn(fs.promises, "readFile").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) =>
+      String(target) === file
+        ? Promise.reject(Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }))
+        : (readFile as (...args: unknown[]) => Promise<unknown>)(target, ...rest)) as typeof readFile);
+    try {
+      const job = await finished(await startCleanup({ unusedMedia: true }));
+      expect(job.message).toMatch(/couldn't be read/);
+      expect(fs.readdirSync(library.layout.media)).toEqual([`${sha256(needed)}.png`]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

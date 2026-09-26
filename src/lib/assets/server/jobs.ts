@@ -391,10 +391,15 @@ function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+/** A snapshot with no asset is kept this long: a run still recording writes it a moment before its asset lands. */
+export const ORPHAN_RUN_GRACE_MS = 60 * 60 * 1000;
+
 /**
- * `unusedMedia`: delete snapshot media no stored run references, posters of
- * assets that no longer exist, stale partial files, and trim the thumbnail
- * cache. `thumbnails`: empty the thumbnail cache.
+ * `unusedMedia`: delete the snapshots of runs no asset belongs to any more,
+ * then snapshot media no remaining run references (none at all when a
+ * snapshot can't be read right now), posters of assets that no longer
+ * exist, stale partial files, and trim the thumbnail cache. `thumbnails`:
+ * empty the thumbnail cache.
  */
 export async function runCleanup(
   ctx: JobContext,
@@ -405,6 +410,7 @@ export async function runCleanup(
   await library.ready();
   let files = 0;
   let bytes = 0;
+  let keptForUnreadable = false;
   const remove = async (file: string) => {
     try {
       const stat = await fs.stat(file);
@@ -417,8 +423,14 @@ export async function runCleanup(
   };
 
   if (request.unusedMedia) {
-    const referenced = await library.runs.referencedHashes();
-    const media = await library.runs.mediaEntries();
+    const runsInUse = new Set(library.allRecords().map((record) => record.runId));
+    const orphans = await library.runs.removeOrphans(runsInUse, Date.now() - ORPHAN_RUN_GRACE_MS);
+    files += orphans.files;
+    bytes += orphans.bytes;
+    ctx.checkCancelled();
+    const { hashes: referenced, incomplete } = await library.runs.referencedHashes();
+    keptForUnreadable = incomplete;
+    const media = incomplete ? [] : await library.runs.mediaEntries();
     let posterNames: string[] = [];
     try {
       posterNames = await fs.readdir(library.layout.posters);
@@ -449,7 +461,12 @@ export async function runCleanup(
     ctx.checkCancelled();
     files += await thumbs.clear();
   }
-  return files ? `Removed ${files} ${files === 1 ? "file" : "files"}${bytes ? ` (${formatBytes(bytes)})` : ""}.` : "Nothing to clean up.";
+  const summary = files
+    ? `Removed ${files} ${files === 1 ? "file" : "files"}${bytes ? ` (${formatBytes(bytes)})` : ""}.`
+    : "Nothing to clean up.";
+  return keptForUnreadable
+    ? `${summary} Some workflow snapshots couldn't be read, so their media was kept. Try again later.`
+    : summary;
 }
 
 /* ------------------------------------------------------------------ */
