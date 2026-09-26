@@ -26,6 +26,7 @@ import {
   upsertWorkflowEntry,
 } from "../index";
 import { Ingestor } from "../ingest";
+import { runCleanup, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
 import { fakeRecord, installBridge, makePng, meta, runId, sha256, streamOf, tempDir } from "./helpers";
 
@@ -746,6 +747,77 @@ describe("journal failures", () => {
 describe("unreadable sidecars", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  /** Reads of these files fail with EIO, as an offline cloud placeholder's would. */
+  function unreadable(...files: string[]) {
+    const readFile = fs.promises.readFile;
+    vi.spyOn(fs.promises, "readFile").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) =>
+      files.includes(String(file))
+        ? Promise.reject(Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }))
+        : (readFile as (...args: unknown[]) => Promise<unknown>)(file, ...rest)) as typeof readFile);
+  }
+
+  const sidecarOf = (id: string) => path.join(root, ".nodebanana", "assets", `${id}.json`);
+
+  it("keeps the run, media and poster of a record it couldn't read at startup through a cleanup", async () => {
+    const r = await record();
+    const input = makePng(2, 2, 902);
+    await putMedia(sha256(input), streamOf(input), "image/png");
+    await putRun(r.asset.runId, {
+      meta: { id: r.asset.runId, workflowId: r.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "start",
+      workflow: snapshot(),
+      mediaHashes: [sha256(input), r.asset.sha256],
+    });
+    const run = path.join(root, ".nodebanana", "runs", `${r.asset.runId}.json.gz`);
+    const longAgo = new Date(Date.now() - 2 * HOUR);
+    fs.utimesSync(run, longAgo, longAgo);
+    const poster = path.join(root, ".nodebanana", "posters", `${r.asset.sha256}.webp`);
+    fs.mkdirSync(path.dirname(poster), { recursive: true });
+    fs.writeFileSync(poster, "poster");
+
+    // The next start, with that sidecar offline.
+    unreadable(sidecarOf(r.asset.id));
+    const fresh = new AssetLibrary(root, { trash: async () => {} });
+    await fresh.ready();
+    expect(fresh.allRecords()).toEqual([]);
+    const job: JobContext = { signal: new AbortController().signal, update: () => {}, addBytes: () => {}, step: () => {}, checkCancelled: () => {} };
+    expect(await runCleanup(job, { library: fresh, thumbs: null }, { unusedMedia: true })).toMatch(/couldn't be read/);
+    expect(fs.existsSync(run)).toBe(true);
+    expect(fs.existsSync(path.join(root, ".nodebanana", "media", `${sha256(input)}.png`))).toBe(true);
+    expect(fs.existsSync(poster)).toBe(true);
+
+    // Readable again: the record comes back.
+    vi.restoreAllMocks();
+    expect(await fresh.hasUnreadable()).toBe(false);
+    expect(fresh.allRecords().map((x) => x.id)).toEqual([r.asset.id]);
+    await fresh.drain();
+  });
+
+  it("releases no file or run a record it couldn't read may share", async () => {
+    const png = makePng(3, 3, 903);
+    const run = runId();
+    const deleted = await record({ runId: run }, png);
+    const sharing = await record({ runId: run }, png);
+    expect(sharing.reusedFile).toBe(true);
+    await patchAsset(deleted.asset.id, { trashed: true });
+
+    unreadable(sidecarOf(sharing.asset.id));
+    const trashed: string[] = [];
+    const fresh = new AssetLibrary(root, { trash: async (files) => void trashed.push(...files) });
+    await fresh.ready();
+    await putRun(run, {
+      meta: { id: run, workflowId: deleted.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "final",
+      workflow: snapshot(),
+      mediaHashes: [sha256(png)],
+    });
+    expect(await fresh.deleteRecords([deleted.asset.id])).toMatchObject({ affected: 1 });
+    expect(trashed).toEqual([]);
+    expect(fs.existsSync(sharing.asset.displayPath)).toBe(true);
+    expect(fs.existsSync(path.join(root, ".nodebanana", "runs", `${run}.json.gz`))).toBe(true);
+    await fresh.drain();
   });
 
   it("reports an error for a sidecar it can't read right now, without dropping the record", async () => {

@@ -88,6 +88,8 @@ export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const MOVE_CHECK_MS = 1000;
 /** How often a move looks again for another process's writes to finish. */
 const WRITERS_POLL_MS = 100;
+/** How often sidecars that could not be read are tried again while serving queries. */
+const UNREADABLE_RECHECK_MS = 30_000;
 
 /** `interactive: false` — nobody asked for this just now, so no route that may prompt (Finder's Automation request). */
 export type TrashHook = (files: string[], options?: { interactive?: boolean }) => Promise<unknown>;
@@ -291,6 +293,14 @@ export class AssetLibrary {
   private byPath = new Map<string, Set<string>>();
   private searchCache = new Map<string, string>();
   private tombstones = new Set<string>();
+  /**
+   * Sidecars that are there but could not be read (an offline cloud
+   * placeholder, EIO), of records this index doesn't hold: what those
+   * records use — their run, their file, their poster — is unknown until
+   * they read, so nothing is deleted on the strength of the index alone.
+   */
+  private unreadable = new Set<string>();
+  private unreadableCheckedAt = 0;
   /** The last file check per record; `unknown` when it failed for a reason other than "no such file". */
   private missing = new Map<string, { missing: boolean; unknown?: boolean; at: number }>();
   private journalOffset = 0;
@@ -363,12 +373,13 @@ export class AssetLibrary {
     await this.refresh();
   }
 
-  /** Replays the journal tail and re-reads workflows.json if either changed. */
+  /** Replays the journal tail and re-reads workflows.json if either changed; now and then retries unreadable sidecars. */
   refresh(): Promise<void> {
     this.refreshPromise ??= (async () => {
       try {
         await this.replayJournal();
         if (await this.workflowTable.refresh()) this.bump();
+        if (this.unreadable.size && this.now() - this.unreadableCheckedAt >= UNREADABLE_RECHECK_MS) await this.hasUnreadable();
       } finally {
         this.refreshPromise = null;
       }
@@ -536,6 +547,7 @@ export class AssetLibrary {
     }
 
     const names = (await fs.readdir(this.layout.assets)).filter((name) => SIDECAR_NAME.test(name));
+    const unreadable = new Set<string>();
     const loaded = await mapConcurrent(names, 32, async (name) => {
       const id = name.slice(0, -5);
       try {
@@ -543,7 +555,9 @@ export class AssetLibrary {
       } catch (error) {
         // Held open for a moment (sync client, antivirus): keep what we knew rather than drop it.
         console.warn("[assets] could not read sidecar", id, error);
-        return this.records.get(id) ?? null;
+        const known = this.records.get(id);
+        if (!known) unreadable.add(id);
+        return known ?? null;
       }
     });
 
@@ -559,6 +573,8 @@ export class AssetLibrary {
     }
     this.sorted = [...this.records.values()].sort(compareNewest);
     this.tombstones = tombstones;
+    this.unreadable = unreadable;
+    this.unreadableCheckedAt = this.now();
     for (const id of this.missing.keys()) if (!this.records.has(id)) this.missing.delete(id);
     this.journalOffset = complete.length;
     this.journalGen = journalGeneration(journal);
@@ -636,6 +652,7 @@ export class AssetLibrary {
         this.removeFromIndex(id);
         this.tombstones.add(id);
         this.missing.delete(id);
+        this.unreadable.delete(id);
       } else {
         puts.push(id);
       }
@@ -649,6 +666,7 @@ export class AssetLibrary {
         } catch (error) {
           // Unreadable for now: keep the copy we hold.
           console.warn("[assets] could not read sidecar", id, error);
+          if (!this.records.has(id)) this.unreadable.add(id);
         }
       }),
     );
@@ -777,6 +795,7 @@ export class AssetLibrary {
     this.sorted.splice(indexAtOrAfter(this.sorted, record, compareNewest), 0, record);
     this.searchCache.delete(record.id);
     this.tombstones.delete(record.id);
+    this.unreadable.delete(record.id);
     this.bump();
   }
 
@@ -810,14 +829,40 @@ export class AssetLibrary {
     try {
       text = await withFsRetry(() => fs.readFile(this.sidecarPath(id), "utf8"));
     } catch (error) {
-      if (isAbsent(error)) return null;
-      throw error;
-    }
-    try {
-      return parseRecord(JSON.parse(text), id, this.root, text.length);
-    } catch {
+      if (!isAbsent(error)) throw error;
+      this.unreadable.delete(id);
       return null;
     }
+    let record: AssetRecord | null = null;
+    try {
+      record = parseRecord(JSON.parse(text), id, this.root, text.length);
+    } catch {
+      record = null;
+    }
+    // Read at last: either nothing to know (no valid record) or its caller indexes it.
+    if (!record) this.unreadable.delete(id);
+    return record;
+  }
+
+  /**
+   * Reads again the sidecars the index could not read. True while any still
+   * can't be: until then a run, a shared file or a poster may belong to a
+   * record the index doesn't know, so cleanup and deletes keep them.
+   */
+  async hasUnreadable(): Promise<boolean> {
+    if (!this.unreadable.size) return false;
+    this.unreadableCheckedAt = this.now();
+    await mapConcurrent([...this.unreadable], 8, (id) =>
+      this.idLocks.run(id, async () => {
+        try {
+          const record = await this.readSidecar(id);
+          if (record) this.upsertIndex(record);
+        } catch {
+          // Still unreadable.
+        }
+      }),
+    );
+    return this.unreadable.size > 0;
   }
 
   /** Whether a sidecar exists for `id` (true when that can't be told, so nothing is thrown away on a guess). */
@@ -1352,8 +1397,14 @@ export class AssetLibrary {
       }),
     );
     await this.publish(lines);
-    await this.collectRuns(removed.map((record) => record.runId));
-    await this.releaseFiles(release, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
+    if (removed.length && (await this.hasUnreadable())) {
+      // A record whose sidecar can't be read may share a run or a file with these; keep both
+      // (the file stays where it is) rather than guess. Cleanup takes the runs once it can tell.
+      console.warn("[assets] some asset records can't be read right now, so the deleted ones' files and snapshots were kept");
+    } else {
+      await this.collectRuns(removed.map((record) => record.runId));
+      await this.releaseFiles(release, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
+    }
     const affected = [...new Set(ids)].filter((id) => done.has(id));
     return { affected: affected.length, ids: affected, errors };
   }

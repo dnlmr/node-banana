@@ -445,8 +445,9 @@ export const ORPHAN_RUN_GRACE_MS = 60 * 60 * 1000;
  * `unusedMedia`: delete the snapshots of runs no asset belongs to any more,
  * then snapshot media no remaining run references (none at all when a
  * snapshot can't be read right now), posters of assets that no longer
- * exist, stale partial files, and trim the thumbnail cache. `thumbnails`:
- * empty the thumbnail cache.
+ * exist, stale partial files, and trim the thumbnail cache. While an asset
+ * record can't be read, none of the first three: they may be its.
+ * `thumbnails`: empty the thumbnail cache.
  */
 export async function runCleanup(
   ctx: JobContext,
@@ -458,6 +459,7 @@ export async function runCleanup(
   let files = 0;
   let bytes = 0;
   let keptForUnreadable = false;
+  let keptForUnreadableRecords = false;
   const remove = async (file: string) => {
     try {
       const stat = await fs.stat(file);
@@ -470,34 +472,38 @@ export async function runCleanup(
   };
 
   if (request.unusedMedia) {
-    const runsInUse = new Set(library.allRecords().map((record) => record.runId));
-    const orphans = await library.runs.removeOrphans(runsInUse, Date.now() - ORPHAN_RUN_GRACE_MS);
-    files += orphans.files;
-    bytes += orphans.bytes;
-    ctx.checkCancelled();
-    const { hashes: referenced, incomplete } = await library.runs.referencedHashes();
-    keptForUnreadable = incomplete;
-    const media = incomplete ? [] : await library.runs.mediaEntries();
-    let posterNames: string[] = [];
-    try {
-      posterNames = await fs.readdir(library.layout.posters);
-    } catch {
-      posterNames = [];
-    }
-    ctx.update({ total: media.length + posterNames.length });
-    for (const entry of media) {
+    // A record whose sidecar can't be read has a run, media and a poster this can't see: keep them all.
+    keptForUnreadableRecords = await library.hasUnreadable();
+    if (!keptForUnreadableRecords) {
+      const runsInUse = new Set(library.allRecords().map((record) => record.runId));
+      const orphans = await library.runs.removeOrphans(runsInUse, Date.now() - ORPHAN_RUN_GRACE_MS);
+      files += orphans.files;
+      bytes += orphans.bytes;
       ctx.checkCancelled();
-      if (!referenced.has(entry.sha256)) {
-        await remove(entry.path);
-        library.runs.forgetMedia(entry.sha256);
+      const { hashes: referenced, incomplete } = await library.runs.referencedHashes();
+      keptForUnreadable = incomplete;
+      const media = incomplete ? [] : await library.runs.mediaEntries();
+      let posterNames: string[] = [];
+      try {
+        posterNames = await fs.readdir(library.layout.posters);
+      } catch {
+        posterNames = [];
       }
-      ctx.step();
-    }
-    for (const name of posterNames) {
-      ctx.checkCancelled();
-      const sha = name.split(".")[0];
-      if (library.recordsWithHash(sha).length === 0) await remove(path.join(library.layout.posters, name));
-      ctx.step();
+      ctx.update({ total: media.length + posterNames.length });
+      for (const entry of media) {
+        ctx.checkCancelled();
+        if (!referenced.has(entry.sha256)) {
+          await remove(entry.path);
+          library.runs.forgetMedia(entry.sha256);
+        }
+        ctx.step();
+      }
+      for (const name of posterNames) {
+        ctx.checkCancelled();
+        const sha = name.split(".")[0];
+        if (library.recordsWithHash(sha).length === 0) await remove(path.join(library.layout.posters, name));
+        ctx.step();
+      }
     }
     for (const dir of [library.layout.data, library.layout.assets, library.layout.runs, library.layout.media, library.layout.posters]) {
       await sweepStaleTemps(dir, 60 * 60 * 1000);
@@ -511,6 +517,9 @@ export async function runCleanup(
   const summary = files
     ? `Removed ${files} ${files === 1 ? "file" : "files"}${bytes ? ` (${formatBytes(bytes)})` : ""}.`
     : "Nothing to clean up.";
+  if (keptForUnreadableRecords) {
+    return `${summary} Some asset records couldn't be read, so no workflow data was removed. Try again later.`;
+  }
   return keptForUnreadable
     ? `${summary} Some workflow snapshots couldn't be read, so their media was kept. Try again later.`
     : summary;
