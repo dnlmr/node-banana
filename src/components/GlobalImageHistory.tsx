@@ -1,9 +1,11 @@
 "use client";
 
-import { Images, LayoutGrid, X } from "lucide-react";
+import { Images, LayoutGrid, LibraryBig, X } from "lucide-react";
 import { memo, useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
+import { getRecorderLibraryStatus } from "@/lib/assets/client/recorder";
 import { ImageHistoryItem } from "@/types";
 import { ChromeIconButton } from "./ChromeIconButton";
 import { CHROME_SURFACE } from "./chromeStyles";
@@ -182,10 +184,10 @@ function HistorySidebar({
         <div className="flex items-center gap-2">
           <button
             onClick={onClear}
-            className="text-[10px] text-neutral-500 transition-colors hover:text-red-400"
-            title="Clear all history"
+            className="text-[10px] text-neutral-500 transition-colors hover:text-neutral-200"
+            title="Files stay in Assets"
           >
-            Clear All
+            Clear list
           </button>
           <button
             onClick={onClose}
@@ -253,6 +255,14 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
 
   const history = useWorkflowStore((state) => state.globalImageHistory);
   const clearGlobalHistory = useWorkflowStore((state) => state.clearGlobalHistory);
+  const appView = useAssetStore((state) => state.appView);
+  const setAppView = useAssetStore((state) => state.setAppView);
+
+  // Nothing of this stays open over the Assets view (the sidebar is portaled above it)
+  useEffect(() => {
+    setIsOpen(false);
+    setShowSidebar(false);
+  }, [appView]);
 
   // Notifications hang beneath this button (Toast.tsx); tell them where it went.
   useEffect(() => {
@@ -309,10 +319,21 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
     }, 0);
   }, []);
 
-  const handleShowAll = useCallback(() => {
+  const openAssets = useCallback(() => {
     setIsOpen(false);
-    setShowSidebar(true);
-  }, []);
+    setAppView("assets");
+  }, [setAppView]);
+
+  // Everything lives in Assets; this tab's list is only a recent slice of it.
+  // Without a library (a hosted server) the list itself is all there is.
+  const handleShowAll = useCallback(() => {
+    if (getRecorderLibraryStatus()?.available === false) {
+      setIsOpen(false);
+      setShowSidebar(true);
+    } else {
+      openAssets();
+    }
+  }, [openAssets]);
 
   const handleCloseSidebar = useCallback(() => {
     setShowSidebar(false);
@@ -369,10 +390,10 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
             <button
               type="button"
               onClick={handleClear}
-              className="text-[10px] text-neutral-500 transition-colors hover:text-red-400"
-              title="Clear all history"
+              className="text-[10px] text-neutral-500 transition-colors hover:text-neutral-200"
+              title="Files stay in Assets"
             >
-              Clear
+              Clear list
             </button>
           </div>
           <div className="grid grid-cols-4 gap-1">
@@ -390,6 +411,15 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
               <span>Show all · {history.length}</span>
             </button>
           )}
+          <button
+            type="button"
+            onClick={openAssets}
+            className="flex h-7 items-center justify-center gap-2 rounded-md squircle text-[11px] font-medium text-neutral-400 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
+            title="Every generation, from every workflow (A)"
+          >
+            <LibraryBig size={14} strokeWidth={1.75} />
+            <span>Open Assets</span>
+          </button>
         </div>
       )}
 

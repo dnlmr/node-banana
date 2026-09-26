@@ -7,6 +7,7 @@ import {
   clearGenerationToasts,
   pushGenerationToast,
 } from "@/components/GenerationToast";
+import { useAssetStore } from "@/store/assetStore";
 
 /** Sonner dismisses through two animation frames (16ms each under fake timers). */
 const DISMISS_FRAMES_MS = 40;
@@ -61,6 +62,16 @@ describe("GenerationToaster", () => {
     expect(screen.getByText("Image generated")).toBeInTheDocument();
     expect(screen.getByText("Nano Banana Pro · 1:1")).toBeInTheDocument();
     expect(document.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,a");
+  });
+
+  it("stays quiet while the Assets view shows (it shows arrivals itself)", () => {
+    useAssetStore.setState({ appView: "assets" });
+    render(<GenerationToaster />);
+    push();
+    expect(screen.queryByTestId("generation-toast")).not.toBeInTheDocument();
+    useAssetStore.setState({ appView: "canvas" });
+    push();
+    expect(screen.getByTestId("generation-toast")).toBeInTheDocument();
   });
 
   it("collapses a burst from one producer into a single stacked card", () => {

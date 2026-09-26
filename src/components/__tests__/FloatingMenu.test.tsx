@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { FloatingMenu } from "@/components/FloatingMenu";
+import { useAssetStore } from "@/store/assetStore";
 
 const mockSetWorkflowMetadata = vi.fn();
 const mockSaveToFile = vi.fn();
@@ -217,6 +218,7 @@ describe("FloatingMenu", () => {
         "Save project",
         "Open project…",
         "Templates",
+        "Assets",
         "Open project folder",
         "New tab",
         "Close tab",
@@ -303,6 +305,16 @@ describe("FloatingMenu", () => {
       openMenu();
       fireEvent.click(menuItem(/Keyboard shortcuts/));
       expect(mockSetShortcutsDialogOpen).toHaveBeenCalledWith(true);
+    });
+
+    it("opens the Assets view and closes the menu", () => {
+      useAssetStore.setState({ appView: "canvas" });
+      render(<FloatingMenu />);
+      openMenu();
+      fireEvent.click(menuItem(/Assets/));
+      expect(useAssetStore.getState().appView).toBe("assets");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      useAssetStore.setState({ appView: "canvas" });
     });
 
     it("renders the shortcuts dialog when the store says it is open", () => {

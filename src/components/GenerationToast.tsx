@@ -5,6 +5,7 @@ import { Toaster, toast } from "sonner";
 import { CHROME_SURFACE } from "./chromeStyles";
 import { producerName, setHistoryDragData } from "./GlobalImageHistory";
 import { STACK_RIGHT_CSS, STACK_TOP } from "./Toast";
+import { useAssetStore } from "@/store/assetStore";
 
 /** One finished generation, or a burst of them collapsed into a single card. */
 export interface GenerationToastItem {
@@ -45,6 +46,8 @@ export function pushGenerationToast({
   model: string;
   aspectRatio: string;
 }) {
+  // The Assets view shows arrivals itself; cards would sit over its header
+  if (useAssetStore.getState().appView === "assets") return;
   const now = Date.now();
   const item: GenerationToastItem =
     latest && latest.model === model && now - latest.shownAt < GENERATION_TOAST_BATCH_MS

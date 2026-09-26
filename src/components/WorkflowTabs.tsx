@@ -1,11 +1,16 @@
 "use client";
 
-import { Plus, X } from "lucide-react";
+import { LibraryBig, Plus, X } from "lucide-react";
 import { useEffect, useMemo, type MouseEvent } from "react";
 import { useOnViewportChange, useReactFlow } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
 import { useShallow } from "zustand/shallow";
 import { summarizeWorkflowTabs } from "@/store/utils/workflowTabs";
+
+/** The shown tab: canvas-coloured, hanging over the frame's top border. */
+const SHOWN_TAB_CLASS =
+  "-mb-0.5 h-[32px] bg-canvas-bg text-neutral-100 shadow-[inset_1px_0_0_rgba(64,64,64,0.6),inset_-1px_0_0_rgba(64,64,64,0.6),inset_0_1px_0_rgba(64,64,64,0.6)]";
 
 /**
  * Open workflows as browser-style tabs across the top of the window. The bar
@@ -14,8 +19,16 @@ import { summarizeWorkflowTabs } from "@/store/utils/workflowTabs";
  * Switching and closing are blocked while a run, a save or a media write is
  * in flight, because the store holds only the live workflow's execution state.
  * Each tab also remembers its pan and zoom.
+ *
+ * The Assets entry leads the strip. It is a toggle button, not a tab (it is
+ * a view over every workflow, not one of them), and takes the shown-tab look
+ * while the Assets view is up. That look is styling only: which workflow
+ * tab is live, and what the busy state blocks, never changes with it. Any
+ * workflow tab, the plus and closing a tab all go back to the canvas.
  */
 export function WorkflowTabs() {
+  const assetsShown = useAssetStore((state) => state.appView === "assets");
+  const setAppView = useAssetStore((state) => state.setAppView);
   const {
     tabs,
     activeTabId,
@@ -70,7 +83,11 @@ export function WorkflowTabs() {
     if (busy) return;
     if (unsaved && !window.confirm(`Close ${name ?? "Untitled"} and discard its unsaved changes?`)) return;
     closeTab(id);
+    setAppView("canvas");
   };
+
+  // The live tab looks shown only while the canvas is what is shown
+  const shownIndex = assetsShown ? -1 : summaries.findIndex((tab) => tab.isActive);
 
   return (
     <div
@@ -81,9 +98,29 @@ export function WorkflowTabs() {
       // fixed (modals, menus) still stacks above
       className="workflow-tabs relative z-[1] flex h-[38px] min-w-0 shrink-0 items-end bg-[#0f0f0f] pl-3 pr-2"
     >
+      <button
+        type="button"
+        aria-pressed={assetsShown}
+        onClick={() => setAppView(assetsShown ? "canvas" : "assets")}
+        title={assetsShown ? "Back to the canvas (A)" : "Assets (A)"}
+        className={`relative flex h-[30px] shrink-0 items-center gap-1.5 rounded-t-lg px-3 text-xs whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+          assetsShown ? SHOWN_TAB_CLASS : "text-neutral-400 hover:bg-white/[0.04] hover:text-neutral-200"
+        }`}
+      >
+        {assetsShown && (
+          <>
+            <TabEar side="left" />
+            <TabEar side="right" />
+          </>
+        )}
+        <LibraryBig size={14} strokeWidth={1.75} />
+        Assets
+      </button>
       {summaries.map((tab, index) => {
         const name = tab.name ?? "Untitled";
-        const previousActive = index > 0 && summaries[index - 1].isActive;
+        const shown = index === shownIndex;
+        // The entry before this one: the previous tab, or the Assets button
+        const previousShown = index > 0 ? index - 1 === shownIndex : assetsShown;
         return (
           <div
             key={tab.id}
@@ -95,25 +132,28 @@ export function WorkflowTabs() {
               if (event.button === 1) handleClose(tab.id, tab.name, tab.hasUnsavedChanges);
             }}
             className={`group relative flex h-[30px] min-w-[72px] max-w-[220px] shrink items-center rounded-t-lg pl-3 pr-2 text-xs whitespace-nowrap ${
-              tab.isActive
-                ? "-mb-0.5 h-[32px] bg-canvas-bg text-neutral-100 shadow-[inset_1px_0_0_rgba(64,64,64,0.6),inset_-1px_0_0_rgba(64,64,64,0.6),inset_0_1px_0_rgba(64,64,64,0.6)]"
-                : `text-neutral-400 ${busy ? "opacity-60" : "hover:bg-white/[0.04] hover:text-neutral-200"}`
+              shown
+                ? SHOWN_TAB_CLASS
+                : `text-neutral-400 ${busy && !tab.isActive ? "opacity-60" : "hover:bg-white/[0.04] hover:text-neutral-200"}`
             }`}
           >
-            {/* The active tab flows into the canvas frame: concave corners at its feet */}
-            {tab.isActive && (
+            {/* The shown tab flows into the canvas frame: concave corners at its feet */}
+            {shown && (
               <>
                 <TabEar side="left" />
                 <TabEar side="right" />
               </>
             )}
-            {/* Hairline between two inactive neighbours */}
-            {index > 0 && !tab.isActive && !previousActive && (
+            {/* Hairline between two neighbours neither of which is shown */}
+            {!shown && !previousShown && (
               <span aria-hidden className="absolute top-[7px] bottom-[7px] -left-px w-px bg-neutral-800" />
             )}
             <button
               type="button"
-              onClick={() => !tab.isActive && switchTab(tab.id)}
+              onClick={() => {
+                setAppView("canvas");
+                if (!tab.isActive) switchTab(tab.id);
+              }}
               disabled={busy && !tab.isActive}
               // The label always leaves room for the slot on its right, so the
               // close button and the unsaved dot never move the text
@@ -138,7 +178,7 @@ export function WorkflowTabs() {
                 aria-label={`Close ${name}`}
                 title={busy ? busyReason : "Close tab"}
                 className={`h-4 w-4 items-center justify-center rounded text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed ${
-                  tab.hasUnsavedChanges || !tab.isActive
+                  tab.hasUnsavedChanges || !shown
                     ? "hidden group-hover:flex group-focus-within:flex"
                     : "flex"
                 }`}
@@ -151,7 +191,10 @@ export function WorkflowTabs() {
       })}
       <button
         type="button"
-        onClick={() => newTab()}
+        onClick={() => {
+          setAppView("canvas");
+          newTab();
+        }}
         disabled={busy}
         aria-label="New tab"
         title={busy ? busyReason : "New tab"}

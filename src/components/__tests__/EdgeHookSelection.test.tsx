@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EdgeHookSelection } from "../edges/EdgeHookSelection";
 import { HookBundleClamp } from "../edges/HookBundleClamp";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
 import type { WorkflowNode } from "@/types";
 
 vi.mock("@xyflow/react", async (importOriginal) => ({
@@ -126,6 +127,17 @@ describe("hold-H edge selection", () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "h" });
     fireEvent.keyDown(window, { key: "h", metaKey: true });
     expect(screen.queryByTestId("edge-hook-selection")).not.toBeInTheDocument();
+  });
+
+  it("ignores H while the Assets view covers the canvas", () => {
+    useAssetStore.setState({ appView: "assets" });
+    try {
+      setup();
+      fireEvent.keyDown(window, { key: "h" });
+      expect(screen.queryByTestId("edge-hook-selection")).not.toBeInTheDocument();
+    } finally {
+      useAssetStore.setState({ appView: "canvas" });
+    }
   });
 });
 

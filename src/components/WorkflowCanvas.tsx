@@ -101,6 +101,7 @@ import { selectCanvasOverview, setCanvasPanningClass } from "@/utils/canvasPerfo
 import { SplitGridTemplateModal } from "./splitgrid/SplitGridTemplateModal";
 import { createPortal } from "react-dom";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useAssetStore } from "@/store/assetStore";
 import { TutorialOverlay } from "./onboarding/TutorialOverlay";
 import { useFTUXStore } from "@/store/ftuxStore";
 
@@ -348,6 +349,8 @@ export function WorkflowCanvas() {
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [isAgentMounted, setIsAgentMounted] = useState(false);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
+  // The agent window is portaled above everything, so the Assets view cannot cover it
+  const assetsShown = useAssetStore((state) => state.appView === "assets");
   const [isMinimapVisible, setIsMinimapVisible] = useState(true);
   const agentButtonBottom = getAgentButtonBottom({
     margin: MINIMAP_GEOMETRY.margin,
@@ -1700,6 +1703,8 @@ export function WorkflowCanvas() {
 
   // Keyboard shortcuts for copy/paste and stacking selected nodes
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
+    // The canvas is hidden behind the Assets view: none of its keys apply
+    if (useAssetStore.getState().appView !== "canvas") return;
     // Ignore if user is typing in an input field (including the edge label
     // field, which lives in React Flow's label layer)
     const active = document.activeElement;
@@ -1718,6 +1723,20 @@ export function WorkflowCanvas() {
     if (event.key === "?" && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       setShortcutsDialogOpen(true);
+      return;
+    }
+
+    // A (bare) shows the Assets view; Shift+letters add nodes. Not while a
+    // dialog or the annotation editor is up over the canvas.
+    if (
+      event.key.toLowerCase() === "a" &&
+      !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat &&
+      !useWorkflowStore.getState().isModalOpen &&
+      !useAnnotationStore.getState().isModalOpen &&
+      !(event.target instanceof Element && event.target.closest('[role="dialog"]'))
+    ) {
+      event.preventDefault();
+      useAssetStore.getState().setAppView("assets");
       return;
     }
 
@@ -2602,10 +2621,10 @@ export function WorkflowCanvas() {
         selectedNodeIds={selectedNodeIds}
       />
 
-      {/* Agent window - floats above the agent button */}
+      {/* Agent window - floats above the agent button; hidden (not closed) while Assets shows */}
       {isAgentMounted && (
         <AgentPanel
-          open={isAgentOpen}
+          open={isAgentOpen && !assetsShown}
           onClose={closeAgent}
           buttonRight={MINIMAP_GEOMETRY.margin}
           buttonBottom={agentButtonBottom}

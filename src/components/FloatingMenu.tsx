@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderOpen, KeyRound, Keyboard, Layers, LayoutTemplate, Menu, MessageSquareText, Plus, Save, Settings, SquareArrowOutUpRight } from "lucide-react";
+import { FolderOpen, KeyRound, Keyboard, Layers, LayoutTemplate, LibraryBig, Menu, MessageSquareText, Plus, Save, Settings, SquareArrowOutUpRight } from "lucide-react";
 import {
   useState,
   useMemo,
@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
 import { useShallow } from "zustand/shallow";
 import { ProjectSetupModal, type SettingsTab } from "./ProjectSetupModal";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
@@ -462,6 +463,13 @@ export function FloatingMenu() {
               }
               label="Templates"
               onClick={choose(() => setShowQuickstart(true, "templates"))}
+            />
+            <MenuRow
+              icon={<LibraryBig size={16} strokeWidth={1.75} />}
+              label="Assets"
+              shortcut="A"
+              onClick={choose(() => useAssetStore.getState().setAppView("assets"))}
+              title="Every generation, from every workflow"
             />            {saveDirectoryPath && (
               <MenuRow
                 icon={
