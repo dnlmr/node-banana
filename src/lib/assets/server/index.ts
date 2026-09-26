@@ -42,9 +42,9 @@ import type {
   WorkflowEntryUpdate,
 } from "../types";
 import { openFolder, revealFile } from "./desktop";
-import { LibraryError } from "./errors";
+import { LibraryError, pausedError } from "./errors";
 import { hideOnWindows, isInsideRoot, sweepStaleTemps } from "./fsutil";
-import { Ingestor, PAUSED_RETRY_AFTER, STALE_PARTIAL_MS } from "./ingest";
+import { Ingestor, STALE_PARTIAL_MS } from "./ingest";
 import {
   isUnfinishedMoveTarget,
   JobRunner,
@@ -279,7 +279,9 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
     // No generations yet.
   }
   for (const dir of dirs) await sweepStaleTemps(dir, STALE_PARTIAL_MS);
-  if (!rt.paused && !(await library.movingElsewhere())) await counted(rt, () => library.emptyExpiredTrash());
+  if (!rt.paused && !(await library.movingElsewhere())) {
+    await counted(rt, () => library.writing(() => library.emptyExpiredTrash()));
+  }
   await rt.thumbs?.trim();
 }
 
@@ -307,10 +309,6 @@ async function readyLibrary(): Promise<AssetLibrary> {
   return library;
 }
 
-function pausedError(): LibraryError {
-  return new LibraryError("The library is being moved. Try again in a moment.", 503, "paused", PAUSED_RETRY_AFTER);
-}
-
 /** Writes wait while a move copies the library (they would be lost from the copy). */
 function assertWritable(rt: Runtime): void {
   if (rt.paused) throw pausedError();
@@ -322,15 +320,16 @@ async function assertNoMoveElsewhere(library: AssetLibrary): Promise<void> {
 }
 
 /**
- * Runs a write against the ready library, counted so a move can wait for it.
- * The pause check and the count happen with no await between them.
+ * Runs a write against the ready library, counted so a move here can wait
+ * for it, and published so a move in the other build can too. The pause
+ * check and the count happen with no await between them.
  */
 async function write<T>(fn: (library: AssetLibrary) => Promise<T>): Promise<T> {
   const rt = runtime();
   assertWritable(rt);
   const library = await readyLibrary();
   await assertNoMoveElsewhere(library);
-  return counted(rt, () => fn(library));
+  return counted(rt, () => library.writing(() => fn(library)));
 }
 
 /** Counts `fn` as an in-flight write (after checking the pause, synchronously). */
@@ -365,10 +364,11 @@ async function waitForWrites(rt: Runtime, timeoutMs: number): Promise<boolean> {
 
 /* Location and status ------------------------------------------------ */
 
-function emptyStatus(reason: string, platform: string): LibraryStatus {
+function emptyStatus(reason: string, reasonCode: NonNullable<LibraryStatus["reasonCode"]>, platform: string): LibraryStatus {
   return {
     available: false,
     reason,
+    reasonCode,
     root: null,
     source: "default",
     defaultRoot: "",
@@ -399,11 +399,16 @@ async function hasAnySidecar(assetsDir: string): Promise<boolean> {
   }
 }
 
-/** Resolves (and on first use, creates and persists) the library root. Never throws for an unwritable root: returns `available: false` with a reason. */
+/**
+ * Resolves (and on first use, creates and persists) the library root. Never
+ * throws for an unwritable root: returns `available: false` with a reason,
+ * and a `reasonCode` that tells a lasting answer ("hosted") from one worth
+ * asking again ("unwritable", "unavailable").
+ */
 export async function getLibraryStatus(): Promise<LibraryStatus> {
   const rt = runtime();
   const ctx = pathContext(rt);
-  if (isHostedServer()) return emptyStatus(HOSTED_REASON, ctx.platform);
+  if (isHostedServer()) return emptyStatus(HOSTED_REASON, "hosted", ctx.platform);
   try {
     const result = await activeLocation(rt);
     const location = result.location;
@@ -418,7 +423,14 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
       job: rt.jobs.visible(),
     };
     if (!result.ok || !location) {
-      return { ...base, available: false, reason: result.ok ? "Unavailable" : result.reason, counts: { assets: 0, trashed: 0, bytes: 0 }, empty: true };
+      return {
+        ...base,
+        available: false,
+        reason: result.ok ? "Unavailable" : result.reason,
+        reasonCode: result.ok ? "unavailable" : result.code,
+        counts: { assets: 0, trashed: 0, bytes: 0 },
+        empty: true,
+      };
     }
     const library = libraryFor(rt, location);
     // Kick off the scan; answer with counts if it finishes quickly.
@@ -430,7 +442,7 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
     // Still scanning: the zeros are not the library's, and the page must not show them as fact.
     return { ...base, available: true, counts, empty, job: rt.jobs.visible(), ...(library.loaded ? {} : { counting: true }) };
   } catch (error) {
-    return emptyStatus(error instanceof Error ? error.message : String(error), ctx.platform);
+    return emptyStatus(error instanceof Error ? error.message : String(error), "unavailable", ctx.platform);
   }
 }
 
@@ -708,6 +720,7 @@ export async function upsertWorkflowEntry(
       name: typeof entry.name === "string" ? entry.name : null,
       projectPath: typeof entry.projectPath === "string" ? entry.projectPath : null,
       ...(entry.forkedFrom !== undefined ? { forkedFrom: entry.forkedFrom } : {}),
+      ...(typeof entry.asOf === "number" && Number.isFinite(entry.asOf) ? { asOf: entry.asOf } : {}),
     }),
   );
 }

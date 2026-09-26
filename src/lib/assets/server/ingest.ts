@@ -24,7 +24,7 @@ import type {
   UploadTicket,
 } from "../types";
 import { downloadToPartial, MAX_DOWNLOAD_BYTES, type DownloadOptions } from "./download";
-import { LibraryError } from "./errors";
+import { LibraryError, PAUSED_RETRY_AFTER, pausedError } from "./errors";
 import {
   commitPartial,
   discardPartial,
@@ -54,8 +54,6 @@ const MAX_OPEN_TICKETS = 2000;
 const UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Partial files older than this are leftovers from a crash or an abandoned upload. */
 export const STALE_PARTIAL_MS = 60 * 60 * 1000;
-/** Seconds a paused recorder should wait before retrying. */
-export const PAUSED_RETRY_AFTER = 5;
 
 type Destination =
   | { type: "library"; dir: string }
@@ -127,12 +125,17 @@ export class Ingestor {
     });
   }
 
-  /** Counts a recording as in flight. The pause check sits here, with no await before the count, so a move never misses one. */
-  private async track<T>(work: () => Promise<T>): Promise<T> {
+  /**
+   * Counts a recording as in flight. The pause check sits here, with no
+   * await before the count, so a move here never misses one; the library
+   * publishes it for a move in the other build (which then waits for it).
+   */
+  private async track<T>(work: (library: AssetLibrary) => Promise<T>): Promise<T> {
     this.assertNotPaused();
     this.active++;
     try {
-      return await work();
+      const library = this.deps.library();
+      return await library.writing(() => work(library));
     } finally {
       this.active--;
       if (this.active === 0) {
@@ -145,7 +148,7 @@ export class Ingestor {
 
   private assertNotPaused(): void {
     if (this.deps.isPaused()) {
-      throw new LibraryError("The library is being moved. Recording resumes in a moment.", 503, "paused", PAUSED_RETRY_AFTER);
+      throw pausedError("The library is being moved. Recording resumes in a moment.");
     }
   }
 
@@ -200,20 +203,26 @@ export class Ingestor {
     this.assertNotPaused();
     this.tickets.delete(uploadId);
     const meta = ticket.meta;
-    return this.track(async () => {
-      const library = this.deps.library();
-      const destination = await this.resolveDestination(library, meta);
-      const streamed = await streamToPartial(body, destination.dir, {
-        maxBytes: MAX_UPLOAD_BYTES,
-        idleTimeoutMs: UPLOAD_IDLE_TIMEOUT_MS,
+    let started = false;
+    try {
+      return await this.track(async (library) => {
+        started = true;
+        const destination = await this.resolveDestination(library, meta);
+        const streamed = await streamToPartial(body, destination.dir, {
+          maxBytes: MAX_UPLOAD_BYTES,
+          idleTimeoutMs: UPLOAD_IDLE_TIMEOUT_MS,
+        });
+        return this.finalize(library, meta, destination, streamed, { mime: meta.mime ?? contentType });
       });
-      return this.finalize(library, meta, destination, streamed, { mime: meta.mime ?? contentType });
-    });
+    } catch (error) {
+      // Refused before the body was read (the other build's move took the lock): the ticket stays good.
+      if (!started && error instanceof LibraryError && error.code === "paused") this.tickets.set(uploadId, ticket);
+      throw error;
+    }
   }
 
   private recordFromUrl(meta: RecordAssetMeta, url: string): Promise<RecordAssetResult> {
-    return this.track(async () => {
-      const library = this.deps.library();
+    return this.track(async (library) => {
       const destination = await this.resolveDestination(library, meta);
       const download = await downloadToPartial(url, destination.dir, {
         maxBytes: MAX_DOWNLOAD_BYTES,

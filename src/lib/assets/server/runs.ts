@@ -3,8 +3,9 @@
  *
  * One gzip file per run (`runs/<runId>.json.gz`) holds the graph at the
  * start and, when the run finished on the same canvas, at the end. Media in
- * those graphs are `{ $nbMedia: sha256 }` refs, resolved from `media/` first
- * and then from any asset file with the same bytes.
+ * those graphs are `{ $nbMedia: sha256 }` refs, resolved from a file in
+ * `media/`, then any asset file with the same bytes, then a
+ * `media/<sha256>.ref` pointing at a project's own file that still holds them.
  *
  * Next to each snapshot, `runs/<runId>.hashes.json` repeats its mediaHashes
  * with the snapshot's mtime:size, so a reference scan reads a few KB per run
@@ -28,6 +29,7 @@ import {
   commitPartial,
   copyFileVerified,
   discardPartial,
+  hashFile,
   KeyedMutex,
   mapConcurrent,
   PARTIAL_SUFFIX,
@@ -37,7 +39,17 @@ import {
   withFsRetry,
 } from "./fsutil";
 import type { LibraryLayout } from "./layout";
-import { isRunId, isSha256, isWorkflowId, requireRunId, requireSha256, storageTypeForMime, mediaTypeForExt, extOf } from "./validate";
+import {
+  extOf,
+  isMediaExtension,
+  isRunId,
+  isSha256,
+  isWorkflowId,
+  mediaTypeForExt,
+  requireRunId,
+  requireSha256,
+  storageTypeForMime,
+} from "./validate";
 
 const gzip = promisify(gzipCallback);
 const gunzip = promisify(gunzipCallback);
@@ -50,10 +62,20 @@ const RUN_FILE = /^(r[0-9a-z]{12,24})\.json\.gz$/;
 const HASH_LIST_FILE = /^(r[0-9a-z]{12,24})\.hashes\.json$/;
 /** Run files read at once during a reference scan. */
 const SCAN_CONCURRENCY = 8;
+/** `media/<sha256>.ref`: the bytes are a project's own file, kept where it is. */
+const REF_SUFFIX = ".ref";
+
+/** A file to read media bytes from. */
+export interface MediaSource {
+  path: string;
+  mime: string;
+  bytes: number;
+  filename: string;
+}
 
 export interface MediaLookup {
   /** An asset file holding these bytes, if any is on disk. */
-  assetFileFor(sha256: string): Promise<{ path: string; mime: string; bytes: number; filename: string } | null>;
+  assetFileFor(sha256: string): Promise<MediaSource | null>;
 }
 
 /** What the stored snapshots reference. */
@@ -134,6 +156,8 @@ export class RunStore {
   /** sha256 → file name in media/, rebuilt from a listing when a lookup misses. */
   private mediaIndex: Map<string, string> | null = null;
   private mediaIndexAt = 0;
+  /** sha256 → the version (`path, size, mtime`) of the referenced file last hashed to it. */
+  private readonly verifiedRefs = new Map<string, string>();
 
   constructor(
     private readonly layout: LibraryLayout,
@@ -347,7 +371,7 @@ export class RunStore {
     const index = new Map<string, string>();
     try {
       for (const name of await fs.readdir(this.layout.media)) {
-        if (name.endsWith(PARTIAL_SUFFIX) || name.endsWith(".tmp")) continue;
+        if (name.endsWith(PARTIAL_SUFFIX) || name.endsWith(".tmp") || name.endsWith(REF_SUFFIX)) continue;
         const sha = name.split(".")[0];
         if (isSha256(sha)) index.set(sha, name);
       }
@@ -357,7 +381,7 @@ export class RunStore {
     return index;
   }
 
-  /** The media/ file for a hash, if held. */
+  /** The media/ file holding a hash's bytes, if there is one (not a reference). */
   async mediaFile(sha256: string): Promise<string | null> {
     if (!isSha256(sha256)) return null;
     if (!this.mediaIndex || (!this.mediaIndex.has(sha256) && Date.now() - this.mediaIndexAt > 2000)) {
@@ -376,12 +400,55 @@ export class RunStore {
     }
   }
 
-  /** Hashes whose bytes the server holds neither in media/ nor in an asset file. */
+  private refFile(sha256: string): string {
+    return path.join(this.layout.media, `${requireSha256(sha256)}${REF_SUFFIX}`);
+  }
+
+  /**
+   * The project file a `media/<sha256>.ref` points at, while it still holds
+   * exactly those bytes: same size, and the same hash (hashed once per
+   * version of the file, then remembered). Null when there is no reference,
+   * or the file moved, changed or went.
+   */
+  async referencedFile(sha256: string): Promise<MediaSource | null> {
+    if (!isSha256(sha256)) return null;
+    let ref: { path?: unknown; bytes?: unknown };
+    try {
+      ref = JSON.parse(await fs.readFile(this.refFile(sha256), "utf8")) as { path?: unknown; bytes?: unknown };
+    } catch {
+      return null;
+    }
+    const file = ref.path;
+    if (typeof file !== "string" || !path.isAbsolute(file) || !isMediaExtension(extOf(file)) || typeof ref.bytes !== "number") {
+      return null;
+    }
+    try {
+      const stat = await fs.stat(file);
+      if (!stat.isFile() || stat.size !== ref.bytes) return null;
+      const version = `${file}\0${stat.size}\0${stat.mtimeMs}`;
+      if (this.verifiedRefs.get(sha256) !== version) {
+        if ((await hashFile(file)).sha256 !== sha256) return null;
+        this.verifiedRefs.set(sha256, version);
+      }
+      return {
+        path: file,
+        mime: mediaTypeForExt(extOf(file))?.mime ?? "application/octet-stream",
+        bytes: stat.size,
+        filename: path.basename(file),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Hashes whose bytes the server holds neither in media/ (a file or a reference) nor in an asset file. */
   async missing(hashes: string[]): Promise<string[]> {
     const missing: string[] = [];
     for (const hash of [...new Set(hashes.filter(isSha256))].slice(0, MAX_MEDIA_HASHES)) {
       if (await this.mediaFile(hash)) continue;
+      // An asset file is a stat away; a reference may need hashing first.
       if (await this.lookup.assetFileFor(hash)) continue;
+      if (await this.referencedFile(hash)) continue;
       missing.push(hash);
     }
     return missing;
@@ -395,7 +462,7 @@ export class RunStore {
   ): Promise<{ sha256: string; bytes: number }> {
     requireSha256(sha256);
     const type = storageTypeForMime(mime);
-    const existing = await this.mediaFile(sha256);
+    const existing = (await this.mediaFile(sha256)) ?? (await this.referencedFile(sha256))?.path;
     if (existing) {
       if ("cancel" in body && typeof body.cancel === "function") await body.cancel().catch(() => {});
       return { sha256, bytes: (await fs.stat(existing)).size };
@@ -413,11 +480,12 @@ export class RunStore {
       throw error;
     }
     this.mediaIndex?.set(sha256, path.basename(file));
+    await this.dropReference(sha256);
     return { sha256, bytes: written.bytes };
   }
 
-  /** Where to read snapshot media from: media/ first, then an asset file with the same bytes. */
-  async openMedia(sha256: string): Promise<{ path: string; mime: string; bytes: number; filename: string } | null> {
+  /** Where to read snapshot media from: a file in media/, an asset file with the same bytes, then a reference in media/. */
+  async openMedia(sha256: string): Promise<MediaSource | null> {
     if (!isSha256(sha256)) return null;
     const file = await this.mediaFile(sha256);
     if (file) {
@@ -427,17 +495,18 @@ export class RunStore {
         const mime = ext === "bin" ? "application/octet-stream" : (mediaTypeForExt(ext)?.mime ?? "application/octet-stream");
         return { path: file, mime, bytes: stat.size, filename: path.basename(file) };
       } catch {
-        // Fall through to asset files.
+        // Fall through to a reference, then asset files.
       }
     }
-    return this.lookup.assetFileFor(sha256);
+    return (await this.lookup.assetFileFor(sha256)) ?? this.referencedFile(sha256);
   }
 
   /**
    * Keeps the bytes of a file a snapshot still needs after its asset is
    * deleted: moves it into media/ (copying across volumes), or drops it when
-   * media/ already holds them. Returns false when the caller should dispose
-   * of `file` itself.
+   * media/ already holds them. A reference to the file is replaced by the
+   * bytes themselves. Returns false when the caller should dispose of `file`
+   * itself.
    */
   async adoptFile(sha256: string, ext: string, file: string): Promise<boolean> {
     if (await this.mediaFile(sha256)) return false;
@@ -449,33 +518,51 @@ export class RunStore {
       if (errnoCode(error) !== "EXDEV") throw error;
       await copyFileVerified(file, target, { expectSha256: sha256 });
       this.mediaIndex?.set(sha256, path.basename(target));
+      await this.dropReference(sha256);
       return false;
     }
     this.mediaIndex?.set(sha256, path.basename(target));
+    await this.dropReference(sha256);
     return true;
   }
 
   /**
-   * Keeps a copy of a file's bytes in media/ for the snapshots that need
-   * them, leaving the file where it is (a project's own file). The copy is
-   * checked against `sha256` before it is committed.
+   * Keeps the bytes of a project's own file for the snapshots that need
+   * them, leaving it where it is: `media/<sha256>.ref` points at it (and is
+   * checked against the hash on every use) rather than a second copy of
+   * what may be a large video. Should the app later remove that file
+   * (deleting a record of it with its project file), {@link adoptFile}
+   * takes the bytes in first.
    */
-  async retainCopy(sha256: string, ext: string, file: string): Promise<void> {
+  async retainReference(sha256: string, file: string, bytes: number): Promise<void> {
     if (await this.mediaFile(sha256)) return;
     await fs.mkdir(this.layout.media, { recursive: true });
-    const target = path.join(this.layout.media, `${sha256}.${ext}`);
-    await copyFileVerified(file, target, { expectSha256: sha256 });
-    this.mediaIndex?.set(sha256, path.basename(target));
+    await atomicWriteFile(this.refFile(sha256), JSON.stringify({ v: 1, path: file, bytes }), { fsync: false });
   }
 
-  /** Every file in media/ with its hash, for cleanup. */
+  private async dropReference(sha256: string): Promise<void> {
+    this.verifiedRefs.delete(sha256);
+    await unlinkWithRetry(this.refFile(sha256)).catch(() => {});
+  }
+
+  /** Every file in media/ with its hash (references too), for cleanup. */
   async mediaEntries(): Promise<{ sha256: string; path: string }[]> {
     this.mediaIndex = await this.listMedia();
     this.mediaIndexAt = Date.now();
-    return [...this.mediaIndex.entries()].map(([sha256, name]) => ({ sha256, path: path.join(this.layout.media, name) }));
+    const entries = [...this.mediaIndex.entries()].map(([sha256, name]) => ({ sha256, path: path.join(this.layout.media, name) }));
+    try {
+      for (const name of await fs.readdir(this.layout.media)) {
+        const sha256 = name.slice(0, -REF_SUFFIX.length);
+        if (name.endsWith(REF_SUFFIX) && isSha256(sha256)) entries.push({ sha256, path: path.join(this.layout.media, name) });
+      }
+    } catch {
+      // No media folder yet.
+    }
+    return entries;
   }
 
   forgetMedia(sha256: string): void {
     this.mediaIndex?.delete(sha256);
+    this.verifiedRefs.delete(sha256);
   }
 }

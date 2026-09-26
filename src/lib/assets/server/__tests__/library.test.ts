@@ -26,6 +26,7 @@ import {
   upsertWorkflowEntry,
 } from "../index";
 import { Ingestor } from "../ingest";
+import { runCleanup, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
 import { fakeRecord, installBridge, makePng, meta, runId, sha256, streamOf, tempDir } from "./helpers";
 
@@ -54,6 +55,12 @@ async function record(overrides: Partial<RecordAssetMeta> = {}, buffer: Buffer =
   const started = await beginRecord({ meta: meta(overrides), source: { type: "upload" } });
   if ("result" in started) return started.result;
   return completeUpload(started.ticket.uploadId, streamOf(buffer), null);
+}
+
+/** "Delete permanently" as the app offers it: from the Trash. */
+async function deleteForGood(assetIds: string[], options: { deleteProjectFiles?: boolean } = {}) {
+  await bulkAssets({ selection: { mode: "ids", ids: assetIds }, op: { action: "trash" } });
+  return bulkAssets({ selection: { mode: "ids", ids: assetIds }, op: { action: "delete", ...options } });
 }
 
 async function ids(request: AssetPageRequest = {}): Promise<string[]> {
@@ -249,7 +256,7 @@ describe("permanent delete", () => {
   it("sends an unshared library file to the OS Trash", async () => {
     const r = await record();
     const file = r.asset.displayPath;
-    const result = await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
+    const result = await deleteForGood([r.asset.id]);
     expect(result).toMatchObject({ affected: 1, errors: [] });
     expect(trashedPaths()).toEqual([file]);
     expect(fs.existsSync(file)).toBe(false);
@@ -258,15 +265,55 @@ describe("permanent delete", () => {
     expect(journal).toContain(`"op":"del","id":"${r.asset.id}"`);
   });
 
+  it("deletes only from the Trash, or a live record whose file is gone", async () => {
+    const live = await record();
+    const missing = await record();
+    const cameBack = await record();
+    const refused = await bulkAssets({ selection: { mode: "ids", ids: [live.asset.id] }, op: { action: "delete" } });
+    expect(refused).toMatchObject({ affected: 0, errors: [{ id: live.asset.id, error: "Not in the Trash" }] });
+    const everything = await bulkAssets({
+      selection: { mode: "query", query: { scope: "library" }, excludeIds: [] },
+      op: { action: "delete" },
+    });
+    expect(everything.affected).toBe(0);
+    expect(trashedPaths()).toEqual([]);
+    expect((await listAssets({})).total).toBe(3);
+
+    // "Remove from library" of a file that is gone.
+    fs.unlinkSync(missing.asset.displayPath);
+    expect(await deleteForGoodFromMissing(missing.asset.id)).toMatchObject({ affected: 1, errors: [] });
+    expect(await assetExistence([missing.asset.id])).toEqual({ [missing.asset.id]: "gone" });
+
+    // Shown as missing, then put back (Finder's Put Back) before "Remove from library" was clicked.
+    const aside = `${cameBack.asset.displayPath}.aside`;
+    fs.renameSync(cameBack.asset.displayPath, aside);
+    const library = await __assetLibraryForTests();
+    await library.verifyFiles([library.get(cameBack.asset.id)!], 0);
+    expect(await ids({ scope: "missing" })).toEqual([cameBack.asset.id]);
+    fs.renameSync(aside, cameBack.asset.displayPath);
+    expect(await deleteForGoodFromMissing(cameBack.asset.id)).toMatchObject({
+      affected: 0,
+      errors: [{ id: cameBack.asset.id, error: "Not in the Trash" }],
+    });
+    expect(trashedPaths()).toEqual([]);
+    expect(fs.existsSync(cameBack.asset.displayPath)).toBe(true);
+    expect(await ids({ scope: "missing" })).toEqual([]);
+    expect(await ids()).toEqual([cameBack.asset.id, live.asset.id]);
+  });
+
+  async function deleteForGoodFromMissing(id: string) {
+    return bulkAssets({ selection: { mode: "ids", ids: [id] }, op: { action: "delete" } });
+  }
+
   it("keeps a file another record (even a trashed one) still uses", async () => {
     const png = makePng(3, 3, 55);
     const first = await record({}, png);
     const second = await record({}, png);
     await patchAsset(second.asset.id, { trashed: true });
-    await bulkAssets({ selection: { mode: "ids", ids: [first.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([first.asset.id]);
     expect(trashedPaths()).toEqual([]);
     expect(fs.existsSync(first.asset.displayPath)).toBe(true);
-    await bulkAssets({ selection: { mode: "ids", ids: [second.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([second.asset.id]);
     expect(trashedPaths()).toEqual([first.asset.displayPath]);
   });
 
@@ -290,7 +337,7 @@ describe("permanent delete", () => {
     const sha = sha256(png);
     // The next run started with r's output still on the canvas.
     await storeRun(next, [sha, next.asset.sha256]);
-    await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([r.asset.id]);
     expect(trashedPaths()).toEqual([]);
     expect(fs.existsSync(r.asset.displayPath)).toBe(false);
     const kept = path.join(root, ".nodebanana", "media", `${sha}.png`);
@@ -304,7 +351,7 @@ describe("permanent delete", () => {
     // Every run's final snapshot holds its own output.
     await storeRun(r, [sha256(png)], "final");
     expect(fs.existsSync(runFile(r.asset.runId))).toBe(true);
-    await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([r.asset.id]);
     expect(trashedPaths()).toEqual([r.asset.displayPath]);
     expect(fs.existsSync(runFile(r.asset.runId))).toBe(false);
     expect(fs.existsSync(path.join(root, ".nodebanana", "media", `${sha256(png)}.png`))).toBe(false);
@@ -317,27 +364,49 @@ describe("permanent delete", () => {
     const second = await record({ runId: run });
     await storeRun(first, [first.asset.sha256, second.asset.sha256], "final");
     await patchAsset(second.asset.id, { trashed: true });
-    await bulkAssets({ selection: { mode: "ids", ids: [first.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([first.asset.id]);
     expect(fs.existsSync(runFile(run))).toBe(true);
     // The survivor's snapshot still shows the deleted asset's output.
     expect(await openMedia(first.asset.sha256)).not.toBeNull();
-    await bulkAssets({ selection: { mode: "ids", ids: [second.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([second.asset.id]);
     expect(fs.existsSync(runFile(run))).toBe(false);
   });
 
-  it("copies a kept project file into media/ when a surviving run references it", async () => {
+  it("keeps a checked reference to a kept project file a surviving run needs, not a second copy", async () => {
     const project = path.join(base, "Proj");
     fs.mkdirSync(project);
     const png = makePng(3, 3, 58);
+    const sha = sha256(png);
     const inProject = await record({ projectDir: project }, png);
+    const file = inProject.asset.displayPath;
     const later = await record();
-    await storeRun(later, [sha256(png)]);
-    await bulkAssets({ selection: { mode: "ids", ids: [inProject.asset.id] }, op: { action: "delete" } });
-    expect(fs.existsSync(inProject.asset.displayPath)).toBe(true);
+    await storeRun(later, [sha]);
+    await deleteForGood([inProject.asset.id]);
+    expect(fs.existsSync(file)).toBe(true);
     expect(trashedPaths()).toEqual([]);
-    const copy = path.join(root, ".nodebanana", "media", `${sha256(png)}.png`);
-    expect(fs.readFileSync(copy).equals(png)).toBe(true);
-    expect(await openMedia(sha256(png))).toMatchObject({ path: copy });
+    const media = path.join(root, ".nodebanana", "media");
+    expect(fs.readdirSync(media)).toEqual([`${sha}.ref`]);
+    expect(await openMedia(sha)).toMatchObject({ path: file, mime: "image/png", bytes: png.length });
+    expect(await mediaHas([sha])).toEqual([]);
+
+    // Changed in another app (same size): the reference no longer holds those bytes, so they are asked for.
+    const edited = Buffer.from(png);
+    edited[edited.length - 1] ^= 0xff;
+    fs.writeFileSync(file, edited);
+    fs.utimesSync(file, new Date(2026, 0, 1), new Date(2026, 0, 1));
+    expect(await openMedia(sha)).toBeNull();
+    expect(await mediaHas([sha])).toEqual([sha]);
+    fs.writeFileSync(file, png);
+    expect(await openMedia(sha)).toMatchObject({ path: file });
+
+    // The app removes the project file later (a new record of it, deleted with its project file):
+    // the bytes move into media/ first, replacing the reference.
+    const again = await record({ projectDir: project }, png);
+    expect(again).toMatchObject({ reusedFile: true, asset: { displayPath: file } });
+    await deleteForGood([again.asset.id], { deleteProjectFiles: true });
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readdirSync(media)).toEqual([`${sha}.png`]);
+    expect(await openMedia(sha)).toMatchObject({ path: path.join(media, `${sha}.png`) });
   });
 
   it("keeps bytes rather than trash them when a snapshot can't be read right now", async () => {
@@ -345,6 +414,7 @@ describe("permanent delete", () => {
     const r = await record({}, png);
     const later = await record();
     await storeRun(later, [sha256(png)]);
+    await patchAsset(r.asset.id, { trashed: true });
     // Another process, with nothing cached, meets a snapshot it can't read (and no usable hash list).
     fs.rmSync(path.join(root, ".nodebanana", "runs", `${later.asset.runId}.hashes.json`));
     const readFile = fs.promises.readFile;
@@ -375,19 +445,19 @@ describe("permanent delete", () => {
     const project = path.join(base, "Proj");
     fs.mkdirSync(project);
     const kept = await record({ projectDir: project });
-    await bulkAssets({ selection: { mode: "ids", ids: [kept.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([kept.asset.id]);
     expect(fs.existsSync(kept.asset.displayPath)).toBe(true);
     expect(trashedPaths()).toEqual([]);
 
     const removed = await record({ projectDir: project });
-    await bulkAssets({ selection: { mode: "ids", ids: [removed.asset.id] }, op: { action: "delete", deleteProjectFiles: true } });
+    await deleteForGood([removed.asset.id], { deleteProjectFiles: true });
     expect(trashedPaths()).toEqual([removed.asset.displayPath]);
   });
 
   it("leaves a file alone when it no longer matches its record", async () => {
     const r = await record();
     fs.appendFileSync(r.asset.displayPath, "edited in another app");
-    await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([r.asset.id]);
     expect(trashedPaths()).toEqual([]);
     expect(fs.existsSync(r.asset.displayPath)).toBe(true);
   });
@@ -409,10 +479,34 @@ describe("permanent delete", () => {
       [old.asset.id]: "gone",
       [recent.asset.id]: "present",
     });
-    // Unprompted at startup: unlinked, never through the OS Trash (whose Finder route asks for permissions).
-    expect(trashedPaths()).toEqual([]);
+    // To the OS Trash, as a manual delete would (here the desktop app's bridge).
+    expect(trashedPaths()).toEqual([old.asset.displayPath]);
     expect(fs.existsSync(old.asset.displayPath)).toBe(false);
     expect(fs.existsSync(recent.asset.displayPath)).toBe(true);
+  });
+
+  it("asks the OS Trash for no route that could prompt when it empties the Trash unprompted", async () => {
+    const calls: { files: string[]; options?: { interactive?: boolean } }[] = [];
+    const library = new AssetLibrary(root, {
+      trash: async (files, options) => {
+        calls.push({ files, options });
+        files.forEach((file) => fs.rmSync(file));
+      },
+    });
+    await library.ready();
+    const expired = await library.addRecord(fakeRecord({ trashedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 }));
+    const byHand = await library.addRecord(fakeRecord({ trashedAt: Date.now() }));
+    for (const made of [expired, byHand]) {
+      fs.mkdirSync(path.dirname(library.filePath(made)!), { recursive: true });
+      fs.writeFileSync(library.filePath(made)!, Buffer.from(made.id));
+    }
+    expect(await library.emptyExpiredTrash()).toBe(1);
+    await library.deleteRecords([byHand.id]);
+    expect(calls).toEqual([
+      { files: [library.filePath(expired)], options: { interactive: false } },
+      { files: [library.filePath(byHand)], options: { interactive: true } },
+    ]);
+    await library.drain();
   });
 
   it("sends a whole batch to the OS Trash in one call", async () => {
@@ -426,7 +520,7 @@ describe("permanent delete", () => {
     await library.ready();
     const made = [];
     for (let i = 0; i < 3; i++) {
-      const record = fakeRecord({ createdAt: T0 + i });
+      const record = fakeRecord({ createdAt: T0 + i, trashedAt: T0 });
       const file = path.join(root, record.file.root === "library" ? record.file.rel : "");
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, Buffer.from(record.id));
@@ -484,7 +578,7 @@ describe("existence", () => {
     const deleted = await record();
     const vanished = await record();
     await patchAsset(trashed.asset.id, { trashed: true });
-    await bulkAssets({ selection: { mode: "ids", ids: [deleted.asset.id] }, op: { action: "delete" } });
+    await deleteForGood([deleted.asset.id]);
     fs.unlinkSync(vanished.asset.displayPath);
     const library = await __assetLibraryForTests();
     await library.verifyFiles([library.get(vanished.asset.id)!], 0);
@@ -578,6 +672,7 @@ describe("two processes on one library", () => {
     });
     expect(await ids()).toEqual([theirs.id, mine.asset.id]);
 
+    await other.patch(theirs.id, { trashed: true });
     await other.deleteRecords([theirs.id]);
     expect(await assetExistence([theirs.id])).toEqual({ [theirs.id]: "gone" });
     expect(await ids()).toEqual([mine.asset.id]);
@@ -588,6 +683,7 @@ describe("two processes on one library", () => {
     const r = await record();
     const other = new AssetLibrary(root);
     await other.ready();
+    await other.patch(r.asset.id, { trashed: true });
     await other.deleteRecords([r.asset.id]);
     expect(await other.compactJournal()).toBe(true);
     const journal = fs.readFileSync(path.join(root, ".nodebanana", "journal.ndjson"), "utf8").trim().split("\n");
@@ -640,6 +736,7 @@ describe("journal failures", () => {
 
   it("still releases files when the journal append of a delete fails", async () => {
     const r = await record();
+    await patchAsset(r.asset.id, { trashed: true });
     failOnce("appendFile");
     const result = await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
     expect(result).toMatchObject({ affected: 1, errors: [] });
@@ -650,6 +747,77 @@ describe("journal failures", () => {
 describe("unreadable sidecars", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  /** Reads of these files fail with EIO, as an offline cloud placeholder's would. */
+  function unreadable(...files: string[]) {
+    const readFile = fs.promises.readFile;
+    vi.spyOn(fs.promises, "readFile").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) =>
+      files.includes(String(file))
+        ? Promise.reject(Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }))
+        : (readFile as (...args: unknown[]) => Promise<unknown>)(file, ...rest)) as typeof readFile);
+  }
+
+  const sidecarOf = (id: string) => path.join(root, ".nodebanana", "assets", `${id}.json`);
+
+  it("keeps the run, media and poster of a record it couldn't read at startup through a cleanup", async () => {
+    const r = await record();
+    const input = makePng(2, 2, 902);
+    await putMedia(sha256(input), streamOf(input), "image/png");
+    await putRun(r.asset.runId, {
+      meta: { id: r.asset.runId, workflowId: r.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "start",
+      workflow: snapshot(),
+      mediaHashes: [sha256(input), r.asset.sha256],
+    });
+    const run = path.join(root, ".nodebanana", "runs", `${r.asset.runId}.json.gz`);
+    const longAgo = new Date(Date.now() - 2 * HOUR);
+    fs.utimesSync(run, longAgo, longAgo);
+    const poster = path.join(root, ".nodebanana", "posters", `${r.asset.sha256}.webp`);
+    fs.mkdirSync(path.dirname(poster), { recursive: true });
+    fs.writeFileSync(poster, "poster");
+
+    // The next start, with that sidecar offline.
+    unreadable(sidecarOf(r.asset.id));
+    const fresh = new AssetLibrary(root, { trash: async () => {} });
+    await fresh.ready();
+    expect(fresh.allRecords()).toEqual([]);
+    const job: JobContext = { signal: new AbortController().signal, update: () => {}, addBytes: () => {}, step: () => {}, checkCancelled: () => {} };
+    expect(await runCleanup(job, { library: fresh, thumbs: null }, { unusedMedia: true })).toMatch(/couldn't be read/);
+    expect(fs.existsSync(run)).toBe(true);
+    expect(fs.existsSync(path.join(root, ".nodebanana", "media", `${sha256(input)}.png`))).toBe(true);
+    expect(fs.existsSync(poster)).toBe(true);
+
+    // Readable again: the record comes back.
+    vi.restoreAllMocks();
+    expect(await fresh.hasUnreadable()).toBe(false);
+    expect(fresh.allRecords().map((x) => x.id)).toEqual([r.asset.id]);
+    await fresh.drain();
+  });
+
+  it("releases no file or run a record it couldn't read may share", async () => {
+    const png = makePng(3, 3, 903);
+    const run = runId();
+    const deleted = await record({ runId: run }, png);
+    const sharing = await record({ runId: run }, png);
+    expect(sharing.reusedFile).toBe(true);
+    await patchAsset(deleted.asset.id, { trashed: true });
+
+    unreadable(sidecarOf(sharing.asset.id));
+    const trashed: string[] = [];
+    const fresh = new AssetLibrary(root, { trash: async (files) => void trashed.push(...files) });
+    await fresh.ready();
+    await putRun(run, {
+      meta: { id: run, workflowId: deleted.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "final",
+      workflow: snapshot(),
+      mediaHashes: [sha256(png)],
+    });
+    expect(await fresh.deleteRecords([deleted.asset.id])).toMatchObject({ affected: 1 });
+    expect(trashed).toEqual([]);
+    expect(fs.existsSync(sharing.asset.displayPath)).toBe(true);
+    expect(fs.existsSync(path.join(root, ".nodebanana", "runs", `${run}.json.gz`))).toBe(true);
+    await fresh.drain();
   });
 
   it("reports an error for a sidecar it can't read right now, without dropping the record", async () => {
@@ -793,5 +961,27 @@ describe("workflows table", () => {
     expect(await upsertWorkflowEntry("wf_new", { name: null, projectPath: null })).toMatchObject({ name: null, projectPath: null });
     await expect(upsertWorkflowEntry("bad/id", { name: null, projectPath: null })).rejects.toMatchObject({ status: 400 });
     await expect(upsertWorkflowEntry("wf_c", { name: null, projectPath: "relative" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("never lets a run's late upsert undo a rename or a folder change made during the run", async () => {
+    const fox = path.join(base, "Fox");
+    const wolf = path.join(base, "Wolf");
+    const runStarted = Date.now() - 1000;
+    await upsertWorkflowEntry("wf_run", { name: "Fox", projectPath: fox });
+    // Saved under a new name and folder while the video rendered.
+    await upsertWorkflowEntry("wf_run", { name: "Wolf", projectPath: wolf });
+    // The video lands and its run sends what the canvas knew when it started.
+    const late = await upsertWorkflowEntry("wf_run", { name: "Fox", projectPath: fox, asOf: runStarted });
+    expect(late).toMatchObject({ name: "Wolf", projectPath: wolf });
+    expect(JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "workflows.json"), "utf8")).wf_run).toMatchObject({
+      name: "Wolf",
+      projectPath: wolf,
+    });
+
+    // A newer observation still wins, and an older one still fills in what the row lacks or creates it.
+    expect(await upsertWorkflowEntry("wf_run", { name: "Wolf 2", projectPath: wolf, asOf: Date.now() + 1000 })).toMatchObject({ name: "Wolf 2" });
+    await upsertWorkflowEntry("wf_unnamed", { name: null, projectPath: null });
+    expect(await upsertWorkflowEntry("wf_unnamed", { name: "Named", projectPath: fox, asOf: 1 })).toMatchObject({ name: "Named", projectPath: fox });
+    expect(await upsertWorkflowEntry("wf_absent", { name: "New", projectPath: null, asOf: 1 })).toMatchObject({ name: "New" });
   });
 });

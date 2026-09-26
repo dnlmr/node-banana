@@ -34,7 +34,7 @@ import {
   type AssetView,
   type LibraryWorkflowEntry,
 } from "../types";
-import { errnoCode, LibraryError } from "./errors";
+import { errnoCode, LibraryError, pausedError } from "./errors";
 import {
   atomicWriteFile,
   foldsCase,
@@ -45,7 +45,7 @@ import {
   unlinkWithRetry,
   withFsRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, isLiveLock, libraryLayout, readLock, type LibraryLayout } from "./layout";
+import { acquireLock, DATA_DIR, isLiveLock, libraryLayout, LOCK_HEARTBEAT_MS, readLock, type LibraryLayout } from "./layout";
 import { RunStore } from "./runs";
 import {
   compareNewest,
@@ -86,8 +86,13 @@ export const MISSING_TTL_MS = 30_000;
 export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** How long a look at the lock for another process's move is trusted. */
 const MOVE_CHECK_MS = 1000;
+/** How often a move looks again for another process's writes to finish. */
+const WRITERS_POLL_MS = 100;
+/** How often sidecars that could not be read are tried again while serving queries. */
+const UNREADABLE_RECHECK_MS = 30_000;
 
-export type TrashHook = (files: string[]) => Promise<unknown>;
+/** `interactive: false` — nobody asked for this just now, so no route that may prompt (Finder's Automation request). */
+export type TrashHook = (files: string[], options?: { interactive?: boolean }) => Promise<unknown>;
 
 export interface AssetLibraryOptions {
   platform?: NodeJS.Platform;
@@ -288,6 +293,14 @@ export class AssetLibrary {
   private byPath = new Map<string, Set<string>>();
   private searchCache = new Map<string, string>();
   private tombstones = new Set<string>();
+  /**
+   * Sidecars that are there but could not be read (an offline cloud
+   * placeholder, EIO), of records this index doesn't hold: what those
+   * records use — their run, their file, their poster — is unknown until
+   * they read, so nothing is deleted on the strength of the index alone.
+   */
+  private unreadable = new Set<string>();
+  private unreadableCheckedAt = 0;
   /** The last file check per record; `unknown` when it failed for a reason other than "no such file". */
   private missing = new Map<string, { missing: boolean; unknown?: boolean; at: number }>();
   private journalOffset = 0;
@@ -317,11 +330,16 @@ export class AssetLibrary {
   private mutationWaiters: (() => void)[] = [];
   /** Set while a full scan runs; mutations wait for it so none lands in maps the scan is replacing. */
   private scanGate: Promise<void> | null = null;
+  /** Writes through {@link writing} in flight, published in `.nodebanana/writers/` while there are any. */
+  private writesInFlight = 0;
+  /** Serialises writing, refreshing and removing this index's writer file. */
+  private writerQueue: Promise<void> = Promise.resolve();
+  private writerHeartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(root: string, options: AssetLibraryOptions = {}) {
     this.layout = libraryLayout(root);
     this.platform = options.platform ?? process.platform;
-    this.trash = options.trash ?? (async (files) => (await import("./desktop")).trashFiles(files));
+    this.trash = options.trash ?? (async (files, trashOptions) => (await import("./desktop")).trashFiles(files, trashOptions));
     this.now = options.now ?? Date.now;
     this.workflowTable = new WorkflowTable(this.layout.workflowsFile, this.platform);
     this.runs = new RunStore(this.layout, { assetFileFor: (sha256) => this.assetFileFor(sha256) });
@@ -355,12 +373,13 @@ export class AssetLibrary {
     await this.refresh();
   }
 
-  /** Replays the journal tail and re-reads workflows.json if either changed. */
+  /** Replays the journal tail and re-reads workflows.json if either changed; now and then retries unreadable sidecars. */
   refresh(): Promise<void> {
     this.refreshPromise ??= (async () => {
       try {
         await this.replayJournal();
         if (await this.workflowTable.refresh()) this.bump();
+        if (this.unreadable.size && this.now() - this.unreadableCheckedAt >= UNREADABLE_RECHECK_MS) await this.hasUnreadable();
       } finally {
         this.refreshPromise = null;
       }
@@ -379,16 +398,103 @@ export class AssetLibrary {
 
   /**
    * Another process (the other build) holds this library's lock for a move:
-   * writes here would miss its copy. Read from disk at most once a second;
-   * the move re-scans before it switches, which covers that second.
+   * writes here would miss its copy. Read from disk at most once a second
+   * unless `fresh`; {@link writing} always looks again.
    */
-  async movingElsewhere(): Promise<boolean> {
+  async movingElsewhere(options: { fresh?: boolean } = {}): Promise<boolean> {
     const now = Date.now();
-    if (this.moveCheck && now - this.moveCheck.at < MOVE_CHECK_MS) return this.moveCheck.moving;
+    if (!options.fresh && this.moveCheck && now - this.moveCheck.at < MOVE_CHECK_MS) return this.moveCheck.moving;
     const lock = await readLock(this.layout.lock);
     const moving = Boolean(lock && lock.purpose === "move" && lock.pid !== process.pid && isLiveLock(lock, now));
     this.moveCheck = { at: now, moving };
     return moving;
+  }
+
+  /* Writes other processes can see ---------------------------------- */
+
+  private get writerFile(): string {
+    return path.join(this.layout.writers, `${process.pid}-${this.instance}.json`);
+  }
+
+  private async writeWriterFile(): Promise<void> {
+    if (this.writesInFlight === 0) return;
+    try {
+      await fs.mkdir(this.layout.writers, { recursive: true });
+      await atomicWriteFile(this.writerFile, JSON.stringify({ pid: process.pid, at: Date.now() }), { fsync: false });
+    } catch (error) {
+      console.warn("[assets] could not publish a write in progress", error);
+    }
+  }
+
+  private queueWriterFile(task: () => Promise<void>): Promise<void> {
+    this.writerQueue = this.writerQueue.then(task).catch(() => {});
+    return this.writerQueue;
+  }
+
+  /**
+   * Runs a write to this root where a move in the other build can see it.
+   * While any is in flight, a file in `.nodebanana/writers/` names this
+   * process (refreshed while the writes last), and a move waits for it to go
+   * before it lists what to copy. The file is on disk before this looks at
+   * the lock, and a move takes the lock before it looks for writers, so one
+   * always sees the other: the write is refused (paused, as a move in this
+   * process would) or the move waits for it to land.
+   */
+  async writing<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.writesInFlight++ === 0) {
+      void this.queueWriterFile(() => this.writeWriterFile());
+      this.writerHeartbeat ??= setInterval(() => void this.queueWriterFile(() => this.writeWriterFile()), LOCK_HEARTBEAT_MS);
+      this.writerHeartbeat.unref?.();
+    }
+    try {
+      await this.writerQueue;
+      if (await this.movingElsewhere({ fresh: true })) throw pausedError();
+      return await fn();
+    } finally {
+      if (--this.writesInFlight === 0) {
+        if (this.writerHeartbeat) clearInterval(this.writerHeartbeat);
+        this.writerHeartbeat = null;
+        void this.queueWriterFile(async () => {
+          if (this.writesInFlight === 0) await fs.rm(this.writerFile, { force: true }).catch(() => {});
+        });
+      }
+    }
+  }
+
+  /**
+   * Waits until no other process — nor another index in this one — has a
+   * write in flight here, as their files in `.nodebanana/writers/` say. A
+   * file whose process is gone, or that was not refreshed for a minute,
+   * doesn't count and is removed. False when writes are still going on
+   * after `timeoutMs`.
+   */
+  async waitForOtherWriters(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if ((await this.otherWriters()) === 0) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, WRITERS_POLL_MS));
+    }
+  }
+
+  private async otherWriters(): Promise<number> {
+    let names: string[];
+    try {
+      names = await fs.readdir(this.layout.writers);
+    } catch {
+      return 0;
+    }
+    const own = path.basename(this.writerFile);
+    let live = 0;
+    for (const name of names) {
+      if (name === own || !name.endsWith(".json")) continue;
+      const file = path.join(this.layout.writers, name);
+      const writer = await readLock(file);
+      if (!writer) continue;
+      if (isLiveLock(writer)) live++;
+      else await fs.rm(file, { force: true }).catch(() => {});
+    }
+    return live;
   }
 
   /** Waits for background work (file checks, compaction). Tests and shutdown. */
@@ -441,6 +547,7 @@ export class AssetLibrary {
     }
 
     const names = (await fs.readdir(this.layout.assets)).filter((name) => SIDECAR_NAME.test(name));
+    const unreadable = new Set<string>();
     const loaded = await mapConcurrent(names, 32, async (name) => {
       const id = name.slice(0, -5);
       try {
@@ -448,7 +555,9 @@ export class AssetLibrary {
       } catch (error) {
         // Held open for a moment (sync client, antivirus): keep what we knew rather than drop it.
         console.warn("[assets] could not read sidecar", id, error);
-        return this.records.get(id) ?? null;
+        const known = this.records.get(id);
+        if (!known) unreadable.add(id);
+        return known ?? null;
       }
     });
 
@@ -464,6 +573,8 @@ export class AssetLibrary {
     }
     this.sorted = [...this.records.values()].sort(compareNewest);
     this.tombstones = tombstones;
+    this.unreadable = unreadable;
+    this.unreadableCheckedAt = this.now();
     for (const id of this.missing.keys()) if (!this.records.has(id)) this.missing.delete(id);
     this.journalOffset = complete.length;
     this.journalGen = journalGeneration(journal);
@@ -541,6 +652,7 @@ export class AssetLibrary {
         this.removeFromIndex(id);
         this.tombstones.add(id);
         this.missing.delete(id);
+        this.unreadable.delete(id);
       } else {
         puts.push(id);
       }
@@ -554,6 +666,7 @@ export class AssetLibrary {
         } catch (error) {
           // Unreadable for now: keep the copy we hold.
           console.warn("[assets] could not read sidecar", id, error);
+          if (!this.records.has(id)) this.unreadable.add(id);
         }
       }),
     );
@@ -682,6 +795,7 @@ export class AssetLibrary {
     this.sorted.splice(indexAtOrAfter(this.sorted, record, compareNewest), 0, record);
     this.searchCache.delete(record.id);
     this.tombstones.delete(record.id);
+    this.unreadable.delete(record.id);
     this.bump();
   }
 
@@ -715,14 +829,40 @@ export class AssetLibrary {
     try {
       text = await withFsRetry(() => fs.readFile(this.sidecarPath(id), "utf8"));
     } catch (error) {
-      if (isAbsent(error)) return null;
-      throw error;
-    }
-    try {
-      return parseRecord(JSON.parse(text), id, this.root, text.length);
-    } catch {
+      if (!isAbsent(error)) throw error;
+      this.unreadable.delete(id);
       return null;
     }
+    let record: AssetRecord | null = null;
+    try {
+      record = parseRecord(JSON.parse(text), id, this.root, text.length);
+    } catch {
+      record = null;
+    }
+    // Read at last: either nothing to know (no valid record) or its caller indexes it.
+    if (!record) this.unreadable.delete(id);
+    return record;
+  }
+
+  /**
+   * Reads again the sidecars the index could not read. True while any still
+   * can't be: until then a run, a shared file or a poster may belong to a
+   * record the index doesn't know, so cleanup and deletes keep them.
+   */
+  async hasUnreadable(): Promise<boolean> {
+    if (!this.unreadable.size) return false;
+    this.unreadableCheckedAt = this.now();
+    await mapConcurrent([...this.unreadable], 8, (id) =>
+      this.idLocks.run(id, async () => {
+        try {
+          const record = await this.readSidecar(id);
+          if (record) this.upsertIndex(record);
+        } catch {
+          // Still unreadable.
+        }
+      }),
+    );
+    return this.unreadable.size > 0;
   }
 
   /** Whether a sidecar exists for `id` (true when that can't be told, so nothing is thrown away on a guess). */
@@ -751,17 +891,30 @@ export class AssetLibrary {
   private projectKey = (projectPath: string): string =>
     foldsCase(this.platform) ? path.resolve(projectPath).toLowerCase() : path.resolve(projectPath);
 
-  /** A record's workflow as the UI shows it: the workflows table first, the record's own name second. */
+  /** The project folder a project file sits in (`<project>/generations/<file>`), else null. */
+  private projectFolderOf(record: AssetRecord): string | null {
+    if (record.file.root !== "external") return null;
+    const dir = path.dirname(record.file.path);
+    return path.basename(dir).toLowerCase() === "generations" ? path.dirname(dir) : null;
+  }
+
+  /**
+   * A record's workflow as the UI shows it: the workflows table first, the
+   * record's own name second. An imported asset stays with the folder it was
+   * imported from, even when a twin folder sharing its workflow id (a Finder
+   * duplicate) later claims that id's row by running.
+   */
   workflowOf(record: AssetRecord): { name: string | null; projectPath: string | null } {
     const entry = this.workflowTable.get(record.workflowId);
-    if (entry) return { name: entry.name ?? record.workflowName, projectPath: entry.projectPath };
-    let projectPath: string | null = null;
-    if (record.file.root === "external") {
-      // A project file with no workflow row (e.g. from another machine): its folder is `<project>/generations`.
-      const dir = path.dirname(record.file.path);
-      if (path.basename(dir).toLowerCase() === "generations") projectPath = path.dirname(dir);
+    if (record.imported) {
+      const folder = this.projectFolderOf(record);
+      if (folder && (!entry?.projectPath || this.projectKey(entry.projectPath) !== this.projectKey(folder))) {
+        return { name: record.workflowName ?? entry?.name ?? null, projectPath: folder };
+      }
     }
-    return { name: record.workflowName, projectPath };
+    if (entry) return { name: entry.name ?? record.workflowName, projectPath: entry.projectPath };
+    // A project file with no workflow row (e.g. from another machine) belongs to the folder it is in.
+    return { name: record.workflowName, projectPath: this.projectFolderOf(record) };
   }
 
   private queryContext(): QueryContext {
@@ -1181,15 +1334,39 @@ export class AssetLibrary {
   }
 
   /**
-   * Removes records for good. Sidecars go first (with `del` journal lines);
-   * then the snapshot of every run none of the remaining records (live or
-   * trashed) belongs to; then each file no remaining record uses is
-   * released — library files and, with `deleteProjectFiles`, project files.
+   * Whether a record's file is verifiably not there: no such file or folder
+   * (ENOENT/ENOTDIR), or a location that fails validation. Anything else —
+   * the file is there, or can't be checked — is not gone. Notes the answer
+   * as a file check would.
+   */
+  private async fileIsGone(record: AssetRecord): Promise<boolean> {
+    const file = this.filePath(record);
+    if (!file) return true;
+    try {
+      await fs.stat(file);
+      this.setMissing(record.id, false);
+      return false;
+    } catch (error) {
+      this.noteFileError(record.id, error);
+      return isAbsent(error);
+    }
+  }
+
+  /**
+   * Removes records for good. Only a record in the Trash, or a live one
+   * whose file is verifiably gone ("Remove from library"), is removed; any
+   * other id comes back in `errors`, whatever the client believed about it.
+   * Sidecars go first (with `del` journal lines); then the snapshot of every
+   * run none of the remaining records (live or trashed) belongs to; then
+   * each file no remaining record uses is released — library files and,
+   * with `deleteProjectFiles`, project files. A live record's file is never
+   * released: it was gone a moment ago, so one there now came back.
    * Bytes a surviving run's snapshot still references move into
    * `.nodebanana/media` instead of the OS Trash, so "open original workflow"
-   * keeps working; a kept project file is copied there for the same reason.
-   * `purge` (the automatic 30-day empty) unlinks instead of using the OS
-   * Trash, so nothing asks for permissions at startup.
+   * keeps working; for a kept project file, a reference to it goes there.
+   * `purge` (the automatic 30-day empty) uses the OS Trash too, but never
+   * a route that asks for permissions at startup: where only that one is
+   * left (macOS 14 or earlier in web mode), the files are unlinked.
    */
   async deleteRecords(
     ids: string[],
@@ -1197,6 +1374,8 @@ export class AssetLibrary {
   ): Promise<AssetBulkResult> {
     await this.ready();
     const removed: AssetRecord[] = [];
+    /** Removed from the Trash: their files are released. */
+    const release: AssetRecord[] = [];
     const done = new Set<string>();
     const errors: AssetBulkResult["errors"] = [];
     const lines: string[] = [];
@@ -1210,11 +1389,19 @@ export class AssetLibrary {
             else errors.push({ id, error: "Not found" });
             return;
           }
+          const trashed = record.trashedAt !== undefined;
+          if (!trashed && !(await this.fileIsGone(record))) {
+            // Restored elsewhere, or its missing file came back: a live asset, which only the Trash deletes.
+            this.upsertIndex(record);
+            errors.push({ id, error: "Not in the Trash" });
+            return;
+          }
           await unlinkWithRetry(this.sidecarPath(id));
           this.removeFromIndex(id);
           this.tombstones.add(id);
           this.missing.delete(id);
           removed.push(record);
+          if (trashed) release.push(record);
           lines.push(this.journalLine("del", id));
           done.add(id);
         } catch (error) {
@@ -1223,8 +1410,14 @@ export class AssetLibrary {
       }),
     );
     await this.publish(lines);
-    await this.collectRuns(removed.map((record) => record.runId));
-    await this.releaseFiles(removed, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
+    if (removed.length && (await this.hasUnreadable())) {
+      // A record whose sidecar can't be read may share a run or a file with these; keep both
+      // (the file stays where it is) rather than guess. Cleanup takes the runs once it can tell.
+      console.warn("[assets] some asset records can't be read right now, so the deleted ones' files and snapshots were kept");
+    } else {
+      await this.collectRuns(removed.map((record) => record.runId));
+      await this.releaseFiles(release, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
+    }
     const affected = [...new Set(ids)].filter((id) => done.has(id));
     return { affected: affected.length, ids: affected, errors };
   }
@@ -1285,8 +1478,8 @@ export class AssetLibrary {
         if (!(await this.isOwnedFile(record, file))) continue;
         try {
           if (keep) {
-            // The project keeps its file; a snapshot that needs the bytes gets its own copy.
-            if (referenced.has(record.sha256)) await this.runs.retainCopy(record.sha256, record.ext, file);
+            // The project keeps its file; a snapshot that needs the bytes gets a checked reference to it.
+            if (referenced.has(record.sha256)) await this.runs.retainReference(record.sha256, file, record.bytes);
             continue;
           }
           // A snapshot that could not be read may need these bytes: keep them rather than guess.
@@ -1298,11 +1491,10 @@ export class AssetLibrary {
         }
       }
       if (!toTrash.length) return;
-      if (options.purge) {
-        for (const file of toTrash) await unlinkWithRetry(file).catch((error) => console.warn("[assets] could not remove", file, error));
-      } else {
-        await this.trash(toTrash).catch((error) => console.warn("[assets] could not remove", toTrash, error));
-      }
+      // The unprompted purge goes to the OS Trash too, by any route that can't put up a prompt.
+      await this.trash(toTrash, { interactive: !options.purge }).catch((error) =>
+        console.warn("[assets] could not remove", toTrash, error),
+      );
     } finally {
       releases.forEach((release) => release());
     }
@@ -1310,8 +1502,10 @@ export class AssetLibrary {
 
   /**
    * Permanently deletes records that have been in the Trash longer than the
-   * retention period. It runs unprompted at startup, so it unlinks rather
-   * than use the OS Trash (whose Finder route asks for Automation rights).
+   * retention period, by the rules of a manual delete. It runs unprompted
+   * at startup, so the files skip the one OS Trash route that asks for
+   * rights (Finder's Automation prompt), and are unlinked only where no
+   * other route exists.
    */
   async emptyExpiredTrash(retentionMs: number = TRASH_RETENTION_MS): Promise<number> {
     await this.ready();

@@ -70,21 +70,22 @@ describe("GET /api/assets/library", () => {
   it("answers a refused request with 200 and available: false, revealing no folders", async () => {
     const response = await getLibrary(crossSite("/api/assets/library", "GET"));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ...UNAVAILABLE, reason: LIBRARY_GUARD_MESSAGE });
+    // "guard": nothing this page asks again will change it.
+    expect(await response.json()).toEqual({ ...UNAVAILABLE, reason: LIBRARY_GUARD_MESSAGE, reasonCode: "guard" });
     expect(facade.getLibraryStatus).not.toHaveBeenCalled();
   });
 
   it("explains how to start Node Banana when the server cannot vouch for this machine", async () => {
     unvouch();
     const response = await getLibrary(page("/api/assets/library"));
-    expect(await response.json()).toEqual({ ...UNAVAILABLE, reason: LIBRARY_UNVOUCHED_MESSAGE });
+    expect(await response.json()).toEqual({ ...UNAVAILABLE, reason: LIBRARY_UNVOUCHED_MESSAGE, reasonCode: "guard" });
   });
 
   it("answers available: false with the reason when the status cannot be read", async () => {
     vi.mocked(facade.getLibraryStatus).mockRejectedValueOnce(new Error("EIO: i/o error"));
     const failed = await getLibrary(page("/api/assets/library"));
     expect(failed.status).toBe(200);
-    expect(await failed.json()).toEqual({ ...UNAVAILABLE, reason: "EIO: i/o error" });
+    expect(await failed.json()).toEqual({ ...UNAVAILABLE, reason: "EIO: i/o error", reasonCode: "unavailable" });
     expect(logger.error).toHaveBeenCalled();
 
     vi.mocked(facade.getLibraryStatus).mockRejectedValueOnce(new LibraryError("Not yet.", 501, "not_implemented"));
@@ -258,6 +259,20 @@ describe("PUT /api/assets/workflows/[workflowId]", () => {
       ctx({ workflowId: "wf_2" }),
     );
     expect(facade.upsertWorkflowEntry).toHaveBeenCalledWith("wf_2", { name: null, projectPath: null, forkedFrom: "wf_1" });
+  });
+
+  it("passes when the caller saw the values (asOf) through, and refuses one that is not a number", async () => {
+    vi.mocked(facade.upsertWorkflowEntry).mockResolvedValue({ id: "wf_3", name: "Fox", projectPath: null, createdAt: 1, updatedAt: 1 });
+    await putWorkflow(
+      page(`/api/assets/workflows/wf_3`, { method: "PUT", json: { name: "Fox", projectPath: null, asOf: 1234 } }),
+      ctx({ workflowId: "wf_3" }),
+    );
+    expect(facade.upsertWorkflowEntry).toHaveBeenCalledWith("wf_3", { name: "Fox", projectPath: null, asOf: 1234 });
+    const refused = await putWorkflow(
+      page(`/api/assets/workflows/wf_3`, { method: "PUT", json: { name: "Fox", projectPath: null, asOf: "yesterday" } }),
+      ctx({ workflowId: "wf_3" }),
+    );
+    expect(refused.status).toBe(400);
   });
 
   it("refuses ids with path characters and relative project folders", async () => {

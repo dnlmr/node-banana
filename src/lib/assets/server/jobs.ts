@@ -266,6 +266,61 @@ interface ImportDeps {
   thumbs: Thumbnailer | null;
 }
 
+/** A project file's record: hashed, measured, with what the project's workflow JSON knows about it. */
+async function importedRecord(
+  file: string,
+  mtime: number,
+  source: { workflow: ProjectWorkflow | null; workflowId: string; workflowName: string; runId: string },
+  signal: AbortSignal,
+): Promise<AssetRecord> {
+  const digest = await hashFile(file, signal);
+  const ext = extOf(file);
+  const hinted = mediaTypeForExt(ext);
+  if (!hinted) throw new Error("unsupported type");
+  const head = await readHead(file, 64 * 1024);
+  const type = decideMediaType({ head, kind: hinted.kind, hintExt: ext });
+  const filename = path.basename(file);
+  const match = source.workflow?.carousel.get(filename.slice(0, filename.length - ext.length - 1));
+  let dims: { width?: number; height?: number; durationSec?: number } = {};
+  if (type.kind === "image") dims = (await imageDimensionsFromFile(file, ext, head)) ?? {};
+  else if (type.kind === "video" || type.kind === "audio") dims = await probeAudioVideo({ path: file }, type.kind);
+
+  const generation = match?.item.generation as { parameters?: unknown; cost?: unknown } | undefined;
+  const cost = generation?.cost as { amount?: unknown; estimated?: unknown } | undefined;
+  return {
+    v: 1,
+    id: newAssetId(),
+    kind: type.kind,
+    origin: "generated",
+    mime: type.mime,
+    ext,
+    bytes: digest.bytes,
+    sha256: digest.sha256,
+    md5: digest.md5,
+    file: { root: "external", path: file },
+    filename,
+    ...(dims.width && dims.height ? { width: dims.width, height: dims.height } : {}),
+    ...(dims.durationSec ? { durationSec: dims.durationSec } : {}),
+    createdAt: Math.floor(mtime),
+    ...(typeof match?.item.prompt === "string" && match.item.prompt ? { prompt: match.item.prompt } : {}),
+    ...(match && carouselModel(match) ? { model: carouselModel(match) } : {}),
+    ...(generation?.parameters && typeof generation.parameters === "object"
+      ? { parameters: generation.parameters as Record<string, unknown> }
+      : {}),
+    ...(typeof match?.item.aspectRatio === "string" ? { aspectRatio: match.item.aspectRatio } : {}),
+    ...(cost && typeof cost.amount === "number"
+      ? { cost: { amount: cost.amount, currency: "USD" as const, estimated: cost.estimated === true } }
+      : {}),
+    producer: { nodeId: match?.nodeId ?? "", nodeType: match?.nodeType ?? "import" },
+    workflowId: source.workflowId,
+    workflowName: source.workflowName,
+    runId: source.runId,
+    tags: [],
+    favorite: false,
+    imported: true,
+  };
+}
+
 /**
  * Indexes the files in each project's `generations/` folder in place:
  * hashes, measures, and attaches what the newest workflow JSON knows about
@@ -331,57 +386,13 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
     for (const { file, size, mtime } of files) {
       ctx.checkCancelled();
       try {
-        const digest = await hashFile(file, ctx.signal);
-        const ext = extOf(file);
-        const hinted = mediaTypeForExt(ext);
-        if (!hinted) throw new Error("unsupported type");
-        const head = await readHead(file, 64 * 1024);
-        const type = decideMediaType({ head, kind: hinted.kind, hintExt: ext });
-        const filename = path.basename(file);
-        const match = workflow?.carousel.get(filename.slice(0, filename.length - ext.length - 1));
-        let dims: { width?: number; height?: number; durationSec?: number } = {};
-        if (type.kind === "image") dims = (await imageDimensionsFromFile(file, ext, head)) ?? {};
-        else if (type.kind === "video" || type.kind === "audio") dims = await probeAudioVideo({ path: file }, type.kind);
-
-        const generation = match?.item.generation as { parameters?: unknown; cost?: unknown } | undefined;
-        const cost = generation?.cost as { amount?: unknown; estimated?: unknown } | undefined;
-        const record: AssetRecord = {
-          v: 1,
-          id: newAssetId(),
-          kind: type.kind,
-          origin: "generated",
-          mime: type.mime,
-          ext,
-          bytes: digest.bytes,
-          sha256: digest.sha256,
-          md5: digest.md5,
-          file: { root: "external", path: file },
-          filename,
-          ...(dims.width && dims.height ? { width: dims.width, height: dims.height } : {}),
-          ...(dims.durationSec ? { durationSec: dims.durationSec } : {}),
-          createdAt: Math.floor(mtime),
-          ...(typeof match?.item.prompt === "string" && match.item.prompt ? { prompt: match.item.prompt } : {}),
-          ...(match && carouselModel(match) ? { model: carouselModel(match) } : {}),
-          ...(generation?.parameters && typeof generation.parameters === "object"
-            ? { parameters: generation.parameters as Record<string, unknown> }
-            : {}),
-          ...(typeof match?.item.aspectRatio === "string" ? { aspectRatio: match.item.aspectRatio } : {}),
-          ...(cost && typeof cost.amount === "number"
-            ? { cost: { amount: cost.amount, currency: "USD" as const, estimated: cost.estimated === true } }
-            : {}),
-          producer: { nodeId: match?.nodeId ?? "", nodeType: match?.nodeType ?? "import" },
-          workflowId,
-          workflowName,
-          runId,
-          tags: [],
-          favorite: false,
-          imported: true,
-        };
-        const saved = await library.addRecord(record);
+        const record = await importedRecord(file, mtime, { workflow, workflowId, workflowName, runId }, ctx.signal);
+        // Published, so a move in the other build waits for this record and refuses the next one.
+        const saved = await library.writing(() => library.addRecord(record));
         deps.thumbs?.enqueue(saved, file);
         imported++;
       } catch (error) {
-        if (error instanceof LibraryError && error.code === "cancelled") throw error;
+        if (error instanceof LibraryError && (error.code === "cancelled" || error.code === "paused")) throw error;
         failed++;
       }
       ctx.addBytes(size);
@@ -434,8 +445,9 @@ export const ORPHAN_RUN_GRACE_MS = 60 * 60 * 1000;
  * `unusedMedia`: delete the snapshots of runs no asset belongs to any more,
  * then snapshot media no remaining run references (none at all when a
  * snapshot can't be read right now), posters of assets that no longer
- * exist, stale partial files, and trim the thumbnail cache. `thumbnails`:
- * empty the thumbnail cache.
+ * exist, stale partial files, and trim the thumbnail cache. While an asset
+ * record can't be read, none of the first three: they may be its.
+ * `thumbnails`: empty the thumbnail cache.
  */
 export async function runCleanup(
   ctx: JobContext,
@@ -447,6 +459,7 @@ export async function runCleanup(
   let files = 0;
   let bytes = 0;
   let keptForUnreadable = false;
+  let keptForUnreadableRecords = false;
   const remove = async (file: string) => {
     try {
       const stat = await fs.stat(file);
@@ -459,34 +472,38 @@ export async function runCleanup(
   };
 
   if (request.unusedMedia) {
-    const runsInUse = new Set(library.allRecords().map((record) => record.runId));
-    const orphans = await library.runs.removeOrphans(runsInUse, Date.now() - ORPHAN_RUN_GRACE_MS);
-    files += orphans.files;
-    bytes += orphans.bytes;
-    ctx.checkCancelled();
-    const { hashes: referenced, incomplete } = await library.runs.referencedHashes();
-    keptForUnreadable = incomplete;
-    const media = incomplete ? [] : await library.runs.mediaEntries();
-    let posterNames: string[] = [];
-    try {
-      posterNames = await fs.readdir(library.layout.posters);
-    } catch {
-      posterNames = [];
-    }
-    ctx.update({ total: media.length + posterNames.length });
-    for (const entry of media) {
+    // A record whose sidecar can't be read has a run, media and a poster this can't see: keep them all.
+    keptForUnreadableRecords = await library.hasUnreadable();
+    if (!keptForUnreadableRecords) {
+      const runsInUse = new Set(library.allRecords().map((record) => record.runId));
+      const orphans = await library.runs.removeOrphans(runsInUse, Date.now() - ORPHAN_RUN_GRACE_MS);
+      files += orphans.files;
+      bytes += orphans.bytes;
       ctx.checkCancelled();
-      if (!referenced.has(entry.sha256)) {
-        await remove(entry.path);
-        library.runs.forgetMedia(entry.sha256);
+      const { hashes: referenced, incomplete } = await library.runs.referencedHashes();
+      keptForUnreadable = incomplete;
+      const media = incomplete ? [] : await library.runs.mediaEntries();
+      let posterNames: string[] = [];
+      try {
+        posterNames = await fs.readdir(library.layout.posters);
+      } catch {
+        posterNames = [];
       }
-      ctx.step();
-    }
-    for (const name of posterNames) {
-      ctx.checkCancelled();
-      const sha = name.split(".")[0];
-      if (library.recordsWithHash(sha).length === 0) await remove(path.join(library.layout.posters, name));
-      ctx.step();
+      ctx.update({ total: media.length + posterNames.length });
+      for (const entry of media) {
+        ctx.checkCancelled();
+        if (!referenced.has(entry.sha256)) {
+          await remove(entry.path);
+          library.runs.forgetMedia(entry.sha256);
+        }
+        ctx.step();
+      }
+      for (const name of posterNames) {
+        ctx.checkCancelled();
+        const sha = name.split(".")[0];
+        if (library.recordsWithHash(sha).length === 0) await remove(path.join(library.layout.posters, name));
+        ctx.step();
+      }
     }
     for (const dir of [library.layout.data, library.layout.assets, library.layout.runs, library.layout.media, library.layout.posters]) {
       await sweepStaleTemps(dir, 60 * 60 * 1000);
@@ -500,6 +517,9 @@ export async function runCleanup(
   const summary = files
     ? `Removed ${files} ${files === 1 ? "file" : "files"}${bytes ? ` (${formatBytes(bytes)})` : ""}.`
     : "Nothing to clean up.";
+  if (keptForUnreadableRecords) {
+    return `${summary} Some asset records couldn't be read, so no workflow data was removed. Try again later.`;
+  }
   return keptForUnreadable
     ? `${summary} Some workflow snapshots couldn't be read, so their media was kept. Try again later.`
     : summary;
@@ -689,7 +709,7 @@ const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 async function buildManifest(root: string, library?: AssetLibrary): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
   const data = path.join(root, DATA_DIR);
-  const skipDirs = new Set([path.join(data, "cache")]);
+  const skipDirs = new Set([path.join(data, "cache"), path.join(data, "writers")]);
   const skipFiles = new Set([
     path.join(data, "lock"),
     path.join(data, "config.json"),
@@ -752,6 +772,8 @@ export interface MoveDeps {
    * may write again (so it never writes into the old root).
    */
   settleMs?: number;
+  /** How long to wait for writes another process began before the lock (default a minute). */
+  otherWritersTimeoutMs?: number;
 }
 
 interface MoveMarker {
@@ -789,8 +811,9 @@ async function readJson<T>(file: string): Promise<T | null> {
 /**
  * Copies the library-owned files to the new root from a manifest, verifying
  * size and hash per file, with recording (and every other write) paused —
- * in this process by the pause, in the other build by the "move" lock —
- * then re-scans for anything that changed while it copied. Switches the
+ * in this process by the pause, in the other build by the "move" lock,
+ * once the writes that build began before the lock have landed — then
+ * re-scans for anything that changed while it copied. Switches the
  * root only once everything verified; then deletes exactly the files it
  * copied from the old root. A failure or cancel before the switch removes
  * the copies and leaves the old library untouched.
@@ -811,6 +834,8 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
   deps.setPaused(true);
   const copied = new Map<string, { source: string; dest: string; size: number; mtimeMs: number }>();
   let lock: Awaited<ReturnType<typeof acquireLock>> = null;
+  /** The markers are this move's: until then they may be another build's live move, not ours to remove. */
+  let ownsMarkers = false;
   let switched = false;
   let switchedAt = 0;
   try {
@@ -820,9 +845,18 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     lock = await acquireLock(from.layout.lock, { heartbeat: true, purpose: "move" });
     if (!lock) throw new LibraryError("The library is busy in another window. Try again in a moment.", 409, "busy");
     await from.drain();
+    // Markers left while we hold the lock are a move whose process died part-way: undo it
+    // first, rather than write over the record of what it copied.
+    if (await exists(markerFile)) await recoverMoveLocked(fromRoot, markerFile, logFile);
+    // Writes the other build began before the lock (a recording still uploading, an edit)
+    // land in this root: wait for them, so the copy has them. Later ones are refused.
+    if (!(await from.waitForOtherWriters(deps.otherWritersTimeoutMs ?? 60_000))) {
+      throw new LibraryError("Recordings are still being saved in another window. Try again in a moment.", 409, "busy");
+    }
 
     const marker: MoveMarker = { v: 1, toRoot, startedAt: Date.now(), pid: process.pid, state: "copying" };
     await atomicWriteFile(markerFile, JSON.stringify(marker), { fsync: true });
+    ownsMarkers = true;
     await fs.writeFile(logFile, "");
     await fs.mkdir(path.join(toRoot, DATA_DIR), { recursive: true });
     await atomicWriteFile(targetMarker, JSON.stringify({ fromRoot, startedAt: marker.startedAt }), { fsync: true });
@@ -872,7 +906,7 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     await unlinkWithRetry(targetMarker).catch(() => {});
     deps.setPaused(false);
   } catch (error) {
-    if (!switched) {
+    if (!switched && ownsMarkers) {
       for (const { dest } of copied.values()) await unlinkWithRetry(dest).catch(() => {});
       await unlinkWithRetry(targetMarker).catch(() => {});
       await removeEmptyDirs([...[...copied.values()].map(({ dest }) => path.dirname(dest)), path.join(toRoot, DATA_DIR)], toRoot);

@@ -1,7 +1,8 @@
 /**
  * Classify a workflow: its current name and project folder, in one write.
- * PUT { name, projectPath, forkedFrom? } → LibraryWorkflowEntry. The id is
- * URL-encoded by the client (workflow ids may hold `:` and `.`).
+ * PUT { name, projectPath, forkedFrom?, asOf? } → LibraryWorkflowEntry. An
+ * `asOf` older than the row's last change fills in nothing the row already
+ * has. The id is URL-encoded by the client (workflow ids may hold `:` and `.`).
  */
 
 import { upsertWorkflowEntry } from "@/lib/assets/server";

@@ -268,6 +268,17 @@ describe("snapshots and workflows", () => {
     expect400(() => parseWorkflowEntry({ name: "x", projectPath: null, forkedFrom: "a b" }), /forkedFrom/);
     expect400(() => parseWorkflowEntry({ name: 3, projectPath: null }), /name/);
   });
+
+  it("parseWorkflowEntry takes asOf as a finite number of milliseconds", () => {
+    expect(parseWorkflowEntry({ name: "Cats", projectPath: null, asOf: 1_700_000_000_000 })).toEqual({
+      name: "Cats",
+      projectPath: null,
+      asOf: 1_700_000_000_000,
+    });
+    expect(parseWorkflowEntry({ name: "Cats", projectPath: null, asOf: null })).toEqual({ name: "Cats", projectPath: null });
+    expect400(() => parseWorkflowEntry({ name: "x", projectPath: null, asOf: "1700000000000" }), /asOf/);
+    expect400(() => parseWorkflowEntry({ name: "x", projectPath: null, asOf: {} }), /asOf/);
+  });
 });
 
 describe("library and jobs", () => {

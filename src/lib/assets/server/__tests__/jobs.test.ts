@@ -11,6 +11,7 @@ import {
   bulkAssets,
   cancelJob,
   completeUpload,
+  getFacets,
   getJob,
   getLibraryStatus,
   listAssets,
@@ -25,7 +26,7 @@ import {
   upsertWorkflowEntry,
 } from "../index";
 import { Ingestor } from "../ingest";
-import { JobRunner, runExport, runMove, validateMoveTarget, type JobContext } from "../jobs";
+import { JobRunner, runExport, runImport, runMove, validateMoveTarget, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
 import { installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
@@ -272,6 +273,90 @@ describe("move", () => {
     expect(retried.state).toBe("done");
     expect((await getLibraryStatus()).root).toBe(target);
     expect((await listAssets({})).assets[0].displayPath.startsWith(target)).toBe(true);
+  });
+
+  it("leaves the other build's move markers alone when that move holds the lock, so it can still be undone", async () => {
+    const root = path.join(base, "Shared");
+    const library = new AssetLibrary(root, { trash: async () => {} });
+    await library.ready();
+    const rel = "Generations/2026-09-27/x.png";
+    fs.mkdirSync(path.join(root, "Generations", "2026-09-27"), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), makePng(2, 2, 1));
+    // The other build (a live process) is moving this library to X and has copied x.png so far.
+    const x = path.join(base, "X");
+    fs.mkdirSync(path.join(x, "Generations", "2026-09-27"), { recursive: true });
+    fs.mkdirSync(path.join(x, ".nodebanana"), { recursive: true });
+    fs.copyFileSync(path.join(root, rel), path.join(x, rel));
+    fs.writeFileSync(path.join(x, ".nodebanana", "move-source.json"), JSON.stringify({ fromRoot: root, startedAt: Date.now() }));
+    const markerFile = path.join(root, ".nodebanana", "move.json");
+    const logFile = path.join(root, ".nodebanana", "move-copied.ndjson");
+    fs.writeFileSync(markerFile, JSON.stringify({ v: 1, toRoot: x, startedAt: Date.now(), pid: process.ppid, state: "copying" }));
+    fs.writeFileSync(logFile, `${JSON.stringify(rel)}\n`);
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
+
+    const y = path.join(base, "Y");
+    const move = () => runMove(jobContext(), { library, waitForWrites: async () => true, toRoot: y, setPaused: () => {}, switchRoot: async () => {} });
+    await expect(move()).rejects.toMatchObject({ code: "busy" });
+    expect(fs.existsSync(markerFile)).toBe(true);
+    expect(fs.existsSync(logFile)).toBe(true);
+
+    // The other build then dies mid-copy. The next move here undoes its partial copy before starting its own.
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: 999_999, at: Date.now(), purpose: "move" }));
+    await move();
+    expect(walk(x)).toEqual([]);
+    expect(walk(path.join(y, "Generations"))).toEqual(["2026-09-27/x.png"]);
+    await expect(validateMoveTarget(root, x)).resolves.toBe(x);
+    await library.drain();
+  });
+
+  it("waits for a recording the other build began before the move, so the copy has it", async () => {
+    await record();
+    // This runtime plays the other build: it starts an upload that is still arriving.
+    const root = (await __assetLibraryForTests()).root;
+    const started = await beginRecord({ meta: meta(), source: { type: "upload" } });
+    if (!("ticket" in started)) throw new Error("expected a ticket");
+    const png = makePng(64, 64, 2);
+    const slow = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new Uint8Array(png.subarray(0, 100)));
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        controller.enqueue(new Uint8Array(png.subarray(100)));
+        controller.close();
+      },
+    });
+    const uploading = completeUpload(started.ticket.uploadId, slow, null);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Meanwhile this build, with its own index, moves the same library.
+    const mover = new AssetLibrary(root, { trash: async () => {} });
+    await mover.ready();
+    const target = path.join(base, "Moved");
+    await runMove(jobContext(), { library: mover, waitForWrites: async () => true, toRoot: target, setPaused: () => {}, switchRoot: async () => {} });
+    const saved = await uploading;
+    const sidecar = path.join(".nodebanana", "assets", `${saved.asset.id}.json`);
+    expect(fs.existsSync(path.join(target, sidecar))).toBe(true);
+    expect(fs.existsSync(path.join(root, sidecar))).toBe(false);
+    expect(fs.existsSync(path.join(target, ".nodebanana", "writers"))).toBe(false);
+    await mover.drain();
+  });
+
+  it("refuses a write as soon as the other build's move holds the lock", async () => {
+    const r = await record();
+    const library = await __assetLibraryForTests();
+    const started = await beginRecord({ meta: meta(), source: { type: "upload" } });
+    if (!("ticket" in started)) throw new Error("expected a ticket");
+    // Just looked at the lock, and found no move.
+    await patchAsset(r.asset.id, { favorite: true });
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
+    const paused = { status: 503, code: "paused" };
+    await expect(completeUpload(started.ticket.uploadId, streamOf(makePng(2, 2, 78)), "image/png")).rejects.toMatchObject(paused);
+    await expect(patchAsset(r.asset.id, { favorite: false })).rejects.toMatchObject(paused);
+    expect((await listAssets({})).assets.map((asset) => [asset.id, asset.favorite])).toEqual([[r.asset.id, true]]);
+
+    // Once the move is over, the refused upload's ticket is still good.
+    fs.rmSync(library.layout.lock);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect((await completeUpload(started.ticket.uploadId, streamOf(makePng(2, 2, 78)), "image/png")).asset.id).toBeTruthy();
   });
 
   it("won't switch to a folder a move stopped copying into", async () => {
@@ -530,6 +615,36 @@ describe("import", () => {
     expect(library.getWorkflow(asset.workflowId)?.forkedFrom).toBe("wf_shared");
   });
 
+  it("stops, adding nothing more, once the other build's move holds the lock", async () => {
+    const project = path.join(base, "Moving Project");
+    fs.mkdirSync(path.join(project, "generations"), { recursive: true });
+    fs.writeFileSync(path.join(project, "generations", "a.png"), makePng(2, 2, 11));
+    fs.writeFileSync(path.join(project, "generations", "b.png"), makePng(2, 2, 12));
+    const library = await __assetLibraryForTests();
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
+    await expect(runImport(jobContext(), { library, thumbs: null }, [project])).rejects.toMatchObject({ code: "paused" });
+    expect(library.allRecords()).toHaveLength(0);
+    fs.rmSync(library.layout.lock);
+  });
+
+  it("keeps imported assets with their folder when a twin folder sharing the workflow id runs later", async () => {
+    const twin = path.join(base, "P", "A");
+    const imported = path.join(base, "P", "B");
+    for (const dir of [twin, imported]) {
+      fs.mkdirSync(path.join(dir, "generations"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "flow.json"), JSON.stringify({ version: 1, id: "wf_twin", name: "Twin", nodes: [], edges: [] }));
+    }
+    fs.writeFileSync(path.join(imported, "generations", "x.png"), makePng(2, 2, 6));
+    await finished(await startImport({ projectDirs: [imported] }));
+    // Later the Finder duplicate is opened and run: its run classifies the shared id there.
+    await upsertWorkflowEntry("wf_twin", { name: "Twin copy", projectPath: twin });
+
+    const [asset] = (await listAssets({ projects: [imported] })).assets;
+    expect(asset.workflow).toEqual({ id: "wf_twin", name: "Twin", projectPath: imported });
+    expect((await listAssets({ projects: [twin] })).total).toBe(0);
+    expect((await getFacets()).projects).toEqual([expect.objectContaining({ path: imported, count: 1 })]);
+  });
+
   it("refuses a bad folder list and a second job while one runs", async () => {
     await expect(startImport({ projectDirs: [] })).rejects.toMatchObject({ status: 400 });
     await expect(startImport({ projectDirs: ["relative"] })).rejects.toMatchObject({ status: 400 });
@@ -573,6 +688,31 @@ describe("cleanup", () => {
     expect(fs.readdirSync(library.layout.media)).toEqual([`${sha256(keep)}.png`]);
     expect(fs.readdirSync(posters)).toEqual([`${r.asset.sha256}.webp`]);
     await expect(startCleanup({})).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("removes a reference to a project file once no snapshot needs it, leaving the file", async () => {
+    const project = path.join(base, "Referenced");
+    fs.mkdirSync(project);
+    const png = makePng(2, 2, 14);
+    const inProject = await record({ projectDir: project }, png);
+    const later = await record();
+    await putRun(later.asset.runId, {
+      meta: { id: later.asset.runId, workflowId: later.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "start",
+      workflow: { version: 1, name: "x", nodes: [], edges: [], edgeStyle: "curved" },
+      mediaHashes: [sha256(png)],
+    });
+    for (const id of [inProject.asset.id, later.asset.id]) {
+      await patchAsset(id, { trashed: true });
+      await bulkAssets({ selection: { mode: "ids", ids: [id] }, op: { action: "delete" } });
+    }
+    const library = await __assetLibraryForTests();
+    expect(fs.readdirSync(library.layout.media)).toEqual([`${sha256(png)}.ref`]);
+
+    const job = await finished(await startCleanup({ unusedMedia: true }));
+    expect(job.state).toBe("done");
+    expect(fs.readdirSync(library.layout.media)).toEqual([]);
+    expect(fs.readFileSync(inProject.asset.displayPath).equals(png)).toBe(true);
   });
 
   it("removes old snapshots no asset belongs to, then the media only they referenced", async () => {

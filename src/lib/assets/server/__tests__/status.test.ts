@@ -69,3 +69,28 @@ describe("getLibraryStatus counts", () => {
     expect(status.counts.assets).toBe(1);
   });
 });
+
+describe("getLibraryStatus when the library is off", () => {
+  it("says why in a code: hosted for good, unwritable or unavailable for now", async () => {
+    const available = await getLibraryStatus();
+    expect(available.available).toBe(true);
+    expect(available.reasonCode).toBeUndefined();
+
+    process.env.VERCEL = "1";
+    try {
+      expect(await getLibraryStatus()).toMatchObject({ available: false, reasonCode: "hosted" });
+    } finally {
+      delete process.env.VERCEL;
+    }
+
+    // A folder the env names that can't be created: a file stands where its parent should be.
+    fs.writeFileSync(path.join(base, "not-a-folder"), "x");
+    process.env.NODE_BANANA_ASSET_LIBRARY = path.join(base, "not-a-folder", "Library");
+    await __resetAssetLibraryForTests();
+    expect(await getLibraryStatus()).toMatchObject({ available: false, reasonCode: "unwritable" });
+
+    process.env.NODE_BANANA_ASSET_LIBRARY = "relative/Library";
+    await __resetAssetLibraryForTests();
+    expect(await getLibraryStatus()).toMatchObject({ available: false, reasonCode: "unavailable" });
+  });
+});

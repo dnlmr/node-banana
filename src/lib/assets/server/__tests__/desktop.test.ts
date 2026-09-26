@@ -121,6 +121,53 @@ describe("trashFile", () => {
       expect(calls).toEqual([expect.objectContaining({ command: "gio", args: ["trash", ...list] })]);
     });
 
+    it("tries Finder once, not once per file, when macOS won't let it be asked", async () => {
+      const refusals = [
+        Object.assign(new Error("Command failed: osascript\nexecution error: Not authorized to send Apple events to Finder. (-1743)"), { code: 1 }),
+        // A prompt nobody answered, until the exec timeout.
+        Object.assign(new Error("Command failed: osascript"), { killed: true, signal: "SIGTERM", code: null }),
+      ];
+      for (const refusal of refusals) {
+        const list = files(50);
+        const { calls, exec } = recorder((command) => {
+          if (command === "/usr/bin/trash") throw Object.assign(new Error("spawn /usr/bin/trash ENOENT"), { code: "ENOENT" });
+          throw refusal;
+        });
+        const results = await trashFiles(list, { platform: "darwin", exec, bridge: null });
+        expect(calls.map((call) => call.command)).toEqual(["/usr/bin/trash", "osascript"]);
+        expect(new Set(results.values())).toEqual(new Set(["unlink"]));
+        expect(list.some((file) => fs.existsSync(file))).toBe(false);
+      }
+    });
+
+    it("stops retrying file by file once a single file shows the route itself is down", async () => {
+      const list = files(5);
+      const { calls, exec } = recorder((_command, args) => {
+        if (args.length > 2) throw Object.assign(new Error("one bad path"), { code: 1 });
+        throw Object.assign(new Error("Command failed: gio"), { killed: true, signal: "SIGTERM" });
+      });
+      await trashFiles(list, { platform: "linux", exec, bridge: null });
+      expect(calls).toHaveLength(2);
+    });
+
+    it("skips only the route that could prompt when nobody asked just now", async () => {
+      const unattended = files(2);
+      const noTrashTool = recorder((command) => {
+        if (command === "/usr/bin/trash") throw Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+        removeAll(unattended)();
+      });
+      const results = await trashFiles(unattended, { platform: "darwin", exec: noTrashTool.exec, bridge: null, interactive: false });
+      expect(noTrashTool.calls.map((call) => call.command)).toEqual(["/usr/bin/trash"]);
+      expect([...results.values()]).toEqual(["unlink", "unlink"]);
+
+      const withTool = files(2);
+      const trash = recorder(removeAll(withTool));
+      expect([...(await trashFiles(withTool, { platform: "darwin", exec: trash.exec, bridge: null, interactive: false })).values()]).toEqual(["os", "os"]);
+
+      const bridge: DesktopServerBridge = { request: vi.fn(async () => ({ ok: true as const })) };
+      expect(await trashFile("/x.png", { platform: "darwin", exec: trash.exec, bridge, interactive: false })).toBe("bridge");
+    });
+
     it("retries a failed batch file by file, then unlinks only what is left", async () => {
       const list = files(3);
       const { calls, exec } = recorder((_command, args) => {

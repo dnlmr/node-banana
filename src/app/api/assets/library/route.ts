@@ -4,7 +4,9 @@
  * GET → LibraryStatus. Always 200: when the request guard refuses, or the
  *     status cannot be read, the answer is `available: false` with the
  *     reason, so the page (which calls this on load) can explain instead of
- *     failing. A refused caller learns nothing about the machine's folders.
+ *     failing, and a `reasonCode` ("guard" for the guard) so it knows
+ *     whether asking again can help. A refused caller learns nothing about
+ *     the machine's folders.
  * PUT SetLibraryRootRequest → LibraryStatus: `switch` uses the folder now,
  *     `move` starts a move job and switches when it verifies.
  */
@@ -19,10 +21,11 @@ import { parseSetLibraryRoot } from "../_lib/validate";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function unavailable(reason: string): LibraryStatus {
+function unavailable(reason: string, reasonCode: NonNullable<LibraryStatus["reasonCode"]>): LibraryStatus {
   return {
     available: false,
     reason,
+    reasonCode,
     root: null,
     source: "default",
     defaultRoot: "",
@@ -37,7 +40,8 @@ function unavailable(reason: string): LibraryStatus {
 
 export async function GET(request: Request) {
   const check = checkAssetRequest(request);
-  if (!check.ok) return json(unavailable(check.reason));
+  // Refused by the guard: no answer from this page will change while it is open.
+  if (!check.ok) return json(unavailable(check.reason, "guard"));
   try {
     return json(await getLibraryStatus());
   } catch (error) {
@@ -45,7 +49,7 @@ export async function GET(request: Request) {
       logger.error("api.error", "Asset library status failed", {}, error instanceof Error ? error : undefined);
     }
     const reason = error instanceof Error && error.message ? error.message : "The asset library could not start.";
-    return json(unavailable(reason));
+    return json(unavailable(reason, "unavailable"));
   }
 }
 
