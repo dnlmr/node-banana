@@ -391,6 +391,44 @@ describe("two processes on one library", () => {
   });
 });
 
+describe("loading sidecars", () => {
+  it("accepts only exact sidecar names and drops records that point outside the library", async () => {
+    const r = await record();
+    const assets = path.join(root, ".nodebanana", "assets");
+    const sidecar = JSON.parse(fs.readFileSync(path.join(assets, `${r.asset.id}.json`), "utf8"));
+    // Sync-conflict copies and temp files are not records.
+    fs.writeFileSync(path.join(assets, `${r.asset.id}-DESKTOP-1.json`), JSON.stringify({ ...sidecar, id: `${r.asset.id}-DESKTOP-1` }));
+    fs.writeFileSync(path.join(assets, `${r.asset.id}.json.1234.tmp`), "{");
+    const escaping = "a" + "e".repeat(13);
+    fs.writeFileSync(
+      path.join(assets, `${escaping}.json`),
+      JSON.stringify({ ...sidecar, id: escaping, file: { root: "library", rel: "../../outside.png" } }),
+    );
+    const notMedia = "a" + "f".repeat(13);
+    fs.writeFileSync(
+      path.join(assets, `${notMedia}.json`),
+      JSON.stringify({ ...sidecar, id: notMedia, file: { root: "external", path: path.join(base, "secret.txt") } }),
+    );
+    const intoData = "a" + "g".repeat(13);
+    fs.writeFileSync(
+      path.join(assets, `${intoData}.json`),
+      JSON.stringify({ ...sidecar, id: intoData, file: { root: "library", rel: ".nodebanana/journal.ndjson" } }),
+    );
+    fs.writeFileSync(path.join(assets, `${"a" + "h".repeat(13)}.json`), "not json");
+    // A torn journal line from a crash is ignored.
+    fs.appendFileSync(path.join(root, ".nodebanana", "journal.ndjson"), '{"op":"put","id":');
+
+    const fresh = new AssetLibrary(root);
+    await fresh.ready();
+    expect(fresh.allRecords().map((x) => x.id)).toEqual([r.asset.id]);
+
+    // A write after the torn line still reaches other processes.
+    await fresh.patch(r.asset.id, { tags: ["after-crash"] });
+    expect((await getAsset(r.asset.id))?.tags).toEqual(["after-crash"]);
+    await fresh.drain();
+  });
+});
+
 function snapshot(name = "Flow"): SnapshotWorkflow {
   return { version: 1, name, nodes: [{ id: "n1", data: { outputImage: { $nbMedia: "x" } } }], edges: [], edgeStyle: "curved" };
 }

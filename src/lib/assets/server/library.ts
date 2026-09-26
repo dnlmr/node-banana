@@ -42,7 +42,7 @@ import {
   pathKey,
   unlinkWithRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, GENERATIONS_DIR, libraryLayout, type LibraryLayout } from "./layout";
+import { acquireLock, DATA_DIR, libraryLayout, type LibraryLayout } from "./layout";
 import { RunStore } from "./runs";
 import {
   compareNewest,
@@ -475,7 +475,8 @@ export class AssetLibrary {
 
   private async appendJournal(lines: string[]): Promise<void> {
     if (!lines.length) return;
-    await this.journalLock.run("journal", () => fs.appendFile(this.layout.journal, lines.join("")));
+    // The leading newline seals off a torn last line left by a crash, which would otherwise swallow ours.
+    await this.journalLock.run("journal", () => fs.appendFile(this.layout.journal, `\n${lines.join("")}`));
     if (this.compacting) return;
     try {
       const { size } = await fs.stat(this.layout.journal);
@@ -1116,4 +1117,3 @@ export class AssetLibrary {
   }
 }
 
-export { GENERATIONS_DIR };
