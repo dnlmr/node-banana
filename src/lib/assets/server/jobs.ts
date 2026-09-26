@@ -22,7 +22,7 @@ import {
   sweepStaleTemps,
   unlinkWithRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, GENERATIONS_DIR, isLiveLock, readLock } from "./layout";
+import { acquireLock, DATA_DIR, GENERATIONS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
 import type { Thumbnailer } from "./thumbs";
@@ -924,9 +924,18 @@ export async function recoverInterruptedMove(library: AssetLibrary): Promise<{ t
   // This root is the live library: whatever move copied into it finished its switch.
   if (await exists(ownMarker)) await unlinkWithRetry(ownMarker).catch(() => {});
   if (!(await exists(markerFile))) return null;
-  const lock = await readLock(library.layout.lock);
-  if (lock?.purpose === "move" && isLiveLock(lock)) return null;
+  // Held while recovering, so no move starts (and writes new markers) halfway; a live holder means
+  // the move is still running somewhere, and a dead one's lock is taken over.
+  const lock = await acquireLock(library.layout.lock, { purpose: "move" });
+  if (!lock) return null;
+  try {
+    return await recoverMoveLocked(library.root, markerFile, logFile);
+  } finally {
+    await lock.release();
+  }
+}
 
+async function recoverMoveLocked(root: string, markerFile: string, logFile: string): Promise<{ toRoot: string } | null> {
   const marker = await readJson<Partial<MoveMarker>>(markerFile);
   const toRoot = typeof marker?.toRoot === "string" && path.isAbsolute(marker.toRoot) ? path.resolve(marker.toRoot) : null;
   let recovered: { toRoot: string } | null = null;
@@ -934,7 +943,7 @@ export async function recoverInterruptedMove(library: AssetLibrary): Promise<{ t
     // The target still carries this move's marker only while it has never been the live library
     // (starting a library removes it), so what it holds is only this move's copy.
     const target = await readJson<{ fromRoot?: unknown }>(path.join(toRoot, DATA_DIR, MOVE_SOURCE_MARKER));
-    if (typeof target?.fromRoot === "string" && pathKey(target.fromRoot) === pathKey(library.root)) {
+    if (typeof target?.fromRoot === "string" && pathKey(target.fromRoot) === pathKey(root)) {
       let rels: string[] = [];
       try {
         rels = (await fs.readFile(logFile, "utf8"))
