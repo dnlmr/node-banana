@@ -5,6 +5,8 @@ import { writeFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
+import { guardAssetRequest } from "@/lib/assets/server/guard";
+
 const execAsync = promisify(exec);
 
 /**
@@ -49,6 +51,14 @@ export async function GET(request: Request) {
   const platform = process.platform;
   const purpose = new URL(request.url).searchParams.get("purpose");
   const title = purpose === "library" ? PICKER_TITLES.library : PICKER_TITLES.default;
+
+  // The library's picker answers only whom the library itself answers: a
+  // page on another device must not open a dialog on this computer's screen
+  // for a change the library would then refuse.
+  if (purpose === "library") {
+    const refused = guardAssetRequest(request);
+    if (refused) return refused;
+  }
 
   try {
     let selectedPath: string | null = null;

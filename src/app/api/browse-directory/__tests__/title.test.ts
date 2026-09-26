@@ -8,7 +8,10 @@ const { exec, writeFile } = vi.hoisted(() => ({
 
 vi.mock("child_process", () => ({ exec }));
 vi.mock("fs/promises", () => ({ writeFile, unlink: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@/utils/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
+import { AGENT_LOCAL_HEADER, AGENT_LOCAL_SECRET_ENV } from "@/lib/agent/server/sameOrigin";
+import { LIBRARY_GUARD_MESSAGE } from "@/lib/assets/server/guard";
 import { GET } from "../route";
 
 const LIBRARY_TITLE = "Choose where Node Banana saves your media";
@@ -19,9 +22,27 @@ function onPlatform(platform: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
 }
 
-const pick = (query = "") => GET(new Request(`http://localhost:3000/api/browse-directory${query}`));
+/** What server.js stamps on a request that came over a loopback connection. */
+const SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/** The page's own fetch(), over a stamped loopback connection. */
+const pick = (query = "") =>
+  GET(
+    new Request(`http://localhost:3000/api/browse-directory${query}`, {
+      headers: { host: "localhost:3000", "sec-fetch-site": "same-origin", [AGENT_LOCAL_HEADER]: SECRET },
+    })
+  );
+
+/** The same request from a page on another device on the network. */
+const pickFromElsewhere = (query = "") =>
+  GET(
+    new Request(`http://192.168.1.5:3000/api/browse-directory${query}`, {
+      headers: { host: "192.168.1.5:3000", "sec-fetch-site": "same-origin" },
+    })
+  );
 
 beforeEach(() => {
+  process.env[AGENT_LOCAL_SECRET_ENV] = SECRET;
   // promisify(exec) resolves with the callback's second argument.
   exec.mockImplementation((_command: string, ...rest: unknown[]) => {
     const callback = rest[rest.length - 1] as (error: null, result: { stdout: string; stderr: string }) => void;
@@ -31,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env[AGENT_LOCAL_SECRET_ENV];
   onPlatform(realPlatform);
   vi.resetAllMocks();
 });
@@ -61,5 +83,22 @@ describe("GET /api/browse-directory picker title", () => {
     onPlatform("linux");
     await pick("?purpose=library");
     expect(exec.mock.calls[0][0]).toContain(`--title="${LIBRARY_TITLE}"`);
+  });
+});
+
+describe("GET /api/browse-directory for the library", () => {
+  it("opens no picker for a page the asset library does not answer", async () => {
+    onPlatform("darwin");
+    const response = await pickFromElsewhere("?purpose=library");
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: LIBRARY_GUARD_MESSAGE, code: "forbidden" });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("leaves the workflow folder picker as it was", async () => {
+    onPlatform("darwin");
+    const response = await pickFromElsewhere();
+    expect(await response.json()).toEqual({ success: true, cancelled: false, path: "/Users/me/Media" });
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 });
