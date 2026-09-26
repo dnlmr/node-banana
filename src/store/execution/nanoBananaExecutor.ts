@@ -24,10 +24,10 @@ import {
   assetModel,
   assetParameters,
   assetProducer,
+  followRecording,
   parameterFraming,
   recordOutput,
   sizeFromString,
-  trackLegacyId,
 } from "./assetRecording";
 
 export interface NanoBananaOptions {
@@ -279,42 +279,47 @@ export async function executeNanoBanana(
           addIncurredCost(runCost);
         }
 
+        // The save to the generations folder: a project's only save without
+        // the asset library, and its fallback when a recording fails
+        const saveToFolder = generationsPath
+          ? () =>
+              fetch("/api/save-generation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  directoryPath: generationsPath,
+                  image: result.image,
+                  prompt: finalPrompt,
+                  imageId,
+                }),
+              })
+                .then((res) => res.json())
+                .then((saveResult) => {
+                  if (saveResult.success && saveResult.imageId && saveResult.imageId !== imageId) {
+                    const currentNode = getNodes().find((n) => n.id === node.id);
+                    if (currentNode) {
+                      const currentData = currentNode.data as NanoBananaNodeData;
+                      const histCopy = [...(currentData.imageHistory || [])];
+                      const entryIndex = histCopy.findIndex((h) => h.id === imageId);
+                      if (entryIndex !== -1) {
+                        histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
+                        updateNodeData(node.id, { imageHistory: histCopy });
+                      }
+                    }
+                  }
+                })
+                .catch((err) => {
+                  console.error("Failed to save generation:", err);
+                })
+          : null;
+
         if (recorded) {
           // The recorder writes a project's generations into its folder; the
           // carousel entry then takes the file's name, as a save there always did.
-          if (generationsPath) trackLegacyId(ctx, "imageHistory", imageId, recorded);
-        } else if (generationsPath) {
+          followRecording(ctx, "imageHistory", imageId, recorded, saveToFolder);
+        } else if (saveToFolder) {
           // No asset library: auto-save to the generations folder
-          const savePromise = fetch("/api/save-generation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              directoryPath: generationsPath,
-              image: result.image,
-              prompt: finalPrompt,
-              imageId,
-            }),
-          })
-            .then((res) => res.json())
-            .then((saveResult) => {
-              if (saveResult.success && saveResult.imageId && saveResult.imageId !== imageId) {
-                const currentNode = getNodes().find((n) => n.id === node.id);
-                if (currentNode) {
-                  const currentData = currentNode.data as NanoBananaNodeData;
-                  const histCopy = [...(currentData.imageHistory || [])];
-                  const entryIndex = histCopy.findIndex((h) => h.id === imageId);
-                  if (entryIndex !== -1) {
-                    histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
-                    updateNodeData(node.id, { imageHistory: histCopy });
-                  }
-                }
-              }
-            })
-            .catch((err) => {
-              console.error("Failed to save generation:", err);
-            });
-
-          trackSaveGeneration(imageId, savePromise);
+          trackSaveGeneration(imageId, saveToFolder());
         }
       } else {
         updateNodeData(node.id, {

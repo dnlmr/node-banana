@@ -11,7 +11,7 @@ import { pollGenerateTask } from "./pollTaskCompletion";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
-import { assetCost, assetModel, assetParameters, assetProducer, recordOutput, resolvedPrompt } from "./assetRecording";
+import { assetCost, assetModel, assetParameters, assetProducer, recordingResult, recordOutput, resolvedPrompt } from "./assetRecording";
 
 export interface Generate3DOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -161,12 +161,43 @@ export async function executeGenerate3D(
           addIncurredCost(modelToUse.pricing.amount);
         }
 
+        // The save to the generations folder: a project's only save without
+        // the asset library, and its fallback when a recording fails
+        const saveToFolder = generationsPath
+          ? () =>
+              fetch("/api/save-generation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  directoryPath: generationsPath,
+                  model3d: model3dUrl,
+                  prompt: promptText,
+                }),
+              })
+                .then((res) => res.json())
+                .then((saveResult) => {
+                  if (saveResult.success && saveResult.filename) {
+                    updateNodeData(node.id, {
+                      savedFilename: saveResult.filename,
+                      savedFilePath: saveResult.filePath,
+                    });
+                  }
+                })
+                .catch((err) => {
+                  console.error("Failed to save 3D model:", err);
+                })
+          : null;
+
         if (recorded) {
           // Point the node at the saved file once it is on disk, unless the
           // node has moved on to another model (or the canvas to another workflow)
-          const landed = recorded.done
-            .then((saved) => {
-              if (!saved) return;
+          const landed = recordingResult(recorded)
+            .then(async (saved) => {
+              if (!saved) {
+                // A project's model still lands in its folder
+                if (saveToFolder) await saveToFolder();
+                return;
+              }
               const current = getFreshNode(node.id)?.data as Generate3DNodeData | undefined;
               if (current?.output3dUrl !== model3dUrl) return;
               updateNodeData(node.id, {
@@ -178,31 +209,9 @@ export async function executeGenerate3D(
               console.error("Failed to save 3D model:", err);
             });
           if (generationsPath) trackSaveGeneration(`3d-${Date.now()}`, landed);
-        } else if (generationsPath) {
+        } else if (saveToFolder) {
           // No asset library: auto-save 3D model to the generations folder
-          const savePromise = fetch("/api/save-generation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              directoryPath: generationsPath,
-              model3d: result.model3dUrl,
-              prompt: promptText,
-            }),
-          })
-            .then((res) => res.json())
-            .then((saveResult) => {
-              if (saveResult.success && saveResult.filename) {
-                updateNodeData(node.id, {
-                  savedFilename: saveResult.filename,
-                  savedFilePath: saveResult.filePath,
-                });
-              }
-            })
-            .catch((err) => {
-              console.error("Failed to save 3D model:", err);
-            });
-
-          trackSaveGeneration(`3d-${Date.now()}`, savePromise);
+          trackSaveGeneration(`3d-${Date.now()}`, saveToFolder());
         }
       } else {
         updateNodeData(node.id, {
