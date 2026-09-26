@@ -150,6 +150,58 @@ describe("trashFile", () => {
       expect(calls).toHaveLength(2);
     });
 
+    it("keeps recycling after a batch that timed out part-way, and gives up only on a route that moved nothing", async () => {
+      const killed = () => Object.assign(new Error("Command failed: powershell.exe"), { killed: true, signal: "SIGTERM", code: null });
+      const paths = (options: Record<string, unknown>) => (options.env as Record<string, string>).NB_TRASH_PATHS.split("\n");
+
+      // A slow Recycle Bin: each run gets through 150 files before the exec timeout stops it.
+      const slow = files(450);
+      const slowRuns: string[][] = [];
+      const results = await trashFiles(slow, {
+        platform: "win32",
+        bridge: null,
+        exec: async (_command, _args, options) => {
+          const list = paths(options as Record<string, unknown>);
+          slowRuns.push(list);
+          list.slice(0, 150).forEach((file) => fs.rmSync(file, { force: true }));
+          if (list.length > 150) throw killed();
+        },
+      });
+      expect(new Set(results.values())).toEqual(new Set(["os"]));
+      expect(results.size).toBe(450);
+      // Each timed-out batch's leftovers go one by one, and the next batch still goes to the route.
+      expect(slowRuns.filter((list) => list.length > 1).map((list) => list.length)).toEqual([200, 200, 50]);
+
+      // One locked file whose error dialog holds PowerShell up, in the first batch.
+      const withLocked = files(250);
+      const locked = withLocked[3];
+      const lockedResults = await trashFiles(withLocked, {
+        platform: "win32",
+        bridge: null,
+        exec: async (_command, _args, options) => {
+          const list = paths(options as Record<string, unknown>);
+          list.filter((file) => file !== locked).forEach((file) => fs.rmSync(file, { force: true }));
+          if (list.includes(locked)) throw killed();
+        },
+      });
+      expect(lockedResults.get(locked)).toBe("unlink");
+      expect([...lockedResults.values()].filter((method) => method === "os")).toHaveLength(249);
+
+      // A PowerShell that hangs before it moves anything: tried once, not once per batch or per file.
+      const hung = files(450);
+      const hungRuns: string[][] = [];
+      const hungResults = await trashFiles(hung, {
+        platform: "win32",
+        bridge: null,
+        exec: async (_command, _args, options) => {
+          hungRuns.push(paths(options as Record<string, unknown>));
+          throw killed();
+        },
+      });
+      expect(hungRuns).toHaveLength(1);
+      expect(new Set(hungResults.values())).toEqual(new Set(["unlink"]));
+    });
+
     it("skips only the route that could prompt when nobody asked just now", async () => {
       const unattended = files(2);
       const noTrashTool = recorder((command) => {
