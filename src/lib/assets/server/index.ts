@@ -3,7 +3,7 @@
  *
  * Internal modules live next to this file (paths, fsutil, validate, media,
  * layout, library, search, workflows, runs, ingest, download, thumbs, jobs,
- * desktop). Routes import only from here and must not reach into them.
+ * readable, desktop). Routes import only from here and must not reach into them.
  *
  * All functions throw `LibraryError` for expected failures; routes map
  * `status` to the HTTP status and `message` to `{ error }` (and send
@@ -72,6 +72,7 @@ import {
   type PathContext,
   type ResolvedLocation,
 } from "./paths";
+import { assessReadable, findUnreadable } from "./readable";
 import { runMeta } from "./runs";
 import { Thumbnailer } from "./thumbs";
 import { extOf, isAssetId, isMediaExtension, isSha256, requireSha256 } from "./validate";
@@ -245,7 +246,9 @@ function libraryFor(rt: Runtime, location: ResolvedLocation): AssetLibrary {
     if (previous) track(rt, previous.drain());
   }
   if (!rt.thumbs || rt.thumbs.dir !== path.join(location.cacheDir, "thumbs")) {
-    rt.thumbs = new Thumbnailer(location.cacheDir, () => rt.library);
+    rt.thumbs = new Thumbnailer(location.cacheDir, () => rt.library, {
+      onUndecodable: (sha256, file) => track(rt, markUndecodable(rt, sha256, file)),
+    });
   }
   const library = rt.library;
   if (!rt.initialised.has(location.root)) {
@@ -258,8 +261,9 @@ function libraryFor(rt: Runtime, location: ResolvedLocation): AssetLibrary {
 /**
  * Once per root and process: the library marker, hidden data folder on
  * Windows, recovery of a move that stopped part-way, a sweep of stale
- * partial files, the index scan, then auto-empty of Trash items older than
- * 30 days and a thumbnail cache trim.
+ * partial files, the index scan (then, off to the side, a look at the files
+ * of records that may be unreadable), then auto-empty of Trash items older
+ * than 30 days and a thumbnail cache trim.
  */
 async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void> {
   const layout = library.layout;
@@ -272,6 +276,7 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
   }
   await noteInterruptedMove(rt, library);
   await library.ensureLoaded();
+  track(rt, findUnreadable(library).then((ids) => markUnreadable(rt, library, ids)));
   const dirs = [layout.data, layout.assets, layout.runs, layout.media, layout.posters, layout.pendingReleases];
   try {
     for (const day of await fs.readdir(layout.generations)) dirs.push(path.join(layout.generations, day));
@@ -283,6 +288,38 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
     await counted(rt, () => library.writing(() => library.emptyExpiredTrash()));
   }
   await rt.thumbs?.trim();
+}
+
+/**
+ * Marks records whose bytes nothing can open, so they are no longer listed.
+ * Counted and published like any write; skipped (not queued) while a move
+ * runs — the flag can always be found again, and the next start looks again.
+ */
+async function markUnreadable(rt: Runtime, library: AssetLibrary, ids: readonly string[]): Promise<void> {
+  if (!ids.length || rt.paused || rt.library !== library) return;
+  try {
+    if (await library.movingElsewhere()) return;
+    await counted(rt, () => library.writing(() => library.markUnreadable(ids)));
+  } catch (error) {
+    if (error instanceof LibraryError && error.code === "paused") return;
+    throw error;
+  }
+}
+
+/**
+ * sharp could not decode an image asset's file while making its thumbnail.
+ * Its records are marked only if the file is unreadable by the same careful
+ * test as everywhere else (readable.ts), not on the strength of one failure.
+ */
+async function markUndecodable(rt: Runtime, sha256: string, file: string): Promise<void> {
+  const library = rt.library;
+  if (!library) return;
+  const ids = library
+    .recordsWithHash(sha256)
+    .filter((record) => record.kind === "image" && !record.unreadable)
+    .map((record) => record.id);
+  if (!ids.length || (await assessReadable(file, "image")) !== "unreadable") return;
+  await markUnreadable(rt, library, ids);
 }
 
 /** Undoes a move of this library that stopped part-way, and says so in the library status. */

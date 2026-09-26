@@ -21,7 +21,9 @@
  */
 
 import { promises as fs } from "fs";
-import type { AssetKind } from "../types";
+import type { AssetKind, AssetRecord } from "../types";
+import { mapConcurrent } from "./fsutil";
+import type { AssetLibrary } from "./library";
 import { imageDimensionsFromFile, probeContainer, readHead, sniffFamily, type ProbeResult } from "./media";
 import { isDecodeError, loadSharp } from "./thumbs";
 import { mediaTypeForExt } from "./validate";
@@ -31,6 +33,8 @@ export type Readability = "readable" | "unreadable" | "unknown";
 const HEAD_BYTES = 64 * 1024;
 /** Files larger than this are not handed to sharp: reading them would cost more than the answer. */
 const MAX_SHARP_BYTES = 256 * 1024 * 1024;
+/** Files looked at once when the index loads. */
+const SWEEP_CONCURRENCY = 4;
 
 function ascii(head: Buffer, start: number, end: number): string {
   return head.length >= end ? head.toString("latin1", start, end) : "";
@@ -107,4 +111,51 @@ export async function isUnreadableFile(
   if (type.kind === "3d") return false;
   if (type.kind === "image" ? Boolean(measured.width && measured.height) : type.sniffed) return false;
   return (await assessReadable(file, type.kind)) === "unreadable";
+}
+
+/**
+ * Records worth a look when the index loads: images with no size, and video
+ * or audio with no duration (a probe that could read the file would have
+ * given one; whether the first bytes agree with the recorded type is then the
+ * first thing {@link assessReadable} checks). Everything else was measured
+ * from readable bytes.
+ */
+export function isUnreadableSuspect(record: AssetRecord): boolean {
+  if (record.unreadable) return false;
+  if (record.kind === "image") return !(record.width && record.height);
+  if (record.kind === "video" || record.kind === "audio") return !record.durationSec;
+  return false;
+}
+
+/**
+ * The ids of records whose files are unreadable, among the suspects (and
+ * every other record holding the same bytes as one). One look per content
+ * and kind, a few at a time; each group tries its records' files in turn
+ * until one can be read.
+ */
+export async function findUnreadable(library: AssetLibrary, concurrency = SWEEP_CONCURRENCY): Promise<string[]> {
+  const groups = new Map<string, AssetRecord[]>();
+  for (const record of library.allRecords()) {
+    if (!isUnreadableSuspect(record)) continue;
+    const key = `${record.sha256}:${record.kind}`;
+    const group = groups.get(key);
+    if (group) group.push(record);
+    else groups.set(key, [record]);
+  }
+  const found = await mapConcurrent([...groups.values()], concurrency, async (records) => {
+    for (const record of records) {
+      const file = library.filePath(record);
+      if (!file) continue;
+      const verdict = await assessReadable(file, record.kind);
+      if (verdict === "readable") return [];
+      if (verdict === "unreadable") {
+        return library
+          .recordsWithHash(record.sha256)
+          .filter((other) => other.kind === record.kind && !other.unreadable)
+          .map((other) => other.id);
+      }
+    }
+    return [];
+  });
+  return [...new Set(found.flat())];
 }

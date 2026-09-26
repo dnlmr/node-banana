@@ -10,7 +10,7 @@
 import fs from "fs";
 import path from "path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { AssetKind, LibraryJobStatus, RecordAssetMeta, RecordAssetResult } from "../../types";
+import type { AssetKind, AssetRecord, LibraryJobStatus, RecordAssetMeta, RecordAssetResult } from "../../types";
 import {
   __assetLibraryForTests,
   __drainAssetLibraryForTests,
@@ -28,9 +28,10 @@ import {
   patchAsset,
   startImport,
 } from "../index";
-import { assessReadable } from "../readable";
+import { AssetLibrary } from "../library";
+import { assessReadable, findUnreadable } from "../readable";
 import { isDecodeError, loadSharp } from "../thumbs";
-import { installBridge, makePng, makeWav, meta, streamOf, tempDir, TINY_MP4 } from "./helpers";
+import { fakeRecord, installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
 /** A file as the old save routes wrote it: the whole data URL decoded as base64. */
 function damage(bytes: Buffer, mime = ""): Buffer {
@@ -98,6 +99,23 @@ async function record(buffer: Buffer, overrides: Partial<RecordAssetMeta> = {}, 
   const started = await beginRecord({ meta: meta(overrides), source: { type: "upload" } });
   if ("result" in started) return started.result;
   return completeUpload(started.ticket.uploadId, streamOf(buffer), contentType);
+}
+
+/** A record of a project file, as an older build or an import would have left it (no size, no duration). */
+function projectRecord(file: string, kind: AssetKind, ext: string, mime: string, overrides: Partial<AssetRecord> = {}): AssetRecord {
+  const bytes = fs.readFileSync(file);
+  return fakeRecord({
+    kind,
+    mime,
+    ext,
+    bytes: bytes.length,
+    sha256: sha256(bytes),
+    md5: md5(bytes),
+    file: { root: "external", path: file },
+    filename: path.basename(file),
+    imported: true,
+    ...overrides,
+  });
 }
 
 const listedIds = async (scope?: "library" | "trash" | "missing") => (await listAssets(scope ? { scope } : {})).assets.map((asset) => asset.id);
@@ -267,5 +285,114 @@ describe("importing project folders", () => {
     expect(library.recordsAtPath(damaged[2])).toEqual([]);
     expect(fs.readFileSync(damaged[0]).equals(damagedPng)).toBe(true);
     expect(fs.readFileSync(damaged[2]).equals(damagedWav)).toBe(true);
+  });
+});
+
+describe("records already in the library", () => {
+  it("are looked at when the index loads, and the unreadable ones marked and hidden", async () => {
+    const files = {
+      badPng: write("p/generations/bad_png.png", damagedPng),
+      badOctet: write("p/generations/bad_octet.png", damagedOctetPng),
+      goodPng: write("p/generations/good.png", png),
+      badMp4: write("p/generations/bad.mp4", damagedMp4),
+      goodMp4: write("p/generations/good.mp4", TINY_MP4),
+      badWav: write("p/generations/bad.wav", damagedWav),
+      goodWav: write("p/generations/good.wav", makeWav()),
+    };
+    const records = {
+      badPng: projectRecord(files.badPng, "image", "png", "image/png"),
+      // The same bytes with a size the client sent: they share the verdict.
+      badPngSized: projectRecord(files.badPng, "image", "png", "image/png", { width: 8, height: 6, imported: undefined }),
+      badOctet: projectRecord(files.badOctet, "image", "png", "image/png"),
+      goodPng: projectRecord(files.goodPng, "image", "png", "image/png"),
+      badMp4: projectRecord(files.badMp4, "video", "mp4", "video/mp4"),
+      goodMp4: projectRecord(files.goodMp4, "video", "mp4", "video/mp4"),
+      badWav: projectRecord(files.badWav, "audio", "wav", "audio/wav"),
+      goodWav: projectRecord(files.goodWav, "audio", "wav", "audio/wav"),
+    };
+    const first = await __assetLibraryForTests();
+    for (const value of Object.values(records)) await first.addRecord(value);
+    expect((await listAssets({})).total).toBe(8);
+
+    // The next start (a new process) looks, off the request path.
+    await __resetAssetLibraryForTests();
+    await listAssets({});
+    await __drainAssetLibraryForTests();
+
+    const expectedHidden = hasSharp
+      ? ["badPng", "badPngSized", "badOctet", "badMp4", "badWav"]
+      : ["badMp4", "badWav"];
+    const listed = new Set(await listedIds());
+    for (const [name, value] of Object.entries(records)) {
+      expect([name, listed.has(value.id)]).toEqual([name, !expectedHidden.includes(name)]);
+      const sidecar = JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "assets", `${value.id}.json`), "utf8"));
+      expect([name, sidecar.unreadable === true]).toEqual([name, expectedHidden.includes(name)]);
+    }
+    // Journalled like any other change, so another process sees it.
+    const journal = fs.readFileSync(path.join(root, ".nodebanana", "journal.ndjson"), "utf8");
+    for (const name of expectedHidden) expect(journal).toContain(`"op":"put","id":"${records[name as keyof typeof records].id}"`);
+    // The files themselves are never touched.
+    expect(fs.readFileSync(files.badPng).equals(damagedPng)).toBe(true);
+    expect(fs.readFileSync(files.badMp4).equals(damagedMp4)).toBe(true);
+    expect((await getLibraryStatus()).counts.assets).toBe(8 - expectedHidden.length);
+  });
+
+  it("finds only what is unreadable, and another process's index picks up the mark", async () => {
+    const bad = projectRecord(write("q/bad.mp4", damagedMp4), "video", "mp4", "video/mp4");
+    const good = projectRecord(write("q/good.png", png), "image", "png", "image/png");
+    const missing = projectRecord(write("q/gone.mp4", damagedMp4), "video", "mp4", "video/mp4", {
+      file: { root: "external", path: path.join(base, "q", "elsewhere.mp4") },
+    });
+    const library = await __assetLibraryForTests();
+    for (const value of [bad, good, missing]) await library.addRecord(value);
+    const other = new AssetLibrary(root);
+    await other.ready();
+
+    // The missing file's bytes can't be looked at: never guessed. Its twin (same bytes, same kind) is marked.
+    const found = await findUnreadable(library);
+    expect(found.sort()).toEqual([bad.id, missing.id].sort());
+    expect(await library.markUnreadable([bad.id])).toEqual([bad.id]);
+    expect(await library.markUnreadable([bad.id])).toEqual([bad.id]);
+
+    const page = await other.query({});
+    expect(page.assets.map((asset) => asset.id).sort()).toEqual([good.id, missing.id].sort());
+    expect(other.get(bad.id)?.unreadable).toBe(true);
+  });
+});
+
+describe("thumbnails", () => {
+  it("mark an image unreadable when its file can't be decoded", async () => {
+    if (!hasSharp) return;
+    // A size on record, so the load-time look passes it by; its bytes are noise all the same.
+    const file = write("t/sized.png", damagedOctetPng);
+    const sized = projectRecord(file, "image", "png", "image/png", { width: 8, height: 6 });
+    const library = await __assetLibraryForTests();
+    await library.addRecord(sized);
+    expect(await listedIds()).toEqual([sized.id]);
+
+    expect(await getThumbnail(sized.sha256, 320)).toBeNull();
+    await __drainAssetLibraryForTests();
+    expect((await getAsset(sized.id))?.unreadable).toBe(true);
+    expect(await listedIds()).toEqual([]);
+    expect(fs.readFileSync(file).equals(damagedOctetPng)).toBe(true);
+  });
+
+  it("do not mark an image whose file is missing, nor a valid one", async () => {
+    if (!hasSharp) return;
+    const gone = projectRecord(write("t/gone.png", damagedPng), "image", "png", "image/png", {
+      width: 8,
+      height: 6,
+      file: { root: "external", path: path.join(base, "t", "not-there.png") },
+    });
+    const good = projectRecord(write("t/good.png", makePng(12, 9, 5)), "image", "png", "image/png", { width: 12, height: 9 });
+    const library = await __assetLibraryForTests();
+    await library.addRecord(gone);
+    await library.addRecord(good);
+
+    expect(await getThumbnail(gone.sha256, 320)).toBeNull();
+    expect(await getThumbnail(good.sha256, 320)).not.toBeNull();
+    await __drainAssetLibraryForTests();
+    expect((await getAsset(gone.id))?.unreadable).toBeUndefined();
+    expect((await getAsset(good.id))?.unreadable).toBeUndefined();
   });
 });
