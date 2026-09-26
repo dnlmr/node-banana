@@ -227,6 +227,18 @@ describe("initAssetLibrary", () => {
     expect(recorder.getRecorderLibraryStatus()?.reason).toBe("The library folder is gone.");
   });
 
+  it("watches the page even when the status was asked for before init", async () => {
+    vi.useFakeTimers();
+    const server = fakeLibrary();
+    await recorder.refreshAssetLibrary();
+    await recorder.initAssetLibrary();
+    expect(server.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(31_000);
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(server.calls).toHaveLength(2);
+  });
+
   it("takes a switch made in Settings, and ignores an older answer that arrives after it", async () => {
     let answer!: (response: Response) => void;
     fakeLibrary({

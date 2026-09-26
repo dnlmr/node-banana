@@ -150,6 +150,7 @@ function recheckStatus(): Promise<LibraryStatus | null> {
 
 const WATCHERS = Symbol.for("node-banana.assetLibraryStatusWatchers");
 type Watchers = { focus: () => void; visibility: () => void };
+let watching = false;
 
 /**
  * Coming back to the page asks for the status again: the library may have
@@ -183,11 +184,11 @@ function watchPage(): void {
 export function initAssetLibrary(): Promise<LibraryStatus | null> {
   // The library is the browser's to record into; a server render has nothing to ask.
   if (typeof window === "undefined") return Promise.resolve(null);
-  if (!statusRequest) {
+  if (!watching) {
+    watching = true;
     watchPage();
-    askStatus();
   }
-  return statusRequest!;
+  return statusRequest ?? askStatus();
 }
 
 /** Asks the server again, e.g. after Settings moved or switched the library. */
