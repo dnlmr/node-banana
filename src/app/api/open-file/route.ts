@@ -4,10 +4,46 @@ import { promisify } from "util";
 import { stat } from "fs/promises";
 import path from "path";
 import os from "os";
+import { getLibraryStatus } from "@/lib/assets/server";
+import { isInsideRoot } from "@/lib/assets/server/fsutil";
 import { guardAssetRequest } from "@/lib/assets/server/guard";
 
 const execFileAsync = promisify(execFile);
 
+/** A project folder the page named: absolute, and not a filesystem root (which would allow everything). */
+function projectRoot(value: unknown): string | null {
+    if (typeof value !== "string" || !value || value.includes("\0") || !path.isAbsolute(value)) return null;
+    const resolved = path.resolve(value);
+    return resolved === path.parse(resolved).root ? null : resolved;
+}
+
+/** Where the asset library lives now, or null when it cannot say. */
+async function libraryRoot(): Promise<string | null> {
+    try {
+        return (await getLibraryStatus()).root ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Whether a file may be revealed: it must sit strictly inside the home
+ * folder, the project folder the page names, or the asset library. The
+ * library can be moved or switched to any folder (another drive, say), and
+ * a redirected Pictures folder can put even the default outside home, so it
+ * is asked for last, only when the cheaper checks fail. Folders compare
+ * case-insensitively where the filesystem does (macOS, Windows).
+ */
+async function isAllowedPath(target: string, projectPath: unknown): Promise<boolean> {
+    const inside = (root: string | null) => root !== null && isInsideRoot(root, target);
+    return inside(os.homedir()) || inside(projectRoot(projectPath)) || inside(await libraryRoot());
+}
+
+/**
+ * POST { filePath, projectPath? }: show a file in Finder / Explorer (Linux
+ * opens its folder). `projectPath` is the open workflow's project folder,
+ * for files saved there.
+ */
 export async function POST(req: NextRequest) {
     // Only Node Banana's own page on this computer (see guard.ts). A Host or
     // X-Forwarded-For header alone proves nothing: the client writes both.
@@ -16,7 +52,7 @@ export async function POST(req: NextRequest) {
 
     try {
         const body = await req.json();
-        const { filePath: inputPath } = body;
+        const { filePath: inputPath, projectPath } = body;
 
         if (!inputPath || typeof inputPath !== "string") {
             return NextResponse.json(
@@ -28,9 +64,7 @@ export async function POST(req: NextRequest) {
         // Normalize and resolve the path to prevent traversal attacks
         const normalizedPath = path.resolve(inputPath);
 
-        // Restrict to user's home directory
-        const homeDir = os.homedir();
-        if (!normalizedPath.startsWith(homeDir + path.sep) && normalizedPath !== homeDir) {
+        if (!(await isAllowedPath(normalizedPath, projectPath))) {
             return NextResponse.json(
                 { success: false, error: "Path is outside allowed directory" },
                 { status: 403 }
