@@ -317,6 +317,7 @@ export function AssetGrid() {
             const at = locate(layout, index)!;
             const section = layout.sections[at.section]!;
             const tile = section.masonry.tiles[at.local]!;
+            const top = section.top + HEADER_HEIGHT + tile.y;
             return (
               <AssetTile
                 key={item.id}
@@ -326,7 +327,8 @@ export function AssetGrid() {
                 width={tile.width}
                 height={tile.height}
                 left={SIDE_PADDING + tile.x}
-                top={section.top + HEADER_HEIGHT + tile.y}
+                top={top}
+                onScreen={top < scrollTop + height && top + tile.height > scrollTop}
                 selected={isSelected(item.id)}
                 focused={focusedId === item.id}
                 tabbable={item.id === tabStop}

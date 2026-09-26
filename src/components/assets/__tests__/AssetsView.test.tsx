@@ -22,9 +22,13 @@ vi.mock("@/lib/assets/client/api", () => api);
 const recorder = vi.hoisted(() => ({
   listener: null as ((result: unknown) => void) | null,
   statusListener: null as ((status: unknown) => void) | null,
+  /** What the recorder last heard; may be older than the server's answer. */
+  known: null as unknown,
+  applyLibraryStatus: vi.fn(),
 }));
 vi.mock("@/lib/assets/client/recorder", () => ({
-  getRecorderLibraryStatus: () => null,
+  getRecorderLibraryStatus: () => recorder.known,
+  applyLibraryStatus: recorder.applyLibraryStatus,
   onAssetRecorded: (listener: (result: unknown) => void) => {
     recorder.listener = listener;
     return () => {
@@ -60,7 +64,8 @@ const openWorkflow = vi.hoisted(() => ({
 vi.mock("@/lib/assets/client/openWorkflow", () => openWorkflow);
 
 import { AssetsView } from "../AssetsView";
-import { useAssetStore } from "@/store/assetStore";
+import { __resetPosterRequestsForTests } from "../posterRequests";
+import { ARRIVALS_POLL_MS, useAssetStore } from "@/store/assetStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 
 const initial = useAssetStore.getState();
@@ -140,6 +145,8 @@ async function renderView(assets: AssetView[] = [asset("a3"), asset("a2"), asset
 
 beforeEach(() => {
   vi.clearAllMocks();
+  recorder.known = null;
+  __resetPosterRequestsForTests();
   useAssetStore.setState({ ...initial, appView: "assets" }, true);
   api.fetchFacets.mockResolvedValue(facets());
   api.fetchLibraryStatus.mockResolvedValue(library());
@@ -372,6 +379,19 @@ describe("AssetsView", () => {
     expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
   });
 
+  it("asks for a video's poster only once its tile is on screen, not while it waits in the overscan", async () => {
+    // Five rows of images, then a video mounted below the visible area
+    const images = Array.from({ length: 20 }, (_, i) => asset(`i${String(i).padStart(2, "0")}`));
+    await renderView([...images, asset("vid9", { kind: "video", mime: "video/mp4", ext: "mp4" })]);
+    expect(tile("vid9")).toBeInTheDocument();
+    expect(poster.ensurePoster).not.toHaveBeenCalled();
+
+    const grid = screen.getByTestId("asset-grid");
+    grid.scrollTop = 600;
+    fireEvent.scroll(grid);
+    await waitFor(() => expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid9" })));
+  });
+
   it("prepends a recorded asset that matches while scrolled to the top", async () => {
     await renderView();
     act(() => recorder.listener?.({ asset: asset("a4", { createdAt: T0 + 1000 }), filename: "a4.png", legacyId: "a4", reusedFile: false }));
@@ -476,6 +496,28 @@ describe("AssetsView", () => {
     expect(screen.getByText("/Volumes/Work/Node Banana")).toBeInTheDocument();
   });
 
+  it("comes back on a fresh library status, not the recorder's copy from before a move ended", async () => {
+    const view = await renderView();
+    await waitFor(() => expect(useAssetStore.getState().loadedRoot).toBe("/Users/me/Pictures/Node Banana"));
+    fireEvent.click(tile("a2"), { metaKey: true });
+    view.unmount();
+
+    // The recorder last heard of the library mid-move: still the old folder, the job running
+    const moving = { id: "mv1", type: "move" as const, state: "running" as const, done: 1, total: 9, bytesDone: 0, bytesTotal: 0, startedAt: 1 };
+    recorder.known = library({ root: "/Volumes/Old/Node Banana", job: moving });
+    const loads = () => api.fetchAssetPage.mock.calls.filter(([query]) => !("newerThan" in query)).length;
+    const before = loads();
+    render(<AssetsView />);
+    await waitFor(() => expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    // The list and the selection stay; no finished move is followed again
+    expect(useAssetStore.getState().library?.root).toBe("/Users/me/Pictures/Node Banana");
+    expect(useAssetStore.getState().selection).toEqual({ mode: "ids", ids: ["a2"] });
+    expect(loads()).toBe(before);
+    expect(useAssetStore.getState().job).toBeNull();
+    expect(screen.queryByText(/Moving library/)).not.toBeInTheDocument();
+  });
+
   it("follows an import started in Settings once its dialog closes, and shows what it brought", async () => {
     await renderView();
     const running = { id: "j9", type: "import" as const, state: "running" as const, done: 2, total: 4, bytesDone: 0, bytesTotal: 0, startedAt: 1 };
@@ -537,6 +579,62 @@ describe("AssetsView", () => {
       fireEvent.keyDown(window, { key: "Delete" });
       expect(document.exitFullscreen).toHaveBeenCalled();
       expect(screen.getByRole("dialog", { name: "Delete 1 asset permanently?" })).toBeInTheDocument();
+    });
+
+    it("leaves fullscreen before showing the shortcuts, which open outside the detail", async () => {
+      await renderView();
+      fireEvent.click(tile("a2"));
+      enterFullscreen();
+      fireEvent.keyDown(window, { key: "?" });
+      expect(document.exitFullscreen).toHaveBeenCalled();
+      expect(useWorkflowStore.getState().shortcutsDialogOpen).toBe(true);
+      useWorkflowStore.setState({ shortcutsDialogOpen: false });
+    });
+
+    it("leaves fullscreen when any dialog opens over the detail, however it was opened", async () => {
+      await renderView();
+      fireEvent.click(tile("a2"));
+      enterFullscreen();
+      // Settings, say, opened from the desktop menu
+      act(() => useWorkflowStore.getState().incrementModalCount());
+      expect(document.exitFullscreen).toHaveBeenCalled();
+      act(() => useWorkflowStore.getState().decrementModalCount());
+    });
+  });
+
+  describe("while the page is hidden", () => {
+    let visibility: DocumentVisibilityState = "visible";
+    beforeEach(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+    });
+    afterEach(() => {
+      visibility = "visible";
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    });
+
+    it("asks nothing every 5 s, and asks at once on coming back", async () => {
+      const intervals = vi.spyOn(globalThis, "setInterval");
+      try {
+        await renderView();
+        const tick = intervals.mock.calls.find(([, ms]) => ms === ARRIVALS_POLL_MS)![0] as () => void;
+        await waitFor(() => expect(api.fetchLibraryStatus).toHaveBeenCalled());
+        api.fetchLibraryStatus.mockClear();
+        api.fetchAssetPage.mockClear();
+
+        visibility = "hidden";
+        act(() => tick());
+        expect(api.fetchLibraryStatus).not.toHaveBeenCalled();
+        expect(api.fetchAssetPage).not.toHaveBeenCalled();
+
+        visibility = "visible";
+        act(() => {
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(1);
+        expect(api.fetchAssetPage).toHaveBeenCalledWith(expect.objectContaining({ newerThan: "h" }));
+      } finally {
+        intervals.mockRestore();
+      }
     });
   });
 

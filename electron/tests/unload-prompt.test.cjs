@@ -14,6 +14,14 @@ test('the close prompt names both reasons the page can block, not only unsaved w
   assert.match(text, /library/i);
 });
 
+test('the headline does not claim a save is under way', () => {
+  // Most often the page blocks for unsaved workflow edits, which nothing is
+  // saving: "still saving your work" would have the user wait for nothing.
+  assert.doesNotMatch(UNLOAD_PROMPT.message, /\b(is|are) still saving\b|\bsaving your work\b/i);
+  assert.match(UNLOAD_PROMPT.message, /unsaved changes/i);
+  assert.match(UNLOAD_PROMPT.message, /generations? that (is|are) still being saved/i);
+});
+
 test('the safe choice stays first, the default and the cancel; closing is button 1', () => {
   assert.equal(UNLOAD_PROMPT.buttons.length, 2);
   assert.equal(UNLOAD_PROMPT.defaultId, 0);

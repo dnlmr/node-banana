@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/shallow";
 import { clearGenerationToasts } from "@/components/GenerationToast";
 import { onPosterReady } from "@/lib/assets/client/poster";
-import { getRecorderLibraryStatus, onAssetRecorded, onLibraryStatus } from "@/lib/assets/client/recorder";
+import { onAssetRecorded, onLibraryStatus } from "@/lib/assets/client/recorder";
 import { sameQuery } from "@/lib/assets/query";
 import { ARRIVALS_POLL_MS, buildAssetQuery, selectionCount, useAssetStore } from "@/store/assetStore";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -18,7 +18,7 @@ import { BulkBar } from "./BulkBar";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { EmptyState } from "./EmptyState";
 import { BulkTagEditor } from "./TagEditor";
-import { copyPrompt, recordsOf, removeSelection, selectionOf } from "./assetActions";
+import { copyPrompt, leaveFullscreen, recordsOf, removeSelection, selectionOf } from "./assetActions";
 import type { GridDirection } from "./masonryLayout";
 
 const RAIL_WIDTH = 232;
@@ -111,6 +111,8 @@ function handleAssetsKey(event: KeyboardEvent) {
 
   if (key === "?") {
     own();
+    // The dialog renders outside the detail: in fullscreen it would take the keyboard unseen
+    leaveFullscreen();
     useWorkflowStore.getState().setShortcutsDialogOpen(true);
     return;
   }
@@ -193,16 +195,14 @@ export function AssetsView() {
 
   useEffect(() => {
     const store = useAssetStore.getState();
-    // What the recorder knows first: a library switched meanwhile reloads the list
-    const known = getRecorderLibraryStatus();
-    if (known) store.setLibrary(known);
-    const state = useAssetStore.getState();
-    const query = buildAssetQuery(state.filters, state.sort);
+    const query = buildAssetQuery(store.filters, store.sort);
     // Coming back to the same query keeps what was loaded (and where the user was)
-    if (state.status === "ready" && state.loadedQuery && sameQuery(state.loadedQuery, query)) void store.pollArrivals();
-    else if (state.status !== "loading") void store.refresh();
+    if (store.status === "ready" && store.loadedQuery && sameQuery(store.loadedQuery, query)) void store.pollArrivals();
+    else if (store.status !== "loading") void store.refresh();
     void store.refreshFacets();
-    // A job running (from Settings, say) is followed; one that ended since the list loaded reloads it
+    // Where the library is now and what it runs, asked afresh rather than taken from the recorder, whose copy
+    // may be from before a move or a job ended: a switch meanwhile reloads the list, a running job is followed,
+    // one that ended since the list loaded reloads it
     void store.refreshLibrary();
     clearGenerationToasts();
     // A detail left open takes focus itself
@@ -221,14 +221,24 @@ export function AssetsView() {
     const offCanvas = useWorkflowStore.subscribe((state, previous) => {
       // A workflow opened or a tab switched, however it was asked for: show it
       if (state.canvasGeneration !== previous.canvasGeneration) useAssetStore.getState().setAppView("canvas");
+      // A dialog opened over a fullscreen detail is not painted, yet takes the keyboard: leave fullscreen
+      if (state.openModalCount > previous.openModalCount) leaveFullscreen();
       // A dialog closed over the view (Settings may have switched the library or started a job): ask again
       if (state.openModalCount < previous.openModalCount) void useAssetStore.getState().refreshLibrary();
     });
-    const poll = setInterval(() => {
+    const pollNow = () => {
       const current = useAssetStore.getState();
       void current.pollArrivals();
       void current.refreshLibrary();
+    };
+    // Nothing is asked while the page is hidden (a background tab, a minimised window); coming back asks at once
+    const poll = setInterval(() => {
+      if (document.visibilityState !== "hidden") pollNow();
     }, ARRIVALS_POLL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") pollNow();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("keydown", handleAssetsKey, { capture: true });
     return () => {
       offRecorded();
@@ -236,6 +246,7 @@ export function AssetsView() {
       offStatus();
       offCanvas();
       clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisibility);
       if (facetsTimer) clearTimeout(facetsTimer);
       window.removeEventListener("keydown", handleAssetsKey, { capture: true });
       useAssetStore.getState().closePopover();
