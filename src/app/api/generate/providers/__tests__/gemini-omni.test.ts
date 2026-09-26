@@ -53,6 +53,18 @@ describe("Gemini Omni Interactions", () => {
     expect(files.delete).toHaveBeenCalledTimes(2);
   });
 
+  it("types an input with no declared media type, or with parameters, by its bytes", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+    const images = [`data:;base64,${png.toString("base64")}`, `data:image/png;charset=binary;base64,${png.toString("base64")}`];
+    const result = await generateWithGeminiOmni("key", modelId, "Animate this", images, { task: "image_to_video" });
+    expect(result.success).toBe(true);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.input.slice(0, 2)).toEqual([
+      { type: "image", mime_type: "image/png", data: png.toString("base64") },
+      { type: "image", mime_type: "image/png", data: png.toString("base64") },
+    ]);
+  });
+
   it("cleans up and reports failed input processing before requesting generation", async () => {
     files.upload.mockResolvedValue({ name: "files/bad", state: "FAILED" });
     const result = await generateWithGeminiOmni("key", modelId, "Edit this", [], {}, { video: "data:video/mp4;base64,YQ==" });

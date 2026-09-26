@@ -7,6 +7,8 @@
  * read through FileReader when it is.
  */
 
+import { parseDataUrl as decodeDataUrl } from "@/utils/dataUrl";
+
 /**
  * `data:[<type>][;param]*,<payload>` with a real media type (or none at all),
  * so prose that happens to start with "data:" is not mistaken for media.
@@ -48,41 +50,16 @@ export function dataUrlMime(value: string): string | null {
   return parseDataUrl(value)?.mime || null;
 }
 
-function decodeBase64(payload: string): Uint8Array {
-  // Forgiving decode: whitespace and the URL-safe alphabet turn up in the wild.
-  const binary = atob(payload.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/"));
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-/** Percent-decodes the UTF-8 bytes of a non-base64 payload, as the Fetch spec does. */
-function decodePercent(payload: string): Uint8Array {
-  const raw = new TextEncoder().encode(payload);
-  const out = new Uint8Array(raw.length);
-  let length = 0;
-  const hex = (code: number) =>
-    code >= 48 && code <= 57 ? code - 48 : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
-  for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === 37 && i + 2 < raw.length) {
-      const high = hex(raw[i + 1]);
-      const low = hex(raw[i + 2]);
-      if (high >= 0 && low >= 0) {
-        out[length++] = high * 16 + low;
-        i += 2;
-        continue;
-      }
-    }
-    out[length++] = raw[i];
-  }
-  return out.slice(0, length);
-}
-
-/** The bytes a data: URL carries. Throws on a malformed URL. */
+/**
+ * The bytes a data: URL carries: its base64 payload decoded (whitespace, the
+ * URL-safe alphabet and missing padding forgiven), or a plain one
+ * percent-decoded, by the shared parser in `src/utils/dataUrl.ts`. Throws on
+ * a malformed URL.
+ */
 export function dataUrlBytes(value: string): Uint8Array {
-  const parsed = parseDataUrl(value);
-  if (!parsed) throw new Error("Not a data: URL");
-  return parsed.base64 ? decodeBase64(parsed.payload) : decodePercent(parsed.payload);
+  const decoded = isDataUrl(value) ? decodeDataUrl(value) : null;
+  if (!decoded) throw new Error("Not a readable data: URL");
+  return decoded.bytes;
 }
 
 /** Synchronous: the Blob holds the bytes, so nothing depends on the string afterwards. */
