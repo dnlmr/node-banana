@@ -6,9 +6,11 @@
  * hash→ids / path→ids maps — built lazily by one scan. Every mutation writes
  * its sidecar and then appends a line to `.nodebanana/journal.ndjson`; each
  * process remembers how far into the journal it has read, so before serving
- * a query it replays only the tail (another process's writes) and rescans
- * only when the journal shrank (compaction). `del` lines double as the
- * tombstones behind `exists → gone`.
+ * a query it replays only the tail (another process's writes). The journal's
+ * first line is a generation marker (`{"gen":…}`) that compaction rewrites,
+ * so a process rescans whenever the file it would read from its old offset
+ * is a different file. `del` lines double as the tombstones behind
+ * `exists → gone`.
  */
 
 import { randomUUID } from "crypto";
@@ -41,6 +43,7 @@ import {
   mapConcurrent,
   pathKey,
   unlinkWithRetry,
+  withFsRetry,
 } from "./fsutil";
 import { acquireLock, DATA_DIR, libraryLayout, type LibraryLayout } from "./layout";
 import { RunStore } from "./runs";
@@ -97,6 +100,26 @@ interface JournalLine {
   pid: number;
   /** The writing instance, so a process skips its own lines on replay. */
   i: string;
+}
+
+/** Longest generation line read from the head of the journal. */
+const JOURNAL_HEADER_BYTES = 256;
+
+/** The generation marker on the journal's first line ("" for none: an empty, missing or pre-marker journal). */
+function journalGeneration(head: Buffer): string {
+  const newline = head.indexOf(0x0a);
+  if (newline < 0) return "";
+  try {
+    const parsed = JSON.parse(head.subarray(0, newline).toString("utf8")) as { gen?: unknown };
+    return typeof parsed.gen === "string" ? parsed.gen : "";
+  } catch {
+    return "";
+  }
+}
+
+function isAbsent(error: unknown): boolean {
+  const code = errnoCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /* ------------------------------------------------------------------ */
@@ -257,6 +280,8 @@ export class AssetLibrary {
   private tombstones = new Set<string>();
   private missing = new Map<string, { missing: boolean; at: number }>();
   private journalOffset = 0;
+  /** The generation of the journal `journalOffset` points into (null before the first read). */
+  private journalGen: string | null = null;
   private loadPromise: Promise<void> | null = null;
   private refreshPromise: Promise<void> | null = null;
   private isLoaded = false;
@@ -384,7 +409,16 @@ export class AssetLibrary {
     }
 
     const names = (await fs.readdir(this.layout.assets)).filter((name) => SIDECAR_NAME.test(name));
-    const loaded = await mapConcurrent(names, 32, (name) => this.readSidecar(name.slice(0, -5)));
+    const loaded = await mapConcurrent(names, 32, async (name) => {
+      const id = name.slice(0, -5);
+      try {
+        return await this.readSidecar(id);
+      } catch (error) {
+        // Held open for a moment (sync client, antivirus): keep what we knew rather than drop it.
+        console.warn("[assets] could not read sidecar", id, error);
+        return this.records.get(id) ?? null;
+      }
+    });
 
     this.records = new Map();
     this.byHash = new Map();
@@ -400,6 +434,7 @@ export class AssetLibrary {
     this.tombstones = tombstones;
     for (const id of this.missing.keys()) if (!this.records.has(id)) this.missing.delete(id);
     this.journalOffset = complete.length;
+    this.journalGen = journalGeneration(journal);
     await this.workflowTable.refresh();
     this.bump();
   }
@@ -418,27 +453,46 @@ export class AssetLibrary {
     return lines;
   }
 
+  /**
+   * Reads what other processes appended since the last read. The size and
+   * the generation marker come from the same open file as the tail, so a
+   * journal replaced by compaction (another generation) is rescanned even
+   * when it grew back past this process's offset.
+   */
   private async replayJournal(): Promise<void> {
-    let size = 0;
+    let handle: fs.FileHandle | null = null;
     try {
-      size = (await fs.stat(this.layout.journal)).size;
+      handle = await fs.open(this.layout.journal, "r");
     } catch (error) {
       if (errnoCode(error) !== "ENOENT") throw error;
     }
-    if (size < this.journalOffset || size - this.journalOffset > MAX_TAIL_BYTES) {
-      await this.fullScan();
-      return;
-    }
-    if (size === this.journalOffset) return;
-
-    const length = size - this.journalOffset;
-    const buffer = Buffer.alloc(length);
-    const handle = await fs.open(this.layout.journal, "r");
+    let buffer: Buffer;
     let bytesRead = 0;
     try {
+      let size = 0;
+      let generation = "";
+      if (handle) {
+        size = (await handle.stat()).size;
+        const head = Buffer.alloc(Math.min(size, JOURNAL_HEADER_BYTES));
+        const { bytesRead: headBytes } = await handle.read(head, 0, head.length, 0);
+        generation = journalGeneration(head.subarray(0, headBytes));
+      }
+      if (
+        generation !== this.journalGen ||
+        size < this.journalOffset ||
+        size - this.journalOffset > MAX_TAIL_BYTES
+      ) {
+        await handle?.close();
+        handle = null;
+        await this.fullScan();
+        return;
+      }
+      if (!handle || size === this.journalOffset) return;
+      const length = size - this.journalOffset;
+      buffer = Buffer.alloc(length);
       ({ bytesRead } = await handle.read(buffer, 0, length, this.journalOffset));
     } finally {
-      await handle.close();
+      await handle?.close();
     }
     const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
     if (lastNewline < 0) return;
@@ -462,8 +516,13 @@ export class AssetLibrary {
     // Under the id lock, so a stale read can't land after one of our own writes to the same record.
     await mapConcurrent(puts, 32, (id) =>
       this.idLocks.run(id, async () => {
-        const record = await this.readSidecar(id);
-        if (record) this.upsertIndex(record);
+        try {
+          const record = await this.readSidecar(id);
+          if (record) this.upsertIndex(record);
+        } catch (error) {
+          // Unreadable for now: keep the copy we hold.
+          console.warn("[assets] could not read sidecar", id, error);
+        }
       }),
     );
   }
@@ -473,10 +532,34 @@ export class AssetLibrary {
     return `${JSON.stringify(line)}\n`;
   }
 
+  private static generationLine(): string {
+    return `${JSON.stringify({ gen: randomUUID() })}\n`;
+  }
+
+  /** Starts a journal that does not exist yet with a generation marker (the first writer wins). */
+  private async startJournal(): Promise<void> {
+    if (this.journalGen) return;
+    const line = AssetLibrary.generationLine();
+    try {
+      await fs.mkdir(this.layout.data, { recursive: true });
+      await fs.writeFile(this.layout.journal, line, { flag: "wx" });
+      // Only our own marker: nothing to rescan for.
+      if (this.journalOffset === 0 && this.journalGen === "") {
+        this.journalGen = journalGeneration(Buffer.from(line));
+        this.journalOffset = Buffer.byteLength(line);
+      }
+    } catch (error) {
+      if (errnoCode(error) !== "EEXIST") throw error;
+    }
+  }
+
   private async appendJournal(lines: string[]): Promise<void> {
     if (!lines.length) return;
-    // The leading newline seals off a torn last line left by a crash, which would otherwise swallow ours.
-    await this.journalLock.run("journal", () => fs.appendFile(this.layout.journal, `\n${lines.join("")}`));
+    await this.journalLock.run("journal", async () => {
+      await this.startJournal();
+      // The leading newline seals off a torn last line left by a crash, which would otherwise swallow ours.
+      await withFsRetry(() => fs.appendFile(this.layout.journal, `\n${lines.join("")}`));
+    });
     if (this.compacting) return;
     try {
       const { size } = await fs.stat(this.layout.journal);
@@ -487,15 +570,15 @@ export class AssetLibrary {
   }
 
   /**
-   * Rewrites the journal keeping only `del` lines (the tombstones), under the
-   * library lock. Every process — this one included — then sees the journal
-   * shrink below its offset and rescans, which also picks up any line
-   * appended in the instant between the read and the rename.
+   * Rewrites the journal keeping only `del` lines (the tombstones), under a
+   * new generation marker and the library lock. Every process — this one
+   * included — then sees another generation and rescans, which also picks
+   * up any line appended in the instant between the read and the rename.
    */
   async compactJournal(): Promise<boolean> {
     if (this.compacting) return false;
     this.compacting = true;
-    const lock = await acquireLock(this.layout.lock);
+    const lock = await acquireLock(this.layout.lock, { purpose: "compact" });
     try {
       if (!lock) return false;
       await this.journalLock.run("journal", async () => {
@@ -510,10 +593,11 @@ export class AssetLibrary {
           if (line.op === "del") deleted.push(line);
         }
         deleted.reverse();
-        const body = deleted.map((line) => `${JSON.stringify(line)}\n`).join("");
+        const body = AssetLibrary.generationLine() + deleted.map((line) => `${JSON.stringify(line)}\n`).join("");
         await atomicWriteFile(this.layout.journal, body, { fsync: false });
       });
       this.journalOffset = Number.MAX_SAFE_INTEGER;
+      this.journalGen = null;
       return true;
     } finally {
       await lock?.release();
@@ -587,19 +671,35 @@ export class AssetLibrary {
     return path.join(this.layout.assets, `${id}.json`);
   }
 
-  /** The record as it is on disk now (null when absent or unreadable). */
+  /**
+   * The record as it is on disk now: null when there is no sidecar or it is
+   * not a valid record. Any other read failure (a file held open by a sync
+   * client or antivirus, EIO) throws, so no caller mistakes "can't read it
+   * right now" for "it is gone".
+   */
   async readSidecar(id: string): Promise<AssetRecord | null> {
     if (!isAssetId(id)) return null;
     let text: string;
     try {
-      text = await fs.readFile(this.sidecarPath(id), "utf8");
-    } catch {
-      return null;
+      text = await withFsRetry(() => fs.readFile(this.sidecarPath(id), "utf8"));
+    } catch (error) {
+      if (isAbsent(error)) return null;
+      throw error;
     }
     try {
       return parseRecord(JSON.parse(text), id, this.root, text.length);
     } catch {
       return null;
+    }
+  }
+
+  /** Whether a sidecar exists for `id` (true when that can't be told, so nothing is thrown away on a guess). */
+  async hasSidecar(id: string): Promise<boolean> {
+    try {
+      await fs.stat(this.sidecarPath(id));
+      return true;
+    } catch (error) {
+      return !isAbsent(error);
     }
   }
 
@@ -823,7 +923,15 @@ export class AssetLibrary {
         states[id] = "unknown";
         continue;
       }
-      const record = this.records.get(id) ?? (this.tombstones.has(id) ? null : await this.find(id));
+      let record = this.records.get(id) ?? null;
+      if (!record && !this.tombstones.has(id)) {
+        try {
+          record = await this.find(id);
+        } catch {
+          states[id] = "unknown";
+          continue;
+        }
+      }
       if (record) known.push(record);
       else states[id] = this.tombstones.has(id) ? "gone" : "unknown";
     }
@@ -884,6 +992,20 @@ export class AssetLibrary {
     });
   }
 
+  /**
+   * Appends journal lines for changes whose sidecars are already committed.
+   * The sidecars are the truth and the journal only tells other processes,
+   * so a failure here is logged, never turned into a failed (and retried, or
+   * undone) write.
+   */
+  private async publish(lines: string[]): Promise<void> {
+    try {
+      await this.appendJournal(lines);
+    } catch (error) {
+      console.warn("[assets] could not append to the journal", error);
+    }
+  }
+
   /** Writes a new record (sidecar fsynced, then the journal line). */
   async addRecord(record: AssetRecord): Promise<AssetRecord> {
     const clean = scrubRecord(record);
@@ -892,7 +1014,7 @@ export class AssetLibrary {
       await this.writeSidecar(clean, true);
       this.upsertIndex(clean);
       this.setMissing(clean.id, false);
-      await this.appendJournal([this.journalLine("put", clean.id)]);
+      await this.publish([this.journalLine("put", clean.id)]);
       return clean;
     });
   }
@@ -938,13 +1060,13 @@ export class AssetLibrary {
       if (patch.trashed === false) delete next.trashedAt;
       return next;
     });
-    if (line) await this.appendJournal([line]);
+    if (line) await this.publish([line]);
     return record ? this.toView(record) : null;
   }
 
   async setHasPoster(id: string): Promise<AssetRecord | null> {
     const { record, line } = await this.updateRecord(id, (current) => ({ ...current, hasPoster: true }));
-    if (line) await this.appendJournal([line]);
+    if (line) await this.publish([line]);
     return record;
   }
 
@@ -977,7 +1099,7 @@ export class AssetLibrary {
     const flush = async () => {
       const batch = lines;
       lines = [];
-      await this.appendJournal(batch);
+      await this.publish(batch);
     };
     await mapConcurrent(ids, 8, async (id) => {
       try {
@@ -1033,7 +1155,7 @@ export class AssetLibrary {
         }
       }),
     );
-    await this.appendJournal(lines);
+    await this.publish(lines);
     await this.releaseFiles(removed, options.deleteProjectFiles === true);
     const affected = [...new Set(ids)].filter((id) => done.has(id));
     return { affected: affected.length, ids: affected, errors };

@@ -2,7 +2,7 @@
 import fs from "fs";
 import path from "path";
 import { gunzipSync } from "zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssetPageRequest, RecordAssetMeta, RecordAssetResult, SnapshotWorkflow } from "../../types";
 import {
   __assetLibraryForTests,
@@ -26,7 +26,7 @@ import {
   upsertWorkflowEntry,
 } from "../index";
 import { AssetLibrary } from "../library";
-import { installBridge, makePng, meta, runId, sha256, streamOf, tempDir } from "./helpers";
+import { fakeRecord, installBridge, makePng, meta, runId, sha256, streamOf, tempDir } from "./helpers";
 
 let base: string;
 let root: string;
@@ -400,10 +400,81 @@ describe("two processes on one library", () => {
     await other.deleteRecords([r.asset.id]);
     expect(await other.compactJournal()).toBe(true);
     const journal = fs.readFileSync(path.join(root, ".nodebanana", "journal.ndjson"), "utf8").trim().split("\n");
-    expect(journal.map((line) => JSON.parse(line).op)).toEqual(["del"]);
+    // A fresh generation marker, then the tombstones.
+    expect(typeof JSON.parse(journal[0]).gen).toBe("string");
+    expect(journal.slice(1).map((line) => JSON.parse(line).op)).toEqual(["del"]);
     expect(await ids()).toEqual([]);
     expect(await assetExistence([r.asset.id])).toEqual({ [r.asset.id]: "gone" });
     await other.drain();
+  });
+
+  it("rescans a journal another process compacted, even when it grew back past this one's offset", async () => {
+    const a = new AssetLibrary(root, { trash: async () => {} });
+    const b = new AssetLibrary(root, { trash: async () => {} });
+    await a.ready();
+    await b.ready();
+    const made = [];
+    for (let i = 0; i < 12; i++) made.push(await a.addRecord(fakeRecord({ createdAt: T0 + i })));
+    await a.deleteRecords(made.slice(0, 8).map((r) => r.id));
+    expect(await a.compactJournal()).toBe(true);
+    // The compacted journal (8 tombstones) is longer than what b last read.
+    await b.ready();
+    expect(b.allRecords().map((r) => r.id).sort()).toEqual(made.slice(8).map((r) => r.id).sort());
+    await a.drain();
+    await b.drain();
+  });
+});
+
+describe("journal failures", () => {
+  function failOnce(method: "appendFile") {
+    return vi
+      .spyOn(fs.promises, method)
+      .mockRejectedValueOnce(Object.assign(new Error("EIO: i/o error, append"), { code: "EIO" }));
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a recording whose sidecar is written when the journal append fails", async () => {
+    const png = makePng(5, 5, 901);
+    const started = await beginRecord({ meta: meta(), source: { type: "upload" } });
+    if (!("ticket" in started)) throw new Error("expected a ticket");
+    const spy = failOnce("appendFile");
+    const result = await completeUpload(started.ticket.uploadId, streamOf(png), null);
+    expect(spy).toHaveBeenCalled();
+    expect(fs.existsSync(result.asset.displayPath)).toBe(true);
+    expect(await openAssetFile(result.asset.id)).toMatchObject({ path: result.asset.displayPath });
+  });
+
+  it("still releases files when the journal append of a delete fails", async () => {
+    const r = await record();
+    failOnce("appendFile");
+    const result = await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "delete" } });
+    expect(result).toMatchObject({ affected: 1, errors: [] });
+    expect(fs.existsSync(r.asset.displayPath)).toBe(false);
+  });
+});
+
+describe("unreadable sidecars", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports an error for a sidecar it can't read right now, without dropping the record", async () => {
+    const r = await record();
+    const sidecar = path.join(root, ".nodebanana", "assets", `${r.asset.id}.json`);
+    const readFile = fs.promises.readFile;
+    vi.spyOn(fs.promises, "readFile").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) =>
+      String(file) === sidecar
+        ? Promise.reject(Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }))
+        : (readFile as (...args: unknown[]) => Promise<unknown>)(file, ...rest)) as typeof readFile);
+    const result = await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "favorite" } });
+    expect(result.affected).toBe(0);
+    expect(result.errors).toEqual([{ id: r.asset.id, error: expect.stringContaining("EIO") }]);
+    vi.restoreAllMocks();
+    expect(await ids()).toEqual([r.asset.id]);
+    expect((await bulkAssets({ selection: { mode: "ids", ids: [r.asset.id] }, op: { action: "favorite" } })).affected).toBe(1);
   });
 });
 

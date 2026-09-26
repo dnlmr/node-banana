@@ -122,9 +122,11 @@ describe("recording into the library", () => {
 
     const sidecar = JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "assets", `${m.id}.json`), "utf8"));
     expect(sidecar).toMatchObject({ v: 1, id: m.id, sha256: sha, prompt: "Neon koi, rainy street" });
-    const journal = fs.readFileSync(path.join(root, ".nodebanana", "journal.ndjson"), "utf8").trim().split("\n");
-    expect(journal).toHaveLength(1);
-    expect(JSON.parse(journal[0])).toMatchObject({ op: "put", id: m.id, pid: process.pid });
+    const journal = fs.readFileSync(path.join(root, ".nodebanana", "journal.ndjson"), "utf8").split("\n").filter(Boolean);
+    // The generation marker, then one line for the record.
+    expect(journal).toHaveLength(2);
+    expect(typeof JSON.parse(journal[0]).gen).toBe("string");
+    expect(JSON.parse(journal[1])).toMatchObject({ op: "put", id: m.id, pid: process.pid });
   });
 
   it("measures video and audio", async () => {

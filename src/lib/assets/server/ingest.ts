@@ -361,8 +361,9 @@ export class Ingestor {
       try {
         saved = await library.addRecord(record);
       } catch (error) {
-        // A new file with no sidecar would be an orphan; a reused one belongs to another record.
-        if (!reusable) await unlinkWithRetry(absolute).catch(() => {});
+        // A new file with no sidecar would be an orphan; a reused one belongs to another record, and
+        // once the sidecar is on disk the file is this record's (a retry answers with it).
+        if (!reusable && !(await library.hasSidecar(meta.id))) await unlinkWithRetry(absolute).catch(() => {});
         throw error;
       }
       this.deps.thumbs()?.enqueue(saved, absolute);
