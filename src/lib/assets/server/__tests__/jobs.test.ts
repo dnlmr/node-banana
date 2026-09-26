@@ -343,12 +343,20 @@ describe("move", () => {
   it("refuses a write as soon as the other build's move holds the lock", async () => {
     const r = await record();
     const library = await __assetLibraryForTests();
+    const started = await beginRecord({ meta: meta(), source: { type: "upload" } });
+    if (!("ticket" in started)) throw new Error("expected a ticket");
     // Just looked at the lock, and found no move.
     await patchAsset(r.asset.id, { favorite: true });
     fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
-    await expect(patchAsset(r.asset.id, { favorite: false })).rejects.toMatchObject({ status: 503, code: "paused" });
-    expect((await listAssets({})).assets[0].favorite).toBe(true);
+    const paused = { status: 503, code: "paused" };
+    await expect(completeUpload(started.ticket.uploadId, streamOf(makePng(2, 2, 78)), "image/png")).rejects.toMatchObject(paused);
+    await expect(patchAsset(r.asset.id, { favorite: false })).rejects.toMatchObject(paused);
+    expect((await listAssets({})).assets.map((asset) => [asset.id, asset.favorite])).toEqual([[r.asset.id, true]]);
+
+    // Once the move is over, the refused upload's ticket is still good.
     fs.rmSync(library.layout.lock);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect((await completeUpload(started.ticket.uploadId, streamOf(makePng(2, 2, 78)), "image/png")).asset.id).toBeTruthy();
   });
 
   it("won't switch to a folder a move stopped copying into", async () => {

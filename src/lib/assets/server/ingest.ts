@@ -203,14 +203,22 @@ export class Ingestor {
     this.assertNotPaused();
     this.tickets.delete(uploadId);
     const meta = ticket.meta;
-    return this.track(async (library) => {
-      const destination = await this.resolveDestination(library, meta);
-      const streamed = await streamToPartial(body, destination.dir, {
-        maxBytes: MAX_UPLOAD_BYTES,
-        idleTimeoutMs: UPLOAD_IDLE_TIMEOUT_MS,
+    let started = false;
+    try {
+      return await this.track(async (library) => {
+        started = true;
+        const destination = await this.resolveDestination(library, meta);
+        const streamed = await streamToPartial(body, destination.dir, {
+          maxBytes: MAX_UPLOAD_BYTES,
+          idleTimeoutMs: UPLOAD_IDLE_TIMEOUT_MS,
+        });
+        return this.finalize(library, meta, destination, streamed, { mime: meta.mime ?? contentType });
       });
-      return this.finalize(library, meta, destination, streamed, { mime: meta.mime ?? contentType });
-    });
+    } catch (error) {
+      // Refused before the body was read (the other build's move took the lock): the ticket stays good.
+      if (!started && error instanceof LibraryError && error.code === "paused") this.tickets.set(uploadId, ticket);
+      throw error;
+    }
   }
 
   private recordFromUrl(meta: RecordAssetMeta, url: string): Promise<RecordAssetResult> {
