@@ -37,9 +37,11 @@ to the old project-only save.
     assets/<assetId>.json                              one sidecar per asset
     runs/<runId>.json.gz                               workflow snapshots of a run
     media/<sha256>.<ext>                               snapshot inputs no asset holds (uploads)
+    media/<sha256>.ref                                 checked pointer to a kept project file a snapshot uses
     posters/<sha256>.webp                              video posters made in the browser
     workflows.json                                     workflow id → name, project folder
     journal.ndjson                                     change log (other processes, tombstones)
+    writers/, lock, move.json                          in-flight writes per server; a running move
 ```
 
 A workflow with a project keeps writing into `<project>/generations/` under
@@ -89,14 +91,44 @@ itself, and "Open as it was when made" opens the snapshot.
 
 **Trash** is the in-app bin: restorable, and emptied after 30 days.
 
-**Delete permanently** removes the record. What happens to the file depends
-on where it is:
+**Delete permanently** only applies to items in the Trash, and to records
+whose file is already gone ("Remove from library"). The server refuses it for
+anything else. It removes the record. What happens to the file depends on
+where it is:
 
 - A library file goes to the OS Trash (Recycle Bin), unless another record or
   a stored snapshot still uses the bytes. Snapshot-referenced bytes move to
   `.nodebanana/media` instead.
 - Files inside project folders stay unless you opt in, because the project's
-  workflow file points at them.
+  workflow file points at them. A snapshot that still uses one keeps a checked
+  `.ref` pointer to it, not a copy.
+
+A run's snapshot is deleted with its last asset, so emptying the Trash frees
+the space. The 30-day auto-empty uses the OS Trash too. The one exception is
+web mode on older macOS, where only the Finder route exists and would prompt
+for permission; there it deletes the files outright.
+
+## Moving the library
+
+Settings → Library → Change… offers two choices:
+
+- **Move my library there.** This is a background job. It copies
+  `Generations/` and `.nodebanana/`, verifies each file's size and hash,
+  switches the root, then deletes only the copied files from the old folder.
+  Projects stay where they are. Writes pause while the move runs, in this
+  server and in any other one using the same library.
+- **Use that folder.** This switches to the new folder; the old library stays
+  on disk.
+
+A move that stops part-way is detected at the next start and its partial copy
+undone.
+
+## Access
+
+`/api/assets/*` and the older routes that take a file path answer only Node
+Banana's own page on this computer. That is the same loopback stamp as the
+agent routes, so run the app with `npm run dev` / `npm start` / Electron.
+`NB_LIBRARY_ALLOWED_HOSTS` opts other hosts in, for example a LAN address.
 
 ## Key files
 

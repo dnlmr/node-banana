@@ -14,9 +14,12 @@
  *   .nodebanana/assets/<assetId>.json                      one sidecar per asset (AssetRecord)
  *   .nodebanana/runs/<runId>.json.gz                       StoredRun: workflow snapshots of one run
  *   .nodebanana/media/<sha256>.<ext>                       snapshot media not held by any asset
+ *   .nodebanana/media/<sha256>.ref                         checked pointer to a kept project file a snapshot uses
  *   .nodebanana/posters/<sha256>.webp                      browser-made posters for video/3D
  *   .nodebanana/workflows.json                             LibraryWorkflowEntry table
  *   .nodebanana/journal.ndjson                             mutation log (cross-process freshness, tombstones)
+ *   .nodebanana/writers/<pid>-<instance>.json              in-flight writes of each server (a move waits for them)
+ *   .nodebanana/lock, move.json, move-copied.ndjson        a running move, and what to undo if it stops part-way
  *
  * Assets of project-bound workflows are written to `<project>/generations/`
  * with the legacy `<snippet>_<md5>.<ext>` name and indexed in place.
