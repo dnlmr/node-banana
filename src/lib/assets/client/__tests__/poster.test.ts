@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { capturePoster } from "../poster";
+import { capturePoster, ensurePoster, onPosterReady } from "../poster";
 import { jsonResponse, stubFetch } from "./helpers";
 
 const media = HTMLMediaElement.prototype;
@@ -74,6 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   restore();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -116,5 +117,82 @@ describe("capturePoster", () => {
     drawableCanvas({ "image/webp": "image/webp" });
     stubFetch(() => jsonResponse({ error: "No such asset" }, { status: 404 }));
     await expect(capturePoster("gone", "video/webm")).resolves.toBe(false);
+  });
+
+  it("waits out a library move holding the upload", async () => {
+    vi.useFakeTimers();
+    playableVideo({ width: 100, height: 100, duration: 1 });
+    drawableCanvas({ "image/webp": "image/webp" });
+    let refusals = 2;
+    const { calls } = stubFetch(() =>
+      refusals-- > 0
+        ? jsonResponse({ error: "The library is being moved.", code: "paused" }, { status: 503, headers: { "Retry-After": "5" } })
+        : jsonResponse({}),
+    );
+    const capture = capturePoster("moving", "video/mp4");
+    await vi.advanceTimersByTimeAsync(11_000);
+    await expect(capture).resolves.toBe(true);
+    expect(calls).toHaveLength(3);
+  });
+});
+
+describe("ensurePoster", () => {
+  const video =(id: string) => ({ id, kind: "video" as const, mime: "video/mp4", hasPoster: false });
+
+  it("asks nothing for an image, a video that has a poster, or where video cannot play", async () => {
+    const { calls } = stubFetch(() => jsonResponse({}));
+    await expect(ensurePoster({ ...video("e-image"), kind: "image", mime: "image/png" })).resolves.toBe(false);
+    await expect(ensurePoster({ ...video("e-has"), hasPoster: true })).resolves.toBe(false);
+    // jsdom cannot play video: given up at once rather than retried.
+    await expect(ensurePoster(video("e-jsdom"))).resolves.toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("tries a failed capture again with backoff and tells listeners once it is stored", async () => {
+    vi.useFakeTimers();
+    playableVideo({ width: 100, height: 100, duration: 1 });
+    drawableCanvas({ "image/webp": "image/webp" });
+    let refusals = 1;
+    const { calls } = stubFetch(() => (refusals-- > 0 ? jsonResponse({ error: "Refused" }, { status: 400 }) : jsonResponse({})));
+    const ready: string[] = [];
+    const off = onPosterReady((id) => ready.push(id));
+
+    const ensured = ensurePoster(video("e-retry"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(1);
+    expect(ready).toEqual([]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(ensured).resolves.toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(ready).toEqual(["e-retry"]);
+
+    // Stored this session: a tile holding an old view learns so without another capture.
+    await expect(ensurePoster(video("e-retry"))).resolves.toBe(true);
+    expect(calls).toHaveLength(2);
+    off();
+  });
+
+  it("gives up on a video for the session after three failed tries", async () => {
+    vi.useFakeTimers();
+    playableVideo({ width: 100, height: 100, duration: 1 });
+    drawableCanvas({ "image/webp": "image/webp" });
+    const { calls } = stubFetch(() => jsonResponse({ error: "Refused" }, { status: 400 }));
+    const ensured = ensurePoster(video("e-broken"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(ensured).resolves.toBe(false);
+    expect(calls).toHaveLength(3);
+
+    await expect(ensurePoster(video("e-broken"))).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("shares one capture between callers", async () => {
+    playableVideo({ width: 100, height: 100, duration: 1 });
+    drawableCanvas({ "image/webp": "image/webp" });
+    const { calls } = stubFetch(() => jsonResponse({}));
+    const [a, b] = await Promise.all([ensurePoster(video("e-shared")), ensurePoster(video("e-shared"))]);
+    expect([a, b]).toEqual([true, true]);
+    expect(calls).toHaveLength(1);
   });
 });

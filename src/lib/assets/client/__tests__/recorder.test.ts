@@ -24,8 +24,8 @@ import {
   type FetchCall,
 } from "./helpers";
 
-const { capturePoster } = vi.hoisted(() => ({ capturePoster: vi.fn(async () => true) }));
-vi.mock("../poster", () => ({ capturePoster }));
+const { ensurePoster } = vi.hoisted(() => ({ ensurePoster: vi.fn(async () => true) }));
+vi.mock("../poster", () => ({ ensurePoster }));
 
 type Recorder = typeof import("../recorder");
 let recorder: Recorder;
@@ -34,7 +34,7 @@ beforeEach(async () => {
   // Queue, runs and status live in the module: each test gets a fresh one.
   vi.resetModules();
   recorder = await import("../recorder");
-  capturePoster.mockClear();
+  ensurePoster.mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -603,12 +603,13 @@ describe("recordAsset", () => {
     });
   });
 
-  it("starts a poster for a recorded video", async () => {
+  it("makes sure a recorded video gets a poster, with retries", async () => {
     fakeLibrary();
     const result = await recorder.recordAsset(input(new Blob(["MP4"], { type: "video/mp4" }), { kind: "video" }), RUN).done;
-    expect(capturePoster).toHaveBeenCalledWith(result!.asset.id, "video/mp4");
+    expect(ensurePoster).toHaveBeenCalledWith(result!.asset);
+    expect(result!.asset).toMatchObject({ kind: "video", mime: "video/mp4" });
     await recorder.recordAsset(input(dataUrlOf("PNG")), RUN).done;
-    expect(capturePoster).toHaveBeenCalledTimes(1);
+    expect(ensurePoster).toHaveBeenCalledTimes(1);
   });
 });
 

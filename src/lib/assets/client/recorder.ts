@@ -48,7 +48,7 @@ import { mapWithConcurrency, withRetry } from "./async";
 import { createEmitter } from "./emitter";
 import { newAssetId } from "./ids";
 import { dataUrlMime, dataUrlToBlob, isBlobUrl, isDataUrl, isMediaString } from "./mediaBlob";
-import { capturePoster } from "./poster";
+import { ensurePoster } from "./poster";
 import {
   encodeSnapshot,
   prefetchBlobUrls,
@@ -540,7 +540,7 @@ export function recordAsset(input: RecordAssetInput, run: AssetRunContext): Reco
           rememberMediaHash(media.key, result.asset.sha256, result.asset.mime, result.asset.bytes);
         }
         recordedListeners.emit(result);
-        if (result.asset.kind === "video" && !result.asset.hasPoster) void capturePoster(result.asset.id, result.asset.mime);
+        if (result.asset.kind === "video" && !result.asset.hasPoster) void ensurePoster(result.asset);
       }
       settle(state, result);
       resolve(result);
