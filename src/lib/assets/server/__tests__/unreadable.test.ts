@@ -29,7 +29,7 @@ import {
   startImport,
 } from "../index";
 import { AssetLibrary } from "../library";
-import { assessReadable, findUnreadable } from "../readable";
+import { assessReadable, findUnreadable, isUnreadableFile } from "../readable";
 import { isDecodeError, loadSharp } from "../thumbs";
 import { fakeRecord, installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
@@ -182,6 +182,18 @@ describe("assessReadable", () => {
     expect(await assessReadable(write("m.glb", damagedPng), "3d")).toBe("readable");
     // An empty file is nothing at all.
     expect(await assessReadable(write("e.png", Buffer.alloc(0)), "image")).toBe("unreadable");
+  });
+});
+
+describe("isUnreadableFile", () => {
+  it("takes what measuring already proved, and looks further only without it", async () => {
+    const file = write("m.wav", damagedWav);
+    // A probe that found a duration, or first bytes that named a container: no further look.
+    expect(await isUnreadableFile(file, { kind: "audio", sniffed: false }, { durationSec: 2 })).toBe(false);
+    expect(await isUnreadableFile(file, { kind: "audio", sniffed: true }, {})).toBe(false);
+    expect(await isUnreadableFile(file, { kind: "3d", sniffed: false }, {})).toBe(false);
+    expect(await isUnreadableFile(file, { kind: "audio", sniffed: false }, {})).toBe(true);
+    expect(await isUnreadableFile(write("m.png", png), { kind: "image", sniffed: true }, {})).toBe(false);
   });
 });
 

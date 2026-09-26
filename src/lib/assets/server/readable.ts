@@ -101,7 +101,7 @@ export async function assessReadable(file: string, kind: AssetKind): Promise<Rea
 /**
  * Whether a file just written or found is unreadable, given what measuring
  * it already proved: an image with a size, or video/audio whose first bytes
- * named a container, needs no further look.
+ * named a container or whose probe found a duration, needs no further look.
  */
 export async function isUnreadableFile(
   file: string,
@@ -109,7 +109,8 @@ export async function isUnreadableFile(
   measured: ProbeResult,
 ): Promise<boolean> {
   if (type.kind === "3d") return false;
-  if (type.kind === "image" ? Boolean(measured.width && measured.height) : type.sniffed) return false;
+  const proven = type.kind === "image" ? Boolean(measured.width && measured.height) : type.sniffed || Boolean(measured.durationSec);
+  if (proven) return false;
   return (await assessReadable(file, type.kind)) === "unreadable";
 }
 
