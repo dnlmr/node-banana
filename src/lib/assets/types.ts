@@ -421,7 +421,7 @@ export interface SetLibraryRootRequest {
   mode: "move" | "switch";
 }
 
-export type LibraryJobType = "move" | "import" | "cleanup" | "export";
+export type LibraryJobType = "move" | "import" | "cleanup" | "export" | "repair";
 
 export interface LibraryJobStatus {
   id: string;
@@ -542,6 +542,7 @@ export const ASSET_ROUTES = {
   job: (jobId: string) => `/api/assets/jobs/${jobId}`, // GET LibraryJobStatus, DELETE cancels
   importProjects: "/api/assets/import", // POST ImportProjectsRequest → { job }
   cleanup: "/api/assets/cleanup", // POST CleanupRequest → { job }
+  repair: "/api/assets/repair", // POST → { job }: rewrite files an older version saved damaged (originals to the OS Trash)
   exportAssets: "/api/assets/export", // POST ExportAssetsRequest → { job }
 } as const;
 
