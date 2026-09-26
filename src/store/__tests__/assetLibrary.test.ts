@@ -441,6 +441,35 @@ describe("pruneMissingHistory", () => {
     expect(kept()).toEqual(["x", "y"]);
   });
 
+  it("drops its answers when another canvas replaced the one it asked for", async () => {
+    useWorkflowStore.setState({
+      workflowId: "wf-a",
+      generationsPath: "/projects/a/generations",
+      nodes: [withHistory([entry("a-file"), entry("a-lost")])],
+    });
+    let listFolder!: (ids: string[]) => void;
+    mockFetch.mockReturnValue(
+      new Promise((resolve) => (listFolder = (ids) => resolve({ json: async () => ({ success: true, ids }) })))
+    );
+
+    const pruning = store().pruneMissingHistory();
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledOnce());
+    // The user switches to project B while A's folder is still being listed
+    const other = [withHistory([entry("b-1"), entry("b-2")])];
+    useWorkflowStore.setState({
+      workflowId: "wf-b",
+      generationsPath: "/projects/b/generations",
+      nodes: other,
+      canvasGeneration: store().canvasGeneration + 1,
+      hasUnsavedChanges: false,
+    });
+    listFolder(["a-file"]);
+    await pruning;
+
+    expect(store().nodes).toBe(other);
+    expect(store().hasUnsavedChanges).toBe(false);
+  });
+
   it("while the library is off, keeps entries with an asset id and prunes the rest by the folder", async () => {
     recorder.enabled = false;
     useWorkflowStore.setState({ generationsPath: "/projects/fox/generations", nodes: [withHistory([entry("x", "a1"), entry("y"), entry("z")])] });

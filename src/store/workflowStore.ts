@@ -3334,7 +3334,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   pruneMissingHistory: async () => {
-    const { generationsPath, nodes } = get();
+    const { generationsPath, nodes, canvasGeneration, workflowId } = get();
     if (!hasHistoryEntries(nodes)) return;
     // Entries with an asset id are asked about in the library (only while it
     // is on: otherwise nothing can be said about them, and they stay); the
@@ -3346,6 +3346,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       generationsPath ? listGenerationIds(generationsPath) : Promise.resolve(null),
       assetExistence(assetIds),
     ]);
+    // The answers describe the canvas that asked. Another one (a tab switch,
+    // a load, a clear, a new id) is judged by its own prune, never by these.
+    const current = get();
+    if (current.canvasGeneration !== canvasGeneration || current.workflowId !== workflowId) return;
     const sources = { folderIds, hasFolder: !!generationsPath, assetStates };
     const pruned = pruneMissingHistory(get().nodes, (entry) => isHistoryEntryAvailable(entry, sources));
     if (!pruned.changed) return;
