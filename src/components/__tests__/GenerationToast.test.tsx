@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import {
-  GENERATION_TOAST_BATCH_MS,
   GENERATION_TOAST_DURATION_MS,
   GenerationToaster,
   clearGenerationToasts,
@@ -63,32 +62,24 @@ describe("GenerationToaster", () => {
     expect(document.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,a");
   });
 
-  it("collapses a burst from one producer into a single stacked card", () => {
+  it("gives every generation its own card, bursts included", () => {
     render(<GenerationToaster />);
     push("data:image/png;base64,a");
     push("data:image/png;base64,b");
-    push("data:image/png;base64,c");
+    push("data:image/png;base64,c", "nano-banana");
 
-    expect(screen.getAllByTestId("generation-toast")).toHaveLength(1);
-    expect(screen.getByText("3 images generated")).toBeInTheDocument();
+    expect(screen.getAllByTestId("generation-toast")).toHaveLength(3);
+    expect(screen.getAllByText("Image generated")).toHaveLength(3);
     expect(document.querySelectorAll("img")).toHaveLength(3);
   });
 
-  it("starts a new card once the batch window has passed", () => {
+  it("dismissing one card leaves the others", () => {
     render(<GenerationToaster />);
     push("data:image/png;base64,a");
-    act(() => vi.advanceTimersByTime(GENERATION_TOAST_BATCH_MS + 1));
     push("data:image/png;base64,b");
-
-    expect(screen.getAllByTestId("generation-toast")).toHaveLength(2);
-  });
-
-  it("starts a new card for a different producer", () => {
-    render(<GenerationToaster />);
-    push("data:image/png;base64,a", "nano-banana-pro");
-    push("data:image/png;base64,b", "nano-banana");
-
-    expect(screen.getAllByTestId("generation-toast")).toHaveLength(2);
+    fireEvent.click(screen.getAllByLabelText("Dismiss")[0]);
+    settle();
+    expect(screen.getAllByTestId("generation-toast")).toHaveLength(1);
   });
 
   it("dismisses itself after the duration", () => {
@@ -101,38 +92,12 @@ describe("GenerationToaster", () => {
     expect(screen.queryByTestId("generation-toast")).not.toBeInTheDocument();
   });
 
-  it("restarts the countdown when a batch extends the card", () => {
-    render(<GenerationToaster />);
-    push("data:image/png;base64,a");
-    act(() => vi.advanceTimersByTime(GENERATION_TOAST_BATCH_MS - 1));
-    push("data:image/png;base64,b");
-
-    act(() => vi.advanceTimersByTime(GENERATION_TOAST_DURATION_MS - GENERATION_TOAST_BATCH_MS + 1));
-    settle();
-    expect(screen.getByTestId("generation-toast")).toBeInTheDocument();
-
-    act(() => vi.advanceTimersByTime(GENERATION_TOAST_DURATION_MS));
-    settle();
-    expect(screen.queryByTestId("generation-toast")).not.toBeInTheDocument();
-  });
-
   it("dismisses on the close button", () => {
     render(<GenerationToaster />);
     push();
     fireEvent.click(screen.getByLabelText("Dismiss"));
     settle();
     expect(screen.queryByTestId("generation-toast")).not.toBeInTheDocument();
-  });
-
-  it("does not extend a card the user has dismissed", () => {
-    render(<GenerationToaster />);
-    push("data:image/png;base64,a");
-    fireEvent.click(screen.getByLabelText("Dismiss"));
-    settle();
-    push("data:image/png;base64,b");
-
-    expect(screen.getAllByTestId("generation-toast")).toHaveLength(1);
-    expect(screen.getByText("Image generated")).toBeInTheDocument();
   });
 
   it("drags as a history image and dismisses", () => {
