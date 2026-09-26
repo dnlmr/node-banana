@@ -53,12 +53,12 @@ describe("OutputGalleryNode", () => {
 
   it("has no grip while empty", () => {
     renderGallery({ images: [] });
-    expect(screen.queryByRole("separator", { name: "Resize gallery" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: /Resize gallery/ })).toBeNull();
   });
 
   it("resizes vertically by its grip and remembers the height on the node", () => {
     const { container } = renderGallery({ images: [IMG, IMG] });
-    const grip = screen.getByRole("separator", { name: "Resize gallery" });
+    const grip = screen.getByRole("separator", { name: "Resize gallery height" });
     grip.setPointerCapture = vi.fn();
     grip.releasePointerCapture = vi.fn();
     const clip = container.querySelector("[data-media-clip]") as HTMLElement;
@@ -74,5 +74,19 @@ describe("OutputGalleryNode", () => {
   it("draws the grid at a stored height", () => {
     const { container } = renderGallery({ images: [IMG], mediaHeight: 400 });
     expect((container.querySelector("[data-media-clip]") as HTMLElement).style.height).toBe("400px");
+  });
+
+  it("resizes both ways from the corner", () => {
+    renderGallery({ images: [IMG], mediaHeight: 300 });
+    const corner = screen.getByRole("separator", { name: "Resize gallery" });
+    corner.setPointerCapture = vi.fn();
+    corner.releasePointerCapture = vi.fn();
+    fireEvent.pointerDown(corner, { clientX: 500, clientY: 400, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(corner, { clientX: 560, clientY: 450, pointerId: 1 });
+    expect(mockUpdateNodeData).toHaveBeenLastCalledWith("gallery-1", { mediaHeight: 350 });
+    // Width goes to React Flow; the store's node list is empty here, so only the
+    // height is observable, and the drag must not throw without a node to size.
+    fireEvent.pointerUp(corner, { pointerId: 1 });
+    expect(corner.releasePointerCapture).toHaveBeenCalled();
   });
 });

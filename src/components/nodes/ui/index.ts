@@ -32,6 +32,7 @@ export type { SocketSpec, SocketType, SocketOutline } from "./Socket";
 export { schemaSockets, sameInputSchema } from "./schemaSockets";
 export type { SchemaSocketOptions } from "./schemaSockets";
 export { HeightGrip } from "./HeightGrip";
+export { CornerGrip } from "./CornerGrip";
 export { Dropdown } from "./Dropdown";
 export type { DropdownOption, DropdownProps, DropdownSize } from "./Dropdown";
 export { LogicRows, LogicRow } from "./LogicRows";
