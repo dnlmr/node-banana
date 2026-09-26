@@ -316,11 +316,6 @@ export async function startCleanup(request: CleanupRequest): Promise<LibraryJobS
   return startJob(ASSET_ROUTES.cleanup, request);
 }
 
-/** Rewrites library and project files an older version saved damaged; the originals go to the OS Trash. */
-export async function startRepair(): Promise<LibraryJobStatus> {
-  return startJob(ASSET_ROUTES.repair, {});
-}
-
 export async function startExport(request: ExportAssetsRequest): Promise<LibraryJobStatus> {
   return startJob(ASSET_ROUTES.exportAssets, request);
 }

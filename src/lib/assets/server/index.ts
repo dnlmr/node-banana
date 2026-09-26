@@ -736,11 +736,6 @@ export async function startImport(request: ImportProjectsRequest): Promise<Libra
   return rt.jobs.start("import", (job) => runImport(job, { library, thumbs: rt.thumbs }, dirs));
 }
 
-/** Starts the job that rewrites damaged files (see repair.ts). CONTRACT STUB until implemented. */
-export async function startRepair(): Promise<LibraryJobStatus> {
-  throw new LibraryError("Repair is not implemented yet", 501, "not_implemented");
-}
-
 export async function startCleanup(request: CleanupRequest): Promise<LibraryJobStatus> {
   const rt = runtime();
   const unusedMedia = request?.unusedMedia === true;
