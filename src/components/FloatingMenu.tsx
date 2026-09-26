@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderOpen, KeyRound, Keyboard, Layers, LayoutTemplate, Menu, MessageSquareText, Plus, RotateCcw, Save, Settings, SquareArrowOutUpRight } from "lucide-react";
+import { FolderOpen, KeyRound, Keyboard, Layers, LayoutTemplate, Menu, MessageSquareText, Plus, Save, Settings, SquareArrowOutUpRight } from "lucide-react";
 import {
   useState,
   useMemo,
@@ -142,7 +142,7 @@ function useCommentNavigation() {
  * The app's corner chrome: a compact pill anchored top-left over the canvas,
  * under the tab bar, with a menu holding everything the old header offered.
  * The pill is three buttons (menu, open, save) plus the time-sensitive extras
- * (comments, revert) while they apply; the workflow name lives in its tab.
+ * (comments) while they apply; the workflow name lives in its tab.
  */
 export function FloatingMenu() {
   const {
@@ -154,8 +154,6 @@ export function FloatingMenu() {
     isSaving,
     setWorkflowMetadata,
     saveToFile,
-    previousWorkflowSnapshot,
-    revertToSnapshot,
     shortcutsDialogOpen,
     setShortcutsDialogOpen,
     setShowQuickstart,
@@ -175,8 +173,6 @@ export function FloatingMenu() {
       isSaving: state.isSaving,
       setWorkflowMetadata: state.setWorkflowMetadata,
       saveToFile: state.saveToFile,
-      previousWorkflowSnapshot: state.previousWorkflowSnapshot,
-      revertToSnapshot: state.revertToSnapshot,
       shortcutsDialogOpen: state.shortcutsDialogOpen,
       setShortcutsDialogOpen: state.setShortcutsDialogOpen,
       setShowQuickstart: state.setShowQuickstart,
@@ -352,13 +348,6 @@ export function FloatingMenu() {
     }
   };
 
-  const handleRevertAIChanges = useCallback(() => {
-    const confirmed = window.confirm("Are you sure? This will restore your previous workflow.");
-    if (confirmed) {
-      revertToSnapshot();
-    }
-  }, [revertToSnapshot]);
-
   const saveAction = !isProjectConfigured
     ? "Save project"
     : isSaving
@@ -431,7 +420,7 @@ export function FloatingMenu() {
             )}
           </button>
 
-          {(commentCount > 0 || previousWorkflowSnapshot) && <div className={CHROME_DIVIDER} />}
+          {commentCount > 0 && <div className={CHROME_DIVIDER} />}
 
           {commentCount > 0 && (
             <button type="button" onClick={goToNextComment} className={ICON_BUTTON} title={commentTitle}>
@@ -441,17 +430,6 @@ export function FloatingMenu() {
                   {commentBadge}
                 </span>
               )}
-            </button>
-          )}
-
-          {previousWorkflowSnapshot && (
-            <button
-              type="button"
-              onClick={handleRevertAIChanges}
-              className="ml-0.5 h-6 whitespace-nowrap rounded border border-neutral-600 bg-neutral-700/50 px-2 text-[11px] font-medium text-neutral-300 transition-colors hover:bg-neutral-700 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-              title="Restore workflow from before AI changes"
-            >
-              Revert AI changes
             </button>
           )}
         </div>
@@ -531,18 +509,8 @@ export function FloatingMenu() {
               title="Provider keys, in project settings"
             />
 
-            {(previousWorkflowSnapshot || commentCount > 0) && (
+            {commentCount > 0 && (
               <MenuDivider role="separator" className="my-1" />
-            )}
-            {previousWorkflowSnapshot && (
-              <MenuRow
-                icon={
-                  <RotateCcw size={16} strokeWidth={1.75} />
-                }
-                label="Revert AI changes"
-                onClick={choose(handleRevertAIChanges)}
-                title="Restore workflow from before AI changes"
-              />
             )}
             {commentCount > 0 && (
               <MenuRow
