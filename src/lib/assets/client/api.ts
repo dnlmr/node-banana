@@ -33,6 +33,7 @@ import {
   type RevealRequest,
   type SetLibraryRootRequest,
   type UploadTicket,
+  type WorkflowEntryUpdate,
 } from "../types";
 
 export class AssetApiError extends Error {
@@ -295,7 +296,7 @@ export async function putRun(runId: string, request: PutRunRequest): Promise<Put
 
 export async function upsertWorkflowEntry(
   workflowId: string,
-  entry: { name: string | null; projectPath: string | null; forkedFrom?: string },
+  entry: WorkflowEntryUpdate,
 ): Promise<LibraryWorkflowEntry> {
   const body = await sendJson<unknown>(ASSET_ROUTES.workflowEntry(workflowId), "PUT", entry);
   return unwrap<LibraryWorkflowEntry>(body, "entry", "id");

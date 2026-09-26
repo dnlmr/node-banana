@@ -39,6 +39,7 @@ import type {
   RecordAssetResult,
   SetLibraryRootRequest,
   UploadTicket,
+  WorkflowEntryUpdate,
 } from "../types";
 import { openFolder, revealFile } from "./desktop";
 import { LibraryError } from "./errors";
@@ -699,7 +700,7 @@ export async function putRun(runId: string, request: PutRunRequest): Promise<Put
 
 export async function upsertWorkflowEntry(
   id: string,
-  entry: { name: string | null; projectPath: string | null; forkedFrom?: string },
+  entry: WorkflowEntryUpdate,
 ): Promise<LibraryWorkflowEntry> {
   if (!entry || typeof entry !== "object") throw new LibraryError("Invalid workflow entry", 400, "bad_request");
   return write((library) =>

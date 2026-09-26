@@ -120,6 +120,15 @@ export interface AssetRecord {
   imported?: boolean;
 }
 
+/** PUT /api/assets/workflows/[id] body. */
+export interface WorkflowEntryUpdate {
+  name: string | null;
+  projectPath: string | null;
+  forkedFrom?: string;
+  /** When the caller observed these values (ms). An older observation never overwrites a newer stored one (a run's late upsert must not undo a rename made during the run). */
+  asOf?: number;
+}
+
 /** One row per workflow in `.nodebanana/workflows.json`. Classification is a single write here. */
 export interface LibraryWorkflowEntry {
   id: string;
@@ -382,6 +391,8 @@ export interface LibraryStatus {
   available: boolean;
   /** Why not available, in words for the user. */
   reason?: string;
+  /** Why not available, for code: "hosted" and "guard" do not change while the page is open (no point asking again); "unwritable" and "unavailable" may. */
+  reasonCode?: "hosted" | "guard" | "unwritable" | "unavailable";
   root: string | null;
   source: LibraryRootSource;
   /** The platform default this machine would use. */
