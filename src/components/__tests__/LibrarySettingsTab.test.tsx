@@ -21,6 +21,11 @@ const api = vi.hoisted(() => ({
 
 vi.mock("@/lib/assets/client/api", () => api);
 
+// Every status the page reads or is handed goes on to the recorder, which
+// decides from it whether generations are recorded at all.
+const recorder = vi.hoisted(() => ({ applyLibraryStatus: vi.fn() }));
+vi.mock("@/lib/assets/client/recorder", () => recorder);
+
 // The confirm step is a Dialog, which holds the store's modal count.
 vi.mock("@/store/workflowStore", () => ({
   useWorkflowStore: (selector: (state: unknown) => unknown) => selector({}),
@@ -287,6 +292,70 @@ describe("LibrarySettingsTab", () => {
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
       expect(screen.getByRole("alert")).toHaveTextContent("No folder picker on this system");
+    });
+  });
+
+  describe("keeping the recorder current", () => {
+    const NEW_ROOT = "/Volumes/Media/Node Banana";
+
+    it("hands the status it reads to the recorder", async () => {
+      const status = makeStatus();
+      await renderTab(status);
+      expect(recorder.applyLibraryStatus).toHaveBeenCalledWith(status);
+    });
+
+    it("hands nothing over when the status cannot be read", async () => {
+      api.fetchLibraryStatus.mockRejectedValue(new Error("offline"));
+      render(<LibrarySettingsTab />);
+      await flush();
+      expect(recorder.applyLibraryStatus).not.toHaveBeenCalled();
+    });
+
+    it("turns recording back on after switching away from an unplugged drive", async () => {
+      mockBrowse({ success: true, path: NEW_ROOT });
+      await renderTab(
+        makeStatus({ available: false, source: "config", root: "/Volumes/Gone/Node Banana", reason: "The drive is not connected." })
+      );
+      const fixed = makeStatus({ root: NEW_ROOT, source: "config" });
+      api.setLibraryRoot.mockResolvedValue(fixed);
+
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Use that folder/ }));
+      await flush();
+
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(fixed);
+    });
+
+    it("hands over the answer to a move, then the status once the move ends", async () => {
+      vi.useFakeTimers();
+      mockBrowse({ success: true, path: NEW_ROOT });
+      await renderTab();
+      const moving = makeStatus({ job: makeJob({ id: "move-7", type: "move", total: 4 }) });
+      api.setLibraryRoot.mockResolvedValue(moving);
+
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move my library there/ }));
+      await flush();
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(moving);
+
+      const moved = makeStatus({ root: NEW_ROOT, source: "config" });
+      api.fetchLibraryStatus.mockResolvedValue(moved);
+      api.fetchJob.mockResolvedValueOnce(makeJob({ id: "move-7", type: "move", state: "done", done: 4, total: 4, finishedAt: 9 }));
+      await advance(JOB_POLL_MS);
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(moved);
+    });
+
+    it("hands over the status once an import ends", async () => {
+      vi.useFakeTimers();
+      const running = makeJob({ id: "import-7" });
+      await renderTab(makeStatus({ job: running }));
+      const imported = makeStatus({ counts: { assets: 40, trashed: 3, bytes: 1024 } });
+      api.fetchLibraryStatus.mockResolvedValue(imported);
+      api.fetchJob.mockResolvedValueOnce({ ...running, state: "done", done: 10, finishedAt: 3 });
+      await advance(JOB_POLL_MS);
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(imported);
     });
   });
 

@@ -12,6 +12,7 @@ import {
   startCleanup,
   startImport,
 } from "@/lib/assets/client/api";
+import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import type {
   LibraryJobStatus,
   LibraryJobType,
@@ -43,6 +44,10 @@ import { cn } from "@/components/nodes/ui/cn";
  * The Library page of the settings dialog: where generations are saved, on
  * every workflow. Nothing here is a draft — every action applies at once and
  * long ones (move, import, clean-up) run as a server job this page follows.
+ *
+ * Every status this page reads or is handed also goes to the recorder, which
+ * records only while its last status says the library is available: a switch
+ * away from an unplugged drive must turn recording back on without a reload.
  */
 
 /** How often a running library job is polled. */
@@ -284,6 +289,7 @@ export function LibrarySettingsTab() {
     try {
       const next = await fetchLibraryStatus();
       setStatus(next);
+      applyLibraryStatus(next);
       setLoadError(null);
       // A job started elsewhere (the Assets view's import) is followed here too,
       // but a job this page has already seen end is not brought back.
@@ -420,6 +426,7 @@ export function LibrarySettingsTab() {
     try {
       const next = await setLibraryRoot({ root: pendingRoot, mode });
       setStatus(next);
+      applyLibraryStatus(next);
       if (mode === "move" && next.job) {
         setJob(next.job);
         // A small library can finish moving before the answer arrives
