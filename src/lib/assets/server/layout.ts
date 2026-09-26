@@ -10,6 +10,8 @@ import { errnoCode } from "./errors";
 
 export const GENERATIONS_DIR = "Generations";
 export const DATA_DIR = ".nodebanana";
+/** In the data folder: one file per process with writes in flight. Not library data — see {@link LibraryLayout.writers}. */
+export const WRITERS_DIR = "writers";
 
 export interface LibraryLayout {
   root: string;
@@ -23,7 +25,12 @@ export interface LibraryLayout {
   journal: string;
   lock: string;
   libraryFile: string;
-  /** One file per process with writes in flight here, so a move in another process waits for them. */
+  /**
+   * One file per process with writes in flight here, so a move in another
+   * process waits for them. A move neither copies it nor counts it as a
+   * library: the other build, not yet following a move, can recreate it
+   * (empty) in the root the library left.
+   */
   writers: string;
 }
 
@@ -41,7 +48,7 @@ export function libraryLayout(root: string): LibraryLayout {
     journal: path.join(data, "journal.ndjson"),
     lock: path.join(data, "lock"),
     libraryFile: path.join(data, "library.json"),
-    writers: path.join(data, "writers"),
+    writers: path.join(data, WRITERS_DIR),
   };
 }
 

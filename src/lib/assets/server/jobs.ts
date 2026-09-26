@@ -22,7 +22,7 @@ import {
   sweepStaleTemps,
   unlinkWithRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, GENERATIONS_DIR } from "./layout";
+import { acquireLock, DATA_DIR, GENERATIONS_DIR, WRITERS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
 import type { Thumbnailer } from "./thumbs";
@@ -644,9 +644,10 @@ async function realpathNearest(target: string): Promise<string> {
   }
 }
 
-async function isNonEmptyDir(dir: string): Promise<boolean> {
+/** Whether `dir` holds anything but the names in `ignore`. */
+async function isNonEmptyDir(dir: string, ignore: readonly string[] = []): Promise<boolean> {
   try {
-    return (await fs.readdir(dir)).length > 0;
+    return (await fs.readdir(dir)).some((name) => !ignore.includes(name));
   } catch {
     return false;
   }
@@ -675,7 +676,8 @@ export async function validateMoveTarget(fromRoot: string, target: unknown, plat
   } catch (error) {
     if (error instanceof LibraryError) throw error;
   }
-  if ((await isNonEmptyDir(path.join(to, DATA_DIR))) || (await isNonEmptyDir(path.join(to, GENERATIONS_DIR)))) {
+  // A writers folder alone is no library: the other build can recreate it in a root the library just left.
+  if ((await isNonEmptyDir(path.join(to, DATA_DIR), [WRITERS_DIR])) || (await isNonEmptyDir(path.join(to, GENERATIONS_DIR)))) {
     throw new LibraryError(
       "That folder already holds a Node Banana library. Use it as it is, or choose an empty folder.",
       409,
@@ -709,7 +711,7 @@ const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 async function buildManifest(root: string, library?: AssetLibrary): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
   const data = path.join(root, DATA_DIR);
-  const skipDirs = new Set([path.join(data, "cache"), path.join(data, "writers")]);
+  const skipDirs = new Set([path.join(data, "cache"), path.join(data, WRITERS_DIR)]);
   const skipFiles = new Set([
     path.join(data, "lock"),
     path.join(data, "config.json"),
@@ -935,6 +937,8 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     await unlinkWithRetry(markerFile).catch(() => {});
     await unlinkWithRetry(logFile).catch(() => {});
   }
+  // Never copied, and empty once the writes it named have landed; the data folder can go only after it.
+  await fs.rmdir(from.layout.writers).catch(() => {});
   await removeEmptyDirs([...[...copied.values()].map(({ source }) => path.dirname(source)), from.layout.data], fromRoot);
   const moved = `Moved ${copied.size} ${copied.size === 1 ? "file" : "files"}.`;
   return leftovers

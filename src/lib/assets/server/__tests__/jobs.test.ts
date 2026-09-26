@@ -144,7 +144,28 @@ describe("move", () => {
     await expect(validateMoveTarget(root, occupied)).rejects.toMatchObject({ code: "conflict" });
     await expect(validateMoveTarget(root, "relative/path")).rejects.toMatchObject({ status: 400 });
     expect(await validateMoveTarget(root, path.join(base, "Fresh"))).toBe(path.join(base, "Fresh"));
+    // A root the library left, where the other build (not yet following the move) put its writers folder again.
+    const left = path.join(base, "Left");
+    fs.mkdirSync(path.join(left, ".nodebanana", "writers"), { recursive: true });
+    expect(await validateMoveTarget(root, left)).toBe(left);
   });
+
+  it("leaves no data folder in the old root, so the library can be moved back there", async () => {
+    const oldRoot = (await getLibraryStatus()).root!;
+    const r = await record();
+    await patchAsset(r.asset.id, { tags: ["round trip"] });
+    const newRoot = path.join(base, "External", "NB");
+    expect(await finished((await setLibraryRoot({ root: newRoot, mode: "move" })).job!)).toMatchObject({ state: "done" });
+    expect(fs.existsSync(path.join(oldRoot, ".nodebanana"))).toBe(false);
+
+    const back = await finished((await setLibraryRoot({ root: oldRoot, mode: "move" })).job!);
+    expect(back).toMatchObject({ state: "done" });
+    expect((await getLibraryStatus()).root).toBe(oldRoot);
+    expect(fs.existsSync(path.join(newRoot, ".nodebanana"))).toBe(false);
+    const page = await listAssets({});
+    expect(page.assets.map((asset) => [asset.id, asset.tags])).toEqual([[r.asset.id, ["round trip"]]]);
+    expect(page.assets[0].displayPath.startsWith(oldRoot)).toBe(true);
+  }, 20_000);
 
   it("answers writes with 503 + Retry-After while a move has recording paused", async () => {
     const r = await record();
