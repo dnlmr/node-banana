@@ -15,6 +15,7 @@ import type { ComfyAppInput, ComfyResolvedOutput } from "@/lib/comfy/types";
 import { buildComfyHeaders, comfyConfigError, getComfySettings } from "@/lib/comfy/settings";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
+import { assetParameters, assetProducer, recordOutput } from "./assetRecording";
 
 /** Polling cadence — starts responsive, then backs off for long renders. */
 const INITIAL_INTERVAL = 1500;
@@ -241,6 +242,8 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
 
   const headers = buildComfyHeaders(settings);
   let jobId: string | null = null;
+  // The server derives randomised seeds from this, so it reproduces the run
+  const seedKey = `${node.id}-${Date.now()}`;
 
   try {
     const submitRes = await fetch("/api/comfy/run", {
@@ -251,7 +254,7 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         inputs,
         params: nodeData.paramValues ?? {},
         randomizeSeeds: settings.randomizeSeeds,
-        seedKey: `${node.id}-${Date.now()}`,
+        seedKey,
       }),
       ...(signal ? { signal } : {}),
     });
@@ -337,8 +340,30 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         jobId: null,
       });
 
-      // A Comfy app's image is a generation like any other: it belongs in the
-      // global history and in the project's generations folder, so it can be
+      // Every media output is a generation like any other, so each goes to the
+      // asset library under its own handle.
+      const prompt = describeRun(app.name, inputs, nodeData.paramValues ?? {});
+      const parameters = assetParameters({
+        ...(nodeData.paramValues ?? {}),
+        ...(settings.randomizeSeeds ? { seedKey } : {}),
+      });
+      let imageRecorded = false;
+      for (const output of outputs) {
+        if (output.type === "text" || !output.value) continue;
+        const recorded = recordOutput(ctx, {
+          kind: output.type,
+          origin: "generated",
+          media: output.value,
+          prompt,
+          model: { provider: "comfyui", modelId: app.name, displayName: app.name },
+          parameters,
+          producer: assetProducer(ctx, { outputHandle: output.handleId }),
+        });
+        if (recorded && output.value === resolved.outputImage) imageRecorded = true;
+      }
+
+      // A Comfy app's image also belongs in the global history, and — without
+      // the asset library — in the project's generations folder, so it can be
       // browsed and reloaded alongside everything else.
       if (resolved.outputImage) {
         const timestamp = Date.now();
@@ -346,11 +371,11 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         addToGlobalHistory({
           image: resolved.outputImage,
           timestamp,
-          prompt: describeRun(app.name, inputs, nodeData.paramValues ?? {}),
+          prompt,
           aspectRatio: "1:1",
           model: app.name,
         });
-        if (generationsPath) {
+        if (generationsPath && !imageRecorded) {
           trackSaveGeneration(
             imageId,
             fetch("/api/save-generation", {
@@ -359,7 +384,7 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
               body: JSON.stringify({
                 directoryPath: generationsPath,
                 image: resolved.outputImage,
-                prompt: describeRun(app.name, inputs, nodeData.paramValues ?? {}),
+                prompt,
                 imageId,
               }),
             })

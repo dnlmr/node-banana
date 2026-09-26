@@ -8,6 +8,8 @@
 import type {
   NanoBananaNodeData,
   ImageGenerationMetadata,
+  ModelType,
+  Resolution,
   SelectedModel,
 } from "@/types";
 import { isOpenAIImage25 } from "@/lib/providers/openaiImages";
@@ -17,6 +19,16 @@ import { pollGenerateTask } from "./pollTaskCompletion";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
+import {
+  assetCost,
+  assetModel,
+  assetParameters,
+  assetProducer,
+  parameterFraming,
+  recordOutput,
+  sizeFromString,
+  trackLegacyId,
+} from "./assetRecording";
 
 export interface NanoBananaOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -179,7 +191,21 @@ export async function executeNanoBanana(
         const imageId = `${timestamp}`;
 
         const generation: ImageGenerationMetadata | undefined = provider === "openai" ? result.generation : undefined;
-        const historyModel = provider === "openai" ? modelToUse.displayName : nodeData.model;
+        // The model that ran. The legacy `model` field only ever names a Gemini
+        // model, so it is wrong for any other pick and after a fallback.
+        const historyModel = provider === "gemini" ? modelToUse.modelId : modelToUse.displayName || modelToUse.modelId;
+
+        // What the run cost: the provider's own figure when it reports one
+        let runCost: number | null = null;
+        let costEstimated = true;
+        if (provider === "openai" && generation?.cost && Number.isFinite(generation.cost.amount) && generation.cost.amount >= 0) {
+          runCost = generation.cost.amount;
+          costEstimated = generation.cost.estimated;
+        } else if ((provider === "fal" || (provider === "openai" && !isOpenAIImage25(modelToUse.modelId))) && modelToUse.pricing) {
+          runCost = modelToUse.pricing.amount;
+        } else if (modelToUse.provider === "gemini") {
+          runCost = calculateGenerationCost(modelToUse.modelId as ModelType, requestPayload.resolution as Resolution);
+        }
 
         // Save to global history
         addToGlobalHistory({
@@ -191,10 +217,36 @@ export async function executeNanoBanana(
           ...(generation ? { generation } : {}),
         });
 
-        // The carousel reloads entries from the generations folder, so only a
-        // generation that is being saved there gets an entry.
+        // Aspect ratio, resolution and search grounding are Gemini request
+        // fields; other providers carry their framing in their parameters.
+        const sentParameters = provider === "gemini"
+          ? {
+              ...requestPayload.parameters,
+              ...(requestPayload.useGoogleSearch ? { useGoogleSearch: true } : {}),
+              ...(requestPayload.useImageSearch ? { useImageSearch: true } : {}),
+            }
+          : requestPayload.parameters;
+        const framing = provider === "gemini"
+          ? { aspectRatio: requestPayload.aspectRatio, resolution: requestPayload.resolution }
+          : parameterFraming(requestPayload.parameters);
+        const recorded = recordOutput(ctx, {
+          kind: "image",
+          origin: "generated",
+          media: result.image,
+          prompt: finalPrompt,
+          model: assetModel(modelToUse),
+          parameters: assetParameters(sentParameters),
+          ...framing,
+          cost: assetCost(runCost, costEstimated),
+          producer: assetProducer(ctx),
+          ...sizeFromString(generation?.size),
+        });
+
+        // The carousel reloads its entries from the asset library, or from the
+        // generations folder, so only a generation saved to one gets an entry.
         const newHistoryItem = {
           id: imageId,
+          ...(recorded ? { assetId: recorded.assetId } : {}),
           timestamp,
           prompt: finalPrompt,
           aspectRatio: nodeData.aspectRatio,
@@ -207,7 +259,7 @@ export async function executeNanoBanana(
           outputImage: result.image,
           status: "complete",
           error: null,
-          ...(generationsPath ? { imageHistory: updatedHistory, selectedHistoryIndex: 0 } : {}),
+          ...(generationsPath || recorded ? { imageHistory: updatedHistory, selectedHistoryIndex: 0 } : {}),
         });
 
         // Push new image to connected downstream outputGallery nodes (atomic append)
@@ -223,17 +275,16 @@ export async function executeNanoBanana(
           });
 
         // Track cost
-        if (provider === "openai" && generation?.cost && Number.isFinite(generation.cost.amount) && generation.cost.amount >= 0) {
-          addIncurredCost(generation.cost.amount);
-        } else if ((provider === "fal" || (provider === "openai" && !isOpenAIImage25(modelToUse.modelId))) && modelToUse.pricing) {
-          addIncurredCost(modelToUse.pricing.amount);
-        } else if (modelToUse.provider === "gemini") {
-          const generationCost = calculateGenerationCost(nodeData.model, nodeData.resolution);
-          addIncurredCost(generationCost);
+        if (runCost !== null) {
+          addIncurredCost(runCost);
         }
 
-        // Auto-save to generations folder if configured
-        if (generationsPath) {
+        if (recorded) {
+          // The recorder writes a project's generations into its folder; the
+          // carousel entry then takes the file's name, as a save there always did.
+          if (generationsPath) trackLegacyId(ctx, "imageHistory", imageId, recorded);
+        } else if (generationsPath) {
+          // No asset library: auto-save to the generations folder
           const savePromise = fetch("/api/save-generation", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

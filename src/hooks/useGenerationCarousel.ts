@@ -4,13 +4,16 @@ import { WorkflowNodeData } from "@/types";
 
 interface HistoryItem {
   id: string;
+  /** The asset library's id, when the entry was recorded there. */
+  assetId?: string;
 }
 
 interface UseGenerationCarouselParams<T extends HistoryItem> {
   nodeId: string;
   history: T[] | undefined;
   currentIndex: number | undefined;
-  loadFn: (id: string) => Promise<string | null>;
+  /** Loads an entry's media; gets the whole entry, so it can use its asset id or its file name. */
+  loadFn: (item: T) => Promise<string | null>;
   /**
    * Builds the `updateNodeData` payload for a successfully loaded asset.
    * Kept node-specific so each node can write its own output/index fields.
@@ -48,7 +51,7 @@ export function useGenerationCarousel<T extends HistoryItem>({
       const item = items[newIndex];
 
       setIsLoading(true);
-      const media = await loadFn(item.id);
+      const media = await loadFn(item);
       setIsLoading(false);
 
       if (media) {

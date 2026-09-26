@@ -293,7 +293,9 @@ export function TemplateExplorerView({
           throw new Error("Failed to download workflow");
         }
 
-        const workflow = await workflowResponse.json();
+        // The author's id and folder are theirs: each open is a workflow of its
+        // own, so its assets and costs are not pooled with everyone else's
+        const { id: _authorId, directoryPath: _authorPath, ...workflow } = await workflowResponse.json();
         onWorkflowSelected(workflow);
       } catch (err) {
         console.error("Error loading community workflow:", err);

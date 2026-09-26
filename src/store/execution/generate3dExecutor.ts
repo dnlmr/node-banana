@@ -11,6 +11,7 @@ import { pollGenerateTask } from "./pollTaskCompletion";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
+import { assetCost, assetModel, assetParameters, assetProducer, recordOutput, resolvedPrompt } from "./assetRecording";
 
 export interface Generate3DOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -134,8 +135,21 @@ export async function executeGenerate3D(
       }
 
       if (result.success && result.model3dUrl) {
+        const model3dUrl: string = result.model3dUrl;
+        // The provider's URL expires, so the server downloads it right away
+        const recorded = recordOutput(ctx, {
+          kind: "3d",
+          origin: "generated",
+          media: model3dUrl,
+          prompt: resolvedPrompt(promptText, dynamicInputs),
+          model: assetModel(modelToUse),
+          parameters: assetParameters(requestPayload.parameters),
+          cost: assetCost(modelToUse.pricing?.amount),
+          producer: assetProducer(ctx),
+        });
+
         updateNodeData(node.id, {
-          output3dUrl: result.model3dUrl,
+          output3dUrl: model3dUrl,
           status: "complete",
           error: null,
           savedFilename: null,
@@ -147,8 +161,25 @@ export async function executeGenerate3D(
           addIncurredCost(modelToUse.pricing.amount);
         }
 
-        // Auto-save 3D model to generations folder if configured
-        if (generationsPath) {
+        if (recorded) {
+          // Point the node at the saved file once it is on disk, unless the
+          // node has moved on to another model (or the canvas to another workflow)
+          const landed = recorded.done
+            .then((saved) => {
+              if (!saved) return;
+              const current = getFreshNode(node.id)?.data as Generate3DNodeData | undefined;
+              if (current?.output3dUrl !== model3dUrl) return;
+              updateNodeData(node.id, {
+                savedFilename: saved.filename,
+                savedFilePath: saved.asset.displayPath,
+              });
+            })
+            .catch((err) => {
+              console.error("Failed to save 3D model:", err);
+            });
+          if (generationsPath) trackSaveGeneration(`3d-${Date.now()}`, landed);
+        } else if (generationsPath) {
+          // No asset library: auto-save 3D model to the generations folder
           const savePromise = fetch("/api/save-generation", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

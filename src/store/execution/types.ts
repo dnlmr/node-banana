@@ -13,6 +13,7 @@ import type {
   ImageHistoryItem,
 } from "@/types";
 import type { ConnectedInputs } from "@/store/utils/connectedInputs";
+import type { AssetRunContext, RecordAssetInput, RecordedAssetHandle } from "@/lib/assets/types";
 
 /**
  * Context passed to every node executor.
@@ -30,6 +31,9 @@ import type { ConnectedInputs } from "@/store/utils/connectedInputs";
  * - `generationsPath`: Path for auto-saving generations (null if not configured).
  * - `saveDirectoryPath`: Path for output node file saving (null if not configured).
  * - `trackSaveGeneration`: Registers a save-generation promise in pendingImageSyncs so auto-save waits.
+ * - `assetRun` / `recordAsset`: The run this node belongs to and the asset library's recorder.
+ *   Present only while the library is available and a run is in progress; without them,
+ *   executors fall back to saving into `generationsPath`.
  * - `get`: Raw store accessor for edge cases.
  */
 export interface NodeExecutionContext {
@@ -50,6 +54,9 @@ export interface NodeExecutionContext {
   appendOutputGalleryVideo: (targetId: string, video: string) => void;
   /** Rebuilds a splitGrid node's cells from its template when stale; returns true if rebuilt */
   materializeSplitGridCells: (nodeId: string) => boolean;
+  assetRun?: AssetRunContext;
+  /** Saves an output to the asset library. Returns at once; the id can go into node data with the output. */
+  recordAsset?: (input: RecordAssetInput) => RecordedAssetHandle;
   get: () => unknown;
 }
 

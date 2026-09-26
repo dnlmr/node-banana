@@ -8,6 +8,33 @@
 import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFrameGrabNodeData } from "@/types";
 import { revokeBlobUrl } from "@/store/utils/executionUtils";
 import type { NodeExecutionContext } from "./types";
+import { assetParameters, assetProducer, recordOutput } from "./assetRecording";
+
+/**
+ * Keep an edited video in the asset library. The Blob goes rather than the
+ * node's string: over 20 MB that string is an object URL, which does not
+ * outlive the session. A re-run that produced the same video is not a new one.
+ */
+function recordEditedVideo(
+  ctx: NodeExecutionContext,
+  outputVideo: string,
+  previousOutput: unknown,
+  outputBlob: Blob,
+  operation: string,
+  parameters: Record<string, unknown>,
+  durationSec?: number
+): void {
+  if (outputVideo === previousOutput) return;
+  recordOutput(ctx, {
+    kind: "video",
+    origin: "edited",
+    media: outputBlob,
+    mime: outputBlob.type || "video/mp4",
+    parameters: assetParameters(parameters),
+    producer: assetProducer(ctx, { operation }),
+    ...(typeof durationSec === "number" && Number.isFinite(durationSec) && durationSec > 0 ? { durationSec } : {}),
+  });
+}
 
 /**
  * VideoStitch: combines multiple video clips into a single output.
@@ -93,7 +120,8 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
-    revokeBlobUrl(oldData?.outputVideo as string | undefined);
+    const previousOutput = oldData?.outputVideo;
+    revokeBlobUrl(previousOutput as string | undefined);
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -113,6 +141,12 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       status: "complete",
       progress: 100,
       error: null,
+    });
+
+    recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
+      clips: inputs.videos.length,
+      loopCount,
+      withAudio: audioData !== null,
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -224,6 +258,8 @@ export async function executeVideoTrim(ctx: NodeExecutionContext): Promise<void>
       progress: 100,
       error: null,
     });
+
+    recordEditedVideo(ctx, outputVideo, oldOutputVideo, outputBlob, "trim", { startTime, endTime }, endTime - startTime);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });
@@ -356,7 +392,8 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
-    revokeBlobUrl(oldData?.outputVideo as string | undefined);
+    const previousOutput = oldData?.outputVideo;
+    revokeBlobUrl(previousOutput as string | undefined);
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -377,6 +414,16 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
       progress: 100,
       error: null,
     });
+
+    recordEditedVideo(
+      ctx,
+      outputVideo,
+      previousOutput,
+      outputBlob,
+      "easeCurve",
+      { easingPreset: activeEasingPreset, bezierHandles: activeBezierHandles, outputDuration: activeOutputDuration },
+      activeOutputDuration
+    );
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });
@@ -484,11 +531,24 @@ export async function executeVideoFrameGrab(ctx: NodeExecutionContext): Promise<
       }
     });
 
+    const previousOutput = (ctx.getFreshNode(node.id)?.data as VideoFrameGrabNodeData | undefined)?.outputImage;
     updateNodeData(node.id, {
       outputImage,
       status: "complete",
       error: null,
     });
+
+    if (outputImage !== previousOutput) {
+      recordOutput(ctx, {
+        kind: "image",
+        origin: "edited",
+        media: outputImage,
+        mime: "image/png",
+        parameters: { framePosition: nodeData.framePosition },
+        producer: assetProducer(ctx, { operation: "frameGrab" }),
+        ...(video.videoWidth > 0 && video.videoHeight > 0 ? { width: video.videoWidth, height: video.videoHeight } : {}),
+      });
+    }
     } finally {
       if (blobUrl) {
         URL.revokeObjectURL(blobUrl);
