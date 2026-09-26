@@ -42,6 +42,8 @@ export class AssetApiError extends Error {
     public readonly status: number,
     /** From a `Retry-After` header (503 while the library is moving). */
     public readonly retryAfterMs?: number,
+    /** The route's `code`, e.g. "unavailable" when the library root is gone, "paused" during a move. */
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "AssetApiError";
@@ -64,15 +66,17 @@ export function parseRetryAfter(value: string | null, now: number = Date.now()):
   return Math.min(Math.max(0, seconds), 10 * 60 * 1000);
 }
 
-/** The route's `{ error }`, else the start of the body, else the status line. */
+/** The route's `{ error, code }`, else the start of the body, else the status line. */
 async function toApiError(response: Response): Promise<AssetApiError> {
   let detail = "";
+  let code: string | undefined;
   try {
     const text = await response.text();
     try {
-      const json = JSON.parse(text) as { error?: unknown; message?: unknown };
+      const json = JSON.parse(text) as { error?: unknown; message?: unknown; code?: unknown };
       const value = json.error ?? json.message;
       detail = typeof value === "string" ? value : "";
+      if (typeof json.code === "string" && json.code) code = json.code;
     } catch {
       detail = text.trim().slice(0, 200);
     }
@@ -84,6 +88,7 @@ async function toApiError(response: Response): Promise<AssetApiError> {
     detail || `${response.status} ${response.statusText ?? ""}`.trim(),
     response.status,
     retryAfter,
+    code,
   );
 }
 
