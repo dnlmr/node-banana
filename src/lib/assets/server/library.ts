@@ -1181,10 +1181,33 @@ export class AssetLibrary {
   }
 
   /**
-   * Removes records for good. Sidecars go first (with `del` journal lines);
-   * then the snapshot of every run none of the remaining records (live or
-   * trashed) belongs to; then each file no remaining record uses is
-   * released — library files and, with `deleteProjectFiles`, project files.
+   * Whether a record's file is verifiably not there: no such file or folder
+   * (ENOENT/ENOTDIR), or a location that fails validation. Anything else —
+   * the file is there, or can't be checked — is not gone. Notes the answer
+   * as a file check would.
+   */
+  private async fileIsGone(record: AssetRecord): Promise<boolean> {
+    const file = this.filePath(record);
+    if (!file) return true;
+    try {
+      await fs.stat(file);
+      this.setMissing(record.id, false);
+      return false;
+    } catch (error) {
+      this.noteFileError(record.id, error);
+      return isAbsent(error);
+    }
+  }
+
+  /**
+   * Removes records for good. Only a record in the Trash, or a live one
+   * whose file is verifiably gone ("Remove from library"), is removed; any
+   * other id comes back in `errors`, whatever the client believed about it.
+   * Sidecars go first (with `del` journal lines); then the snapshot of every
+   * run none of the remaining records (live or trashed) belongs to; then
+   * each file no remaining record uses is released — library files and,
+   * with `deleteProjectFiles`, project files. A live record's file is never
+   * released: it was gone a moment ago, so one there now came back.
    * Bytes a surviving run's snapshot still references move into
    * `.nodebanana/media` instead of the OS Trash, so "open original workflow"
    * keeps working; a kept project file is copied there for the same reason.
@@ -1197,6 +1220,8 @@ export class AssetLibrary {
   ): Promise<AssetBulkResult> {
     await this.ready();
     const removed: AssetRecord[] = [];
+    /** Removed from the Trash: their files are released. */
+    const release: AssetRecord[] = [];
     const done = new Set<string>();
     const errors: AssetBulkResult["errors"] = [];
     const lines: string[] = [];
@@ -1210,11 +1235,19 @@ export class AssetLibrary {
             else errors.push({ id, error: "Not found" });
             return;
           }
+          const trashed = record.trashedAt !== undefined;
+          if (!trashed && !(await this.fileIsGone(record))) {
+            // Restored elsewhere, or its missing file came back: a live asset, which only the Trash deletes.
+            this.upsertIndex(record);
+            errors.push({ id, error: "Not in the Trash" });
+            return;
+          }
           await unlinkWithRetry(this.sidecarPath(id));
           this.removeFromIndex(id);
           this.tombstones.add(id);
           this.missing.delete(id);
           removed.push(record);
+          if (trashed) release.push(record);
           lines.push(this.journalLine("del", id));
           done.add(id);
         } catch (error) {
@@ -1224,7 +1257,7 @@ export class AssetLibrary {
     );
     await this.publish(lines);
     await this.collectRuns(removed.map((record) => record.runId));
-    await this.releaseFiles(removed, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
+    await this.releaseFiles(release, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
     const affected = [...new Set(ids)].filter((id) => done.has(id));
     return { affected: affected.length, ids: affected, errors };
   }
