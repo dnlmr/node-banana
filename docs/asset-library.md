@@ -104,7 +104,10 @@ where it is:
   `.ref` pointer to it, not a copy.
 
 A run's snapshot is deleted with its last asset, so emptying the Trash frees
-the space. The 30-day auto-empty uses the OS Trash too. The one exception is
+the space. If some asset record can't be read at that moment (a cloud
+placeholder, a locked file), the delete keeps the files and notes them in
+`.nodebanana/pending-release/`, and the next delete or clean-up releases them
+once every record reads again. The 30-day auto-empty uses the OS Trash too. The one exception is
 web mode on older macOS, where only the Finder route exists and would prompt
 for permission; there it deletes the files outright.
 

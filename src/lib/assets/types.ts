@@ -19,6 +19,7 @@
  *   .nodebanana/workflows.json                             LibraryWorkflowEntry table
  *   .nodebanana/journal.ndjson                             mutation log (cross-process freshness, tombstones)
  *   .nodebanana/writers/<pid>-<instance>.json              in-flight writes of each server (a move waits for them)
+ *   .nodebanana/pending-release/<uuid>.json                files a delete kept while a record couldn't be read; released later
  *   .nodebanana/lock, move.json, move-copied.ndjson        a running move, and what to undo if it stops part-way
  *
  * Assets of project-bound workflows are written to `<project>/generations/`
