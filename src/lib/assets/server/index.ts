@@ -20,6 +20,7 @@ import type {
   AssetPatch,
   AssetView,
   AssetWorkflowResult,
+  CleanupRequest,
   ExportAssetsRequest,
   ImportProjectsRequest,
   LibraryJobStatus,
@@ -137,6 +138,11 @@ export async function revealAsset(_id: string): Promise<void> {
   return notImplemented("revealAsset");
 }
 
+/** Opens the library root folder in Finder/Explorer. */
+export async function revealLibraryRoot(): Promise<void> {
+  return notImplemented("revealLibraryRoot");
+}
+
 /* Workflow snapshots ------------------------------------------------- */
 
 export async function getAssetWorkflow(_id: string): Promise<AssetWorkflowResult | null> {
@@ -178,7 +184,7 @@ export async function startImport(_request: ImportProjectsRequest): Promise<Libr
   return notImplemented("startImport");
 }
 
-export async function startCleanup(): Promise<LibraryJobStatus> {
+export async function startCleanup(_request: CleanupRequest): Promise<LibraryJobStatus> {
   return notImplemented("startCleanup");
 }
 

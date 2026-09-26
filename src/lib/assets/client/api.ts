@@ -16,6 +16,7 @@ import type {
   AssetPatch,
   AssetView,
   AssetWorkflowResult,
+  CleanupRequest,
   ExportAssetsRequest,
   ImportProjectsRequest,
   LibraryJobStatus,
@@ -71,6 +72,9 @@ export async function fetchAssetExistence(_ids: string[]): Promise<Record<string
 export async function revealAsset(_id: string): Promise<void> {
   return notImplemented("revealAsset");
 }
+export async function revealLibraryRoot(): Promise<void> {
+  return notImplemented("revealLibraryRoot");
+}
 export async function fetchAssetWorkflow(_id: string): Promise<AssetWorkflowResult | null> {
   return notImplemented("fetchAssetWorkflow");
 }
@@ -110,7 +114,7 @@ export async function upsertWorkflowEntry(
 export async function startImport(_request: ImportProjectsRequest): Promise<LibraryJobStatus> {
   return notImplemented("startImport");
 }
-export async function startCleanup(): Promise<LibraryJobStatus> {
+export async function startCleanup(_request: CleanupRequest): Promise<LibraryJobStatus> {
   return notImplemented("startCleanup");
 }
 export async function startExport(_request: ExportAssetsRequest): Promise<LibraryJobStatus> {

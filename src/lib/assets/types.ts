@@ -425,6 +425,15 @@ export interface ImportProjectsRequest {
   projectDirs: string[];
 }
 
+/** POST /api/assets/reveal: show an asset's file, or the library folder, in Finder/Explorer. */
+export type RevealRequest = { id: string } | { target: "root" };
+
+/** POST /api/assets/cleanup. `unusedMedia`: delete snapshot media and posters nothing references. `thumbnails`: empty the thumbnail cache. */
+export interface CleanupRequest {
+  unusedMedia?: boolean;
+  thumbnails?: boolean;
+}
+
 /** POST /api/assets/export: copy files to a folder the user picked. */
 export interface ExportAssetsRequest {
   selection: AssetSelection;
@@ -507,7 +516,7 @@ export const ASSET_ROUTES = {
   thumb: (sha256: string, width: 320 | 640) => `/api/assets/thumb/${sha256}?w=${width}`, // GET webp | 204
   bulk: "/api/assets/bulk", // POST AssetBulkRequest
   exists: "/api/assets/exists", // POST { ids } → { states: Record<id, AssetExistence> }
-  reveal: "/api/assets/reveal", // POST { id }
+  reveal: "/api/assets/reveal", // POST RevealRequest
   mediaHas: "/api/assets/media/has", // POST { hashes } → { missing }
   media: (sha256: string) => `/api/assets/media/${sha256}`, // PUT raw bytes (x-nb-mime header), GET bytes
   run: (runId: string) => `/api/assets/runs/${runId}`, // PUT PutRunRequest
@@ -515,7 +524,7 @@ export const ASSET_ROUTES = {
   library: "/api/assets/library", // GET LibraryStatus, PUT SetLibraryRootRequest
   job: (jobId: string) => `/api/assets/jobs/${jobId}`, // GET LibraryJobStatus, DELETE cancels
   importProjects: "/api/assets/import", // POST ImportProjectsRequest → { job }
-  cleanup: "/api/assets/cleanup", // POST → { job }
+  cleanup: "/api/assets/cleanup", // POST CleanupRequest → { job }
   exportAssets: "/api/assets/export", // POST ExportAssetsRequest → { job }
 } as const;
 
