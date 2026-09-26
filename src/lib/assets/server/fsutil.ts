@@ -177,18 +177,37 @@ export interface StreamOptions {
 
 type ByteSource = AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>;
 
+/**
+ * A web stream is read through its reader even though it is also async
+ * iterable: the reader's `cancel()` settles a read that is still waiting,
+ * whereas the iterator's `return()` waits for that read — so a stalled
+ * upload could never be let go of.
+ */
 function iterate(source: ByteSource): AsyncIterator<Uint8Array> {
-  if (typeof (source as AsyncIterable<Uint8Array>)[Symbol.asyncIterator] === "function") {
-    return (source as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+  if (typeof (source as ReadableStream<Uint8Array>).getReader === "function") {
+    const reader = (source as ReadableStream<Uint8Array>).getReader();
+    return {
+      next: () => reader.read() as Promise<IteratorResult<Uint8Array>>,
+      return: async () => {
+        await reader.cancel().catch(() => {});
+        return { done: true, value: undefined };
+      },
+    };
   }
-  const reader = (source as ReadableStream<Uint8Array>).getReader();
-  return {
-    next: () => reader.read() as Promise<IteratorResult<Uint8Array>>,
-    return: async () => {
-      await reader.cancel().catch(() => {});
-      return { done: true, value: undefined };
-    },
-  };
+  return (source as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+}
+
+/** Waits for `promise`, but no longer than `ms` (a source that won't close must not hold us). */
+async function settleWithin(promise: Promise<unknown> | undefined, ms: number): Promise<void> {
+  if (!promise) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    promise.catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
+  ]);
+  clearTimeout(timer);
 }
 
 async function nextWithTimeout(
@@ -255,7 +274,7 @@ export async function streamToPartial(source: ByteSource, dir: string, options: 
     finished = true;
   } catch (error) {
     options.onAbort?.();
-    await iterator.return?.().catch(() => undefined);
+    await settleWithin(iterator.return?.(), 1000);
     throw error;
   } finally {
     await handle.close().catch(() => {});
