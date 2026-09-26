@@ -193,6 +193,12 @@ describe("GET /api/assets/[id]/workflow", () => {
     const response = await getWorkflow(page(`/api/assets/${ASSET_ID}/workflow`), ctx({ id: ASSET_ID }));
     expect(response.status).toBe(404);
   });
+
+  it("refuses a bad asset id", async () => {
+    const response = await getWorkflow(page(`/api/assets/x/workflow`), ctx({ id: "r0123456789abc" }));
+    expect(response.status).toBe(400);
+    expect(facade.getAssetWorkflow).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/assets/bulk", () => {

@@ -202,6 +202,11 @@ describe("PUT /api/assets/[id]/poster", () => {
     expect(vi.mocked(facade.putPoster).mock.calls[0][2]).toBe("image/png");
   });
 
+  it("refuses a bad asset id", async () => {
+    expect((await putPoster(put(webp, "image/webp"), ctx({ id: "../x" }))).status).toBe(400);
+    expect(facade.putPoster).not.toHaveBeenCalled();
+  });
+
   it("refuses other types with 415, non-images with 400 and over 5 MB with 413", async () => {
     expect((await putPoster(put(webp, "image/svg+xml"), ctx({ id: ASSET_ID }))).status).toBe(415);
     expect((await putPoster(put("<svg/>", "image/png"), ctx({ id: ASSET_ID }))).status).toBe(400);
