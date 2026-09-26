@@ -132,28 +132,21 @@ export function GenerationToastCard({ toast: item }: { toast: GenerationToastIte
       >
         <X size={14} strokeWidth={1.75} />
       </button>
-      <span
-        // Keyed on shownAt so a batch extension restarts the countdown
-        key={item.shownAt}
-        aria-hidden="true"
-        className="animate-toast-timer pointer-events-none absolute bottom-0 left-0 h-0.5 bg-blue-500/90"
-        style={{ animationDuration: `${GENERATION_TOAST_DURATION_MS}ms` }}
-      />
     </div>
   );
 }
 
 /**
- * The stack of generation cards, newest on top, anchored under the history
- * button like the message toast. Mount once, in the root layout.
+ * The stack of generation cards, anchored under the history button like the
+ * message toast. Sonner's own stacking: the newest card in front, the ones
+ * behind peeking out beneath it, and the whole stack fanning open while the
+ * pointer is over it. Mount once, in the root layout.
  */
 export function GenerationToaster() {
   return (
     <Toaster
       position="top-right"
       theme="dark"
-      // Every card in full, newest on top, as the stack read before sonner.
-      expand
       gap={8}
       visibleToasts={MAX_VISIBLE}
       // Follows the history button when the agent window moves it.
