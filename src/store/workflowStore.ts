@@ -695,11 +695,14 @@ function closeAssetRun(current: CurrentAssetRun, state: WorkflowStore): void {
  * Tell the asset library which project a workflow belongs to: one write,
  * after which every asset recorded under the id is classified with it.
  * Best effort; a library that is off or unreachable changes nothing here.
+ * Stamped with now, so a run that started earlier and records late never
+ * puts back the name or folder it started with.
  */
 function classifyWorkflow(workflowId: string, name: string | null, projectPath: string | null, forkedFrom?: string): void {
   if (!isRecorderEnabled()) return;
+  const asOf = Date.now();
   Promise.resolve()
-    .then(() => upsertWorkflowEntry(workflowId, { name, projectPath, ...(forkedFrom ? { forkedFrom } : {}) }))
+    .then(() => upsertWorkflowEntry(workflowId, { name, projectPath, ...(forkedFrom ? { forkedFrom } : {}), asOf }))
     .catch((error) => {
       console.warn("Failed to update the asset library's workflow entry:", error);
     });

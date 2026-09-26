@@ -453,7 +453,10 @@ function startRunSnapshot(state: RunState): void {
   const { run } = state;
   state.startWrite = track("workflow snapshot", async () => {
     try {
-      await retry(() => upsertWorkflowEntry(run.workflowId, { name: run.workflowName, projectPath: run.projectDir }));
+      // The name and folder are the run's, as they were when it started: a
+      // rename or move saved since then is newer, and the library keeps it.
+      const entry = { name: run.workflowName, projectPath: run.projectDir, asOf: run.startedAt };
+      await retry(() => upsertWorkflowEntry(run.workflowId, entry));
     } catch (error) {
       console.warn("Couldn't classify the workflow in the library:", error instanceof Error ? error.message : error);
     }

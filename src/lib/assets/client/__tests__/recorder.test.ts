@@ -648,7 +648,8 @@ describe("runs and snapshots", () => {
     await recorder.recordAsset(input(dataUrlOf("B")), RUN).done;
     await settleAll();
 
-    expect(server.entries).toEqual([{ id: RUN.workflowId, body: { name: "Cats", projectPath: RUN.projectDir } }]);
+    // Stamped with the run's start: a rename saved while it ran is newer and wins.
+    expect(server.entries).toEqual([{ id: RUN.workflowId, body: { name: "Cats", projectPath: RUN.projectDir, asOf: RUN.startedAt } }]);
     expect(server.runs).toHaveLength(1);
     const [put] = server.runs;
     expect(put.runId).toBe(RUN.runId);
