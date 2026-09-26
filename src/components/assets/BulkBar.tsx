@@ -89,7 +89,7 @@ export function BulkBar() {
   return (
     <div className="pointer-events-auto flex flex-col items-center gap-2">
       {(state.selectAllOffer || selection.mode === "query") && (
-        <div className="animate-drop-in motion-reduce:animate-none flex items-center gap-2 rounded-lg bg-neutral-800/95 px-3 py-1.5 text-xs text-neutral-300 shadow-menu backdrop-blur">
+        <div className="animate-drop-in motion-reduce:animate-none flex items-center gap-2 rounded-lg bg-neutral-800 px-3 py-1.5 text-xs text-neutral-300 shadow-menu">
           {selection.mode === "query" ? (
             <>
               <span>All {formatCount(state.selectionTotal, "matching asset", "matching assets")} are selected.</span>

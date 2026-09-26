@@ -78,7 +78,7 @@ function SectionHeader({
 }) {
   return (
     <div
-      className="sticky top-0 z-10 -mx-2 flex items-center gap-2 bg-canvas-bg/90 px-2 backdrop-blur-sm"
+      className="sticky top-0 z-10 -mx-2 flex items-center gap-2 bg-canvas-bg px-2"
       style={{ height: HEADER_HEIGHT }}
     >
       <button

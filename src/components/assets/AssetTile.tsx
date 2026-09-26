@@ -56,7 +56,7 @@ function Badge({ children, className }: { children: React.ReactNode; className?:
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center gap-1 rounded-[5px] bg-black/60 px-1.5 font-mono text-[10px] leading-none text-neutral-100 backdrop-blur-sm",
+        "inline-flex h-5 items-center gap-1 rounded-[5px] bg-black/70 px-1.5 font-mono text-[10px] leading-none text-neutral-100",
         className,
       )}
     >
@@ -235,7 +235,7 @@ export const AssetTile = memo(function AssetTile({
           "absolute left-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-[5px] border transition-opacity duration-[120ms]",
           selected
             ? "border-selection bg-selection text-white opacity-100"
-            : cn("border-white/70 bg-black/35 text-transparent backdrop-blur-sm", selecting ? "opacity-100" : "opacity-0 group-hover:opacity-100"),
+            : cn("border-white/70 bg-black/50 text-transparent", selecting ? "opacity-100" : "opacity-0 group-hover:opacity-100"),
         )}
       >
         <Check size={12} strokeWidth={3} />

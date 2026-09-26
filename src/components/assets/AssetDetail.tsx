@@ -519,7 +519,7 @@ export function AssetDetail() {
               onClick={() => void stepDetail(-1)}
               aria-label="Previous asset"
               title="Previous (←)"
-              className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-neutral-800/80 text-neutral-200 backdrop-blur transition-colors hover:bg-neutral-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
+              className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-neutral-800/90 text-neutral-200 transition-colors hover:bg-neutral-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
             >
               <ChevronLeft size={20} strokeWidth={1.75} />
             </button>
@@ -530,7 +530,7 @@ export function AssetDetail() {
               onClick={() => void stepDetail(1)}
               aria-label="Next asset"
               title="Next (→)"
-              className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-neutral-800/80 text-neutral-200 backdrop-blur transition-colors hover:bg-neutral-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
+              className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-neutral-800/90 text-neutral-200 transition-colors hover:bg-neutral-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
             >
               <ChevronRight size={20} strokeWidth={1.75} />
             </button>
