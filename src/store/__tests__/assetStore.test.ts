@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssetPage, AssetView } from "@/lib/assets/types";
+import type { AssetPage, AssetView, LibraryJobStatus, LibraryStatus } from "@/lib/assets/types";
 import { encodeAssetPageRequest } from "@/lib/assets/query";
 
 const api = vi.hoisted(() => ({
@@ -540,6 +540,109 @@ describe("actions stay inside the view", () => {
     api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["m1"], errors: [] });
     await useAssetStore.getState().runBulk({ mode: "ids", ids: ["m1"] }, { action: "delete" });
     expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("library jobs and switches", () => {
+  const status = (overrides: Partial<LibraryStatus> = {}): LibraryStatus => ({
+    available: true,
+    root: "/lib",
+    source: "default",
+    defaultRoot: "/lib",
+    cacheDir: "/cache",
+    platform: "darwin",
+    synced: null,
+    counts: { assets: 2, trashed: 0, bytes: 0 },
+    empty: false,
+    job: null,
+    ...overrides,
+  });
+  const job = (overrides: Partial<LibraryJobStatus> = {}): LibraryJobStatus => ({
+    id: "j1",
+    type: "import",
+    state: "running",
+    done: 3,
+    total: 10,
+    bytesDone: 0,
+    bytesTotal: 0,
+    startedAt: 1,
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    useAssetStore.setState({ appView: "assets", library: status() });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("a2"), asset("a1")]));
+    await useAssetStore.getState().refresh();
+    expect(useAssetStore.getState().loadedRoot).toBe("/lib");
+  });
+
+  it("follows a job started elsewhere every second, then shows what it changed", async () => {
+    vi.useFakeTimers();
+    try {
+      api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: job() }));
+      await useAssetStore.getState().refreshLibrary();
+      expect(useAssetStore.getState().job).toMatchObject({ id: "j1", state: "running", done: 3 });
+
+      api.fetchJob.mockResolvedValueOnce(job({ done: 7 }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.fetchJob).toHaveBeenLastCalledWith("j1");
+      expect(useAssetStore.getState().job).toMatchObject({ state: "running", done: 7 });
+
+      const finished = job({ state: "done", done: 10, finishedAt: Date.now() });
+      api.fetchJob.mockResolvedValueOnce(finished);
+      api.fetchAssetPage.mockResolvedValueOnce(page([asset("a2"), asset("old", { createdAt: T0 - 1e9 }), asset("a1")]));
+      api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: finished, counts: { assets: 3, trashed: 0, bytes: 0 } }));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(ids()).toEqual(["a2", "old", "a1"]));
+      expect(useAssetStore.getState().job).toMatchObject({ state: "done" });
+      expect(api.fetchFacets).toHaveBeenCalled();
+      expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(2);
+      expect(useAssetStore.getState().notice?.message).toBe("Imported 10 files");
+
+      // No more polling, and the finished job does not reload the list again
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(api.fetchJob).toHaveBeenCalledTimes(2);
+      expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a running job it no longer follows once the status has none", async () => {
+    useAssetStore.setState({ job: job({ id: "stale" }) });
+    api.fetchLibraryStatus.mockResolvedValueOnce(status());
+    await useAssetStore.getState().refreshLibrary();
+    expect(useAssetStore.getState().job).toBeNull();
+  });
+
+  it("reloads the list once for a job that finished unseen after it loaded, and not for one before", async () => {
+    api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: job({ id: "before", state: "done", finishedAt: 1 }) }));
+    await useAssetStore.getState().refreshLibrary();
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(1);
+
+    const later = job({ id: "later", state: "done", finishedAt: Date.now() + 60_000 });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("a2"), asset("old", { createdAt: T0 - 1e9 }), asset("a1")]));
+    api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: later }));
+    await useAssetStore.getState().refreshLibrary();
+    await vi.waitFor(() => expect(ids()).toEqual(["a2", "old", "a1"]));
+    api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: later }));
+    await useAssetStore.getState().refreshLibrary();
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads the list again when the library now lives elsewhere, without the old selection or detail", async () => {
+    useAssetStore.getState().toggleSelect("a2");
+    useAssetStore.getState().openDetail("a1");
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("b1")]));
+    useAssetStore.getState().setLibrary(status({ root: "/Volumes/Other/Node Banana" }));
+    expect(useAssetStore.getState()).toMatchObject({ selection: { mode: "ids", ids: [] }, detailId: null });
+    await vi.waitFor(() => expect(ids()).toEqual(["b1"]));
+    expect(useAssetStore.getState().loadedRoot).toBe("/Volumes/Other/Node Banana");
+    expect(api.fetchFacets).toHaveBeenCalled();
+
+    // The same folder again changes nothing
+    useAssetStore.getState().setLibrary(status({ root: "/Volumes/Other/Node Banana" }));
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
   });
 });
 

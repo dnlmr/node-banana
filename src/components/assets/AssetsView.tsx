@@ -254,13 +254,16 @@ export function AssetsView() {
 
   useEffect(() => {
     const store = useAssetStore.getState();
-    const query = buildAssetQuery(store.filters, store.sort);
-    // Coming back to the same query keeps what was loaded (and where the user was)
-    if (store.status === "ready" && store.loadedQuery && sameQuery(store.loadedQuery, query)) void store.pollArrivals();
-    else void store.refresh();
-    void store.refreshFacets();
+    // What the recorder knows first: a library switched meanwhile reloads the list
     const known = getRecorderLibraryStatus();
     if (known) store.setLibrary(known);
+    const state = useAssetStore.getState();
+    const query = buildAssetQuery(state.filters, state.sort);
+    // Coming back to the same query keeps what was loaded (and where the user was)
+    if (state.status === "ready" && state.loadedQuery && sameQuery(state.loadedQuery, query)) void store.pollArrivals();
+    else if (state.status !== "loading") void store.refresh();
+    void store.refreshFacets();
+    // A job running (from Settings, say) is followed; one that ended since the list loaded reloads it
     void store.refreshLibrary();
     clearGenerationToasts();
     // A detail left open takes focus itself
@@ -272,12 +275,19 @@ export function AssetsView() {
       if (facetsTimer) clearTimeout(facetsTimer);
       facetsTimer = setTimeout(() => void useAssetStore.getState().refreshFacets(), FACETS_AFTER_RECORDING_MS);
     });
+    // A switched or moved library reloads the list (setLibrary compares roots)
     const offStatus = onLibraryStatus((next) => useAssetStore.getState().setLibrary(next));
-    // A workflow opened or a tab switched, however it was asked for: show it
     const offCanvas = useWorkflowStore.subscribe((state, previous) => {
+      // A workflow opened or a tab switched, however it was asked for: show it
       if (state.canvasGeneration !== previous.canvasGeneration) useAssetStore.getState().setAppView("canvas");
+      // A dialog closed over the view (Settings may have switched the library or started a job): ask again
+      if (state.openModalCount < previous.openModalCount) void useAssetStore.getState().refreshLibrary();
     });
-    const poll = setInterval(() => void useAssetStore.getState().pollArrivals(), ARRIVALS_POLL_MS);
+    const poll = setInterval(() => {
+      const current = useAssetStore.getState();
+      void current.pollArrivals();
+      void current.refreshLibrary();
+    }, ARRIVALS_POLL_MS);
     window.addEventListener("keydown", handleAssetsKey, { capture: true });
     return () => {
       offRecorded();

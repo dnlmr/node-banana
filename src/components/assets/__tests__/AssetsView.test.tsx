@@ -19,7 +19,10 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/assets/client/api", () => api);
 
-const recorder = vi.hoisted(() => ({ listener: null as ((result: unknown) => void) | null }));
+const recorder = vi.hoisted(() => ({
+  listener: null as ((result: unknown) => void) | null,
+  statusListener: null as ((status: unknown) => void) | null,
+}));
 vi.mock("@/lib/assets/client/recorder", () => ({
   getRecorderLibraryStatus: () => null,
   onAssetRecorded: (listener: (result: unknown) => void) => {
@@ -28,7 +31,12 @@ vi.mock("@/lib/assets/client/recorder", () => ({
       recorder.listener = null;
     };
   },
-  onLibraryStatus: () => () => {},
+  onLibraryStatus: (listener: (status: unknown) => void) => {
+    recorder.statusListener = listener;
+    return () => {
+      recorder.statusListener = null;
+    };
+  },
 }));
 
 const openWorkflow = vi.hoisted(() => ({
@@ -423,6 +431,36 @@ describe("AssetsView", () => {
     fireEvent.keyDown(window, { key: "Delete" });
     expect(useAssetStore.getState().confirm).toBeNull();
     expect(screen.queryByRole("dialog", { name: /permanently/ })).not.toBeInTheDocument();
+  });
+
+  it("loads the list again when Settings switches the library underneath it", async () => {
+    await renderView();
+    await waitFor(() => expect(useAssetStore.getState().library?.root).toBe("/Users/me/Pictures/Node Banana"));
+    fireEvent.click(tile("a2"), { metaKey: true });
+    api.fetchAssetPage.mockResolvedValue(page([asset("b1")]));
+    act(() => recorder.statusListener?.(library({ root: "/Volumes/Work/Node Banana" })));
+    await waitFor(() => expect(tile("b1")).toBeInTheDocument());
+    expect(tile("a2")).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Selected assets" })).not.toBeInTheDocument();
+    expect(screen.getByText("/Volumes/Work/Node Banana")).toBeInTheDocument();
+  });
+
+  it("follows an import started in Settings once its dialog closes, and shows what it brought", async () => {
+    await renderView();
+    const running = { id: "j9", type: "import" as const, state: "running" as const, done: 2, total: 4, bytesDone: 0, bytesTotal: 0, startedAt: 1 };
+    api.fetchLibraryStatus.mockResolvedValue(library({ job: running }));
+    // Settings opens over the view, starts the import and closes
+    act(() => useWorkflowStore.getState().incrementModalCount());
+    act(() => useWorkflowStore.getState().decrementModalCount());
+    await waitFor(() => expect(screen.getByText("Importing 2 of 4")).toBeInTheDocument());
+
+    const finished = { ...running, state: "done" as const, done: 4, finishedAt: Date.now() };
+    api.fetchJob.mockResolvedValue(finished);
+    api.fetchLibraryStatus.mockResolvedValue(library({ job: finished }));
+    api.fetchAssetPage.mockResolvedValue(page([asset("a3"), asset("a2"), asset("a1"), asset("imp1", { createdAt: T0 - 86_400_000 * 40 })]));
+    await waitFor(() => expect(tile("imp1")).toBeInTheDocument(), { timeout: 3000 });
+    expect(screen.queryByText(/Importing/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Imported 4 files");
   });
 
   it("goes back to the canvas when a workflow opens or the tab changes, however that was asked for", async () => {

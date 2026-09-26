@@ -14,6 +14,7 @@ import type {
   AssetSort,
   AssetView,
   LibraryJobStatus,
+  LibraryJobType,
   LibraryStatus,
 } from "@/lib/assets/types";
 
@@ -168,6 +169,8 @@ interface AssetStoreState {
   loadingMore: boolean;
   /** The query the loaded items answer. */
   loadedQuery: AssetQuery | null;
+  /** The library folder the loaded items came from (null before the library was known). */
+  loadedRoot: string | null;
 
   /** Arrived while the grid was scrolled down; shown by the "N new" pill. */
   arrivals: AssetView[];
@@ -220,7 +223,9 @@ interface AssetStoreState {
   setScroll: (scrollTop: number, atTop: boolean) => void;
 
   refreshFacets: () => Promise<void>;
+  /** Asks the server where the library is and what job it runs; follows a job, reloads after a switch. */
   refreshLibrary: () => Promise<void>;
+  /** A status learned elsewhere (the recorder, Settings): applied as refreshLibrary applies its answer. */
   setLibrary: (status: LibraryStatus | null) => void;
   trackJob: (job: LibraryJobStatus, doneMessage?: (job: LibraryJobStatus) => string) => void;
   cancelJob: () => Promise<void>;
@@ -480,6 +485,33 @@ let refreshController: AbortController | null = null;
 let facetsTimer: ReturnType<typeof setTimeout> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let jobTimer: ReturnType<typeof setTimeout> | null = null;
+/** The job trackJob is following. */
+let trackedJobId: string | null = null;
+/** Finished jobs whose effect on the list has been taken care of. */
+const settledJobs = new Set<string>();
+/** When the request behind the loaded list went out: a job that finished later changed what it should show. */
+let listSince = 0;
+/** Jobs that change which assets exist, or where. */
+const LIST_JOBS: ReadonlySet<LibraryJobType> = new Set(["import", "cleanup", "move"]);
+
+function plural(count: number, word: string): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? word : `${word}s`}`;
+}
+
+/** What a finished job says when whoever started it gave no words of its own. */
+function jobDoneMessage(job: LibraryJobStatus): string {
+  switch (job.type) {
+    case "import":
+      return `Imported ${plural(job.done, "file")}`;
+    case "export":
+      return `Exported ${plural(job.done, "file")}`;
+    case "move":
+      return "Library moved";
+    case "cleanup":
+      return job.message ?? "Cleaned up";
+  }
+}
+
 /** The list (requestSeq) an arrivals poll is running for, or -1. */
 let pollingSeq = -1;
 /** Full arrival pages fetched in a row before the list is loaded again instead. */
@@ -504,6 +536,51 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       facetsTimer = null;
       void get().refreshFacets();
     }, FACETS_DEBOUNCE_MS);
+  };
+
+  /**
+   * A library job as the status reports it. One running is followed (polled
+   * every second, whoever started it: Settings, another window); one that
+   * ended unwatched after the list was loaded reloads the list.
+   */
+  const adoptJob = (job: LibraryJobStatus | null) => {
+    if (job?.state === "running") {
+      if (trackedJobId !== job.id) get().trackJob(job);
+      return;
+    }
+    const current = get().job;
+    // A running snapshot nobody follows any more is over
+    if (current?.state === "running" && trackedJobId !== current.id) set({ job: job ?? null });
+    if (job && !settledJobs.has(job.id) && trackedJobId !== job.id) {
+      settledJobs.add(job.id);
+      if (LIST_JOBS.has(job.type) && (job.finishedAt ?? Date.now()) > listSince && get().status !== "idle") {
+        void get().refresh();
+        void get().refreshFacets();
+      }
+    }
+  };
+
+  /**
+   * A new library status. When the list came from another folder (a switch
+   * or move) or the library came or went, what is loaded belongs to another
+   * library: the selection and detail go and the list loads again. Jobs are
+   * followed while the view shows.
+   */
+  const applyLibrary = (next: LibraryStatus) => {
+    const previous = get().library;
+    set({ library: next });
+    const { loadedRoot, status, appView } = get();
+    // A list loaded before any status came is taken to be from the first library reported
+    if (loadedRoot === null && previous === null && status !== "idle" && next.root) set({ loadedRoot: next.root });
+    const moved = loadedRoot !== null && next.root !== loadedRoot;
+    const cameOrWent = previous !== null && previous.available !== next.available;
+    if ((moved || cameOrWent) && status !== "idle") {
+      get().clearSelection();
+      get().closeDetail();
+      void get().refresh();
+      void get().refreshFacets();
+    }
+    if (appView === "assets") adoptJob(next.job);
   };
 
   /**
@@ -670,6 +747,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     error: null,
     loadingMore: false,
     loadedQuery: null,
+    loadedRoot: null,
 
     arrivals: [],
     atTop: true,
@@ -750,6 +828,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       pageFailures.clear();
       lastLoadFailure = 0;
       const query = currentQuery();
+      const root = get().library?.root ?? null;
+      listSince = Date.now();
       // "Select all matching" belongs to the query it was made for
       set((state) => ({
         status: "loading",
@@ -781,6 +861,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
           totalBytes: page.totalBytes,
           status: "ready",
           loadedQuery: query,
+          loadedRoot: root,
           arrivals: [],
           // A new list starts at the top, even when no grid is mounted to scroll
           // (an empty result shows no grid, and the next one mounts it afresh)
@@ -1010,32 +1091,40 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
 
     refreshLibrary: async () => {
       try {
-        const library = await api.fetchLibraryStatus();
-        set({ library, ...(library.job ? { job: library.job } : {}) });
+        applyLibrary(await api.fetchLibraryStatus());
       } catch {
         // The recorder's status (if any) stands
       }
     },
 
-    setLibrary: (library) => set({ library }),
+    setLibrary: (library) => {
+      if (library) applyLibrary(library);
+      else set({ library: null });
+    },
 
     trackJob: (job, doneMessage) => {
       if (jobTimer) clearTimeout(jobTimer);
+      jobTimer = null;
+      trackedJobId = job.id;
       set({ job });
       const poll = async (current: LibraryJobStatus) => {
         if (current.state !== "running") {
           jobTimer = null;
+          if (trackedJobId === current.id) trackedJobId = null;
+          settledJobs.add(current.id);
           const message =
             current.state === "done"
-              ? doneMessage?.(current) ?? "Done"
+              ? doneMessage?.(current) ?? jobDoneMessage(current)
               : current.state === "cancelled"
                 ? "Cancelled"
                 : current.error ?? current.message ?? "The job failed";
           get().showNotice({ message, tone: current.state === "failed" ? "error" : "info" });
-          if (current.type === "import" || current.type === "cleanup") {
+          // Show what it changed (even a cancelled import brought some in): the list, its counts, the library
+          if (LIST_JOBS.has(current.type) && get().status !== "idle") {
             void get().refresh();
-            scheduleFacets();
+            void get().refreshFacets();
           }
+          void get().refreshLibrary();
           return;
         }
         jobTimer = setTimeout(async () => {
