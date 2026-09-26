@@ -25,6 +25,8 @@ import {
   CHROME_ICON_BUTTON_SIZE,
   CHROME_SURFACE,
 } from "./chromeStyles";
+import { LibraryNotices } from "./LibraryNotices";
+import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 
 /** The bar's buttons are the navigator card's: 32px squircles in a 40px row. */
 const ICON_BUTTON = `relative ${CHROME_ICON_BUTTON} ${CHROME_ICON_BUTTON_SIZE.md}`;
@@ -194,6 +196,11 @@ export function FloatingMenu() {
   const [projectModalMode, setProjectModalMode] = useState<"new" | "settings">("new");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("project");
   const [showWorkflowBrowser, setShowWorkflowBrowser] = useState(false);
+  // Settings asked for from elsewhere in the app (the first-run hint, the Assets view)
+  const settingsRequest = useSettingsDialogStore((state) => state.request);
+  const consumeSettingsRequest = useSettingsDialogStore((state) => state.consumeRequest);
+  // How many such requests arrived; each one moves an open dialog to its page
+  const [settingsRequests, setSettingsRequests] = useState<number | undefined>(undefined);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -305,6 +312,18 @@ export function FloatingMenu() {
     setShowProjectModal(true);
   };
 
+  // This menu hosts the settings dialog, so it answers requests to open it at
+  // a page; the request counter moves an already open dialog there too.
+  useEffect(() => {
+    if (!settingsRequest) return;
+    closeMenu();
+    handleOpenSettings(settingsRequest.page);
+    setSettingsRequests((count) => (count ?? 0) + 1);
+    consumeSettingsRequest();
+    // handleOpenSettings only sets state; the request is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsRequest]);
+
   const handleSave = () => {
     if (!isProjectConfigured) {
       handleNewProject();
@@ -369,7 +388,9 @@ export function FloatingMenu() {
         onSave={handleProjectSave}
         mode={projectModalMode}
         initialTab={settingsTab}
+        pageRequest={settingsRequests}
       />
+      <LibraryNotices />
       <WorkflowBrowserModal
         isOpen={showWorkflowBrowser}
         onClose={() => setShowWorkflowBrowser(false)}

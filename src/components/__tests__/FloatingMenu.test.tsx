@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, act } from "@testing-library/react";
 import { FloatingMenu } from "@/components/FloatingMenu";
 import { useAssetStore } from "@/store/assetStore";
+import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 
 const mockSetWorkflowMetadata = vi.fn();
 const mockSaveToFile = vi.fn();
@@ -26,8 +27,26 @@ vi.mock("@/store/workflowStore", () => ({
 }));
 
 vi.mock("@/components/ProjectSetupModal", () => ({
-  ProjectSetupModal: ({ isOpen, mode, initialTab }: { isOpen: boolean; mode: string; initialTab?: string }) =>
-    isOpen ? <div data-testid="project-setup-modal" data-mode={mode} data-tab={initialTab}>Project Setup Modal</div> : null,
+  ProjectSetupModal: ({
+    isOpen,
+    mode,
+    initialTab,
+    pageRequest,
+  }: {
+    isOpen: boolean;
+    mode: string;
+    initialTab?: string;
+    pageRequest?: number;
+  }) =>
+    isOpen ? (
+      <div data-testid="project-setup-modal" data-mode={mode} data-tab={initialTab} data-page-request={pageRequest}>
+        Project Setup Modal
+      </div>
+    ) : null,
+}));
+
+vi.mock("@/components/LibraryNotices", () => ({
+  LibraryNotices: () => <div data-testid="library-notices" />,
 }));
 
 vi.mock("@/components/WorkflowBrowserModal", () => ({
@@ -107,6 +126,7 @@ describe("FloatingMenu", () => {
     mockGetNodesWithComments.mockReturnValue([]);
     mockSaveToFile.mockResolvedValue(undefined);
     useState(createDefaultState());
+    useSettingsDialogStore.setState({ request: null });
   });
 
   afterEach(() => {
@@ -484,6 +504,57 @@ describe("FloatingMenu", () => {
       openMenu();
       fireEvent.mouseDown(screen.getByRole("menu"));
       expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+  });
+
+  describe("settings requests from elsewhere", () => {
+    it("opens settings at the page asked for, then clears the request", () => {
+      render(<FloatingMenu />);
+      expect(screen.queryByTestId("project-setup-modal")).not.toBeInTheDocument();
+
+      act(() => useSettingsDialogStore.getState().openSettings("library"));
+
+      const modal = screen.getByTestId("project-setup-modal");
+      expect(modal).toHaveAttribute("data-mode", "settings");
+      expect(modal).toHaveAttribute("data-tab", "library");
+      expect(useSettingsDialogStore.getState().request).toBeNull();
+    });
+
+    it("answers a request made before it mounted", () => {
+      act(() => useSettingsDialogStore.getState().openSettings("providers"));
+      render(<FloatingMenu />);
+      expect(screen.getByTestId("project-setup-modal")).toHaveAttribute("data-tab", "providers");
+      expect(useSettingsDialogStore.getState().request).toBeNull();
+    });
+
+    it("moves an open settings dialog to the new page and closes the menu", () => {
+      useState(configuredState());
+      render(<FloatingMenu />);
+      openMenu();
+      fireEvent.click(menuItem("Project settings"));
+      const modal = screen.getByTestId("project-setup-modal");
+      expect(modal).toHaveAttribute("data-tab", "project");
+      const firstRequest = modal.getAttribute("data-page-request");
+
+      openMenu();
+      act(() => useSettingsDialogStore.getState().openSettings("library"));
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(modal).toHaveAttribute("data-tab", "library");
+      expect(modal.getAttribute("data-page-request")).not.toBe(firstRequest);
+      expect(modal.getAttribute("data-page-request")).not.toBeNull();
+    });
+
+    it("switches a new-project dialog to settings when a page is asked for", () => {
+      render(<FloatingMenu />);
+      fireEvent.click(screen.getByRole("button", { name: "Save project" }));
+      expect(screen.getByTestId("project-setup-modal")).toHaveAttribute("data-mode", "new");
+      act(() => useSettingsDialogStore.getState().openSettings("library"));
+      expect(screen.getByTestId("project-setup-modal")).toHaveAttribute("data-mode", "settings");
+    });
+
+    it("mounts the library notices", () => {
+      render(<FloatingMenu />);
+      expect(screen.getByTestId("library-notices")).toBeInTheDocument();
     });
   });
 });
