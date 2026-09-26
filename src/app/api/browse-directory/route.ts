@@ -4,6 +4,7 @@ import { promisify } from "util";
 import { writeFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 
 const execAsync = promisify(exec);
 
@@ -44,8 +45,11 @@ const PICKER_TITLES = {
   library: "Choose where Node Banana saves your media",
 } as const;
 
-// GET: Open native directory picker and return the selected path
+// GET: Open native directory picker and return the selected path. Only Node
+// Banana's own page may pop a dialog on this computer (see guard.ts).
 export async function GET(request: Request) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const platform = process.platform;
   const purpose = new URL(request.url).searchParams.get("purpose");
   const title = purpose === "library" ? PICKER_TITLES.library : PICKER_TITLES.default;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { logger } from "@/utils/logger";
 
 // Supported file extensions
@@ -29,8 +30,11 @@ const EXT_TO_MIME: Record<string, string> = {
   aac: 'audio/aac',
 };
 
-// POST: Load a generated image or video from the generations folder by ID
+// POST: Load a generated image or video from the generations folder by ID.
+// Only Node Banana's own page may ask (see guard.ts).
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let directoryPath: string | undefined;
   let imageId: string | undefined;
   try {

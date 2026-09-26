@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { logger } from "@/utils/logger";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 
 export const maxDuration = 300; // 5 minute timeout for large image operations
+
+// Both handlers answer only Node Banana's own page (see guard.ts).
 
 const IMAGES_FOLDER = "inputs";
 const LEGACY_IMAGES_FOLDER = ".images"; // For backward compatibility
@@ -29,6 +32,8 @@ function getMimeAndExtension(dataUrl: string): { mime: string; extension: string
 
 // POST: Save an image to the workflow's inputs or generations folder
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let workflowPath: string | undefined;
   let imageId: string | undefined;
   let folder: string | undefined;
@@ -185,6 +190,8 @@ export async function POST(request: NextRequest) {
 
 // GET: Load an image from the workflow's folders (inputs, generations, or legacy .images)
 export async function GET(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const workflowPath = request.nextUrl.searchParams.get("workflowPath");
   const imageId = request.nextUrl.searchParams.get("imageId");
   const folder = request.nextUrl.searchParams.get("folder"); // Optional hint for which folder to check first

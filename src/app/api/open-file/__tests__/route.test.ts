@@ -3,12 +3,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
 // Use vi.hoisted so mock fns are available during vi.mock() hoisting
-const { mockExecFileAsync, mockStat, mockPlatform, mockHomedir } = vi.hoisted(() => ({
+const { mockExecFileAsync, mockStat, mockPlatform, mockHomedir, mockGuard } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   mockStat: vi.fn(),
   mockPlatform: vi.fn(),
   mockHomedir: vi.fn(),
+  mockGuard: vi.fn(),
 }));
+
+// The guard itself is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: mockGuard }));
 
 vi.mock(import("child_process"), async (importOriginal) => {
   const actual = await importOriginal();
@@ -68,79 +72,30 @@ describe("/api/open-file route", () => {
     mockHomedir.mockReturnValue("/Users/testuser");
   });
 
-  describe("localhost guard", () => {
-    it("should return 403 for non-localhost x-forwarded-for", async () => {
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { "x-forwarded-for": "203.0.113.50", host: "localhost:3000" }
-      );
+  describe("request guard", () => {
+    it("returns the guard's refusal before reading the body or the disk", async () => {
+      const refusal = new Response(JSON.stringify({ error: "refused", code: "forbidden" }), { status: 403 });
+      mockGuard.mockReturnValueOnce(refusal);
+      const request = createMockRequest({ filePath: "/Users/testuser/file.glb" });
 
       const response = await POST(request);
-      const data = await response.json();
 
-      expect(response.status).toBe(403);
-      expect(data.error).toBe("Forbidden: localhost only");
+      expect(response).toBe(refusal);
+      expect(request.json).not.toHaveBeenCalled();
+      expect(mockStat).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
     });
 
-    it("should return 403 for non-localhost host header", async () => {
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { host: "example.com" }
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(403);
-      expect(data.error).toBe("Forbidden: localhost only");
-    });
-
-    it("should allow requests from 127.0.0.1 x-forwarded-for", async () => {
+    it("goes on when the guard lets the request through", async () => {
       mockStat.mockResolvedValue({ isFile: () => true });
       mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
 
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { "x-forwarded-for": "127.0.0.1", host: "localhost:3000" }
-      );
-
+      const request = createMockRequest({ filePath: "/Users/testuser/file.glb" });
       const response = await POST(request);
-      const data = await response.json();
 
+      expect(mockGuard).toHaveBeenCalledWith(request);
       expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-    });
-
-    it("should allow requests from ::1 x-forwarded-for", async () => {
-      mockStat.mockResolvedValue({ isFile: () => true });
-      mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
-
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { "x-forwarded-for": "::1", host: "localhost:3000" }
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-    });
-
-    it("should allow requests with localhost host header", async () => {
-      mockStat.mockResolvedValue({ isFile: () => true });
-      mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
-
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { host: "localhost:3000" }
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
+      expect((await response.json()).success).toBe(true);
     });
   });
 

@@ -8,6 +8,8 @@ const { exec, writeFile } = vi.hoisted(() => ({
 
 vi.mock("child_process", () => ({ exec }));
 vi.mock("fs/promises", () => ({ writeFile, unlink: vi.fn().mockResolvedValue(undefined) }));
+// The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
 
 import { GET } from "../route";
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { logger } from "@/utils/logger";
 
 export const maxDuration = 300; // 5 minute timeout for large media operations
@@ -99,8 +100,11 @@ async function findExistingFileByHash(
   }
 }
 
-// POST: Save a generated image or video to the generations folder (or outputs folder)
+// POST: Save a generated image or video to the generations folder (or outputs folder).
+// Only Node Banana's own page may ask (see guard.ts).
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let directoryPath: string | undefined;
   try {
     const body = await request.json();

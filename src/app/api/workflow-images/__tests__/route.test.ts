@@ -19,6 +19,9 @@ vi.mock("@/utils/logger", () => ({
   },
 }));
 
+// The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
+
 import { POST } from "../route";
 
 function createMockPostRequest(body: unknown): NextRequest {
