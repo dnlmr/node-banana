@@ -94,6 +94,21 @@ describe("labels", () => {
   it("titles an asset by its prompt's first line, else its file", () => {
     expect(assetTitle({ prompt: "\n  A cat astronaut\nwith a helmet", filename: "x.png" })).toBe("A cat astronaut");
     expect(assetTitle({ prompt: undefined, filename: "143205_cat_3f2a9c1b.png" })).toBe("143205_cat_3f2a9c1b.png");
+    // Without a prompt, a record says what made it and in which workflow.
+    expect(
+      assetTitle({
+        prompt: undefined,
+        filename: "095620_splittonodes_f8ade09.png",
+        kind: "image",
+        origin: "edited",
+        producer: { nodeId: "nanoBanana-2", nodeType: "nanoBanana", operation: "splitToNodes", batchIndex: 2 },
+        workflowName: "QA Split",
+        workflow: { id: "wf_1", name: "Product shots", projectPath: null },
+      }),
+    ).toBe("Split to nodes · cell 3 · Product shots");
+    expect(
+      assetTitle({ prompt: "", filename: "v.mp4", kind: "video", origin: "generated", producer: { nodeId: "v", nodeType: "generateVideo" }, workflowName: null }),
+    ).toBe("Video");
   });
 
   it("writes the detail eyebrow from kind, origin or operation, and date", () => {

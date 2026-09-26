@@ -173,10 +173,21 @@ export function workflowLabel(name: string | null | undefined, at: number): stri
 }
 
 /** The asset's title: the prompt's first line, else the file name. */
-export function assetTitle(asset: Pick<AssetView, "prompt" | "filename">): string {
+/**
+ * The first line of the prompt; without one, what made the asset and where:
+ * "Split to nodes · cell 3 · Product shots", "Video · Untitled".
+ */
+export function assetTitle(
+  asset: Pick<AssetView, "prompt" | "filename"> & Partial<Pick<AssetView, "kind" | "origin" | "producer" | "workflowName" | "workflow">>,
+): string {
   const line = asset.prompt?.split(/\r?\n/).find((l) => l.trim())?.trim();
-  if (!line) return asset.filename;
-  return line.length > 120 ? `${line.slice(0, 117).trimEnd()}…` : line;
+  if (line) return line.length > 120 ? `${line.slice(0, 117).trimEnd()}…` : line;
+  if (!asset.kind) return asset.filename;
+  const made =
+    asset.origin === "edited" ? operationLabel(asset.producer?.operation) ?? ORIGIN_LABELS.edited : KIND_LABELS[asset.kind];
+  const cell = asset.producer?.batchIndex !== undefined && /split/i.test(asset.producer.operation ?? "") ? `cell ${asset.producer.batchIndex + 1}` : null;
+  const workflow = asset.workflow?.name ?? asset.workflowName;
+  return [made, cell, workflow].filter(Boolean).join(" · ");
 }
 
 /** Eyebrow over the detail title: "Image · Generated · 27 Sep 2026". */
