@@ -56,6 +56,17 @@ describe("asset api", () => {
     expect(error).toMatchObject({ message: "No such asset", status: 400 });
   });
 
+  it("carries the route's error code", async () => {
+    stubFetch(() => jsonResponse({ error: "The asset library is not available", code: "unavailable" }, { status: 503 }));
+    await expect(beginRecord({ meta: {} as never, source: { type: "upload" } })).rejects.toMatchObject({
+      status: 503,
+      code: "unavailable",
+      retryAfterMs: undefined,
+    });
+    stubFetch(() => jsonResponse({ error: "No such asset" }, { status: 404 }));
+    await expect(patchAsset("a1", { favorite: true })).rejects.toMatchObject({ status: 404, code: undefined });
+  });
+
   it("falls back to the status line when the error body is not JSON", async () => {
     stubFetch(() => jsonResponse("", { status: 500 }));
     await expect(fetchFacets()).rejects.toMatchObject({ status: 500, message: "500 Error" });

@@ -5,14 +5,19 @@
  *   the library status and enables recording only when it is `available`.
  *   Until then (and on hosted/read-only servers, or when the request guard
  *   refuses) `isRecorderEnabled()` is false and callers fall back to today's
- *   project-only save path. If the status request itself fails it is asked
- *   again every 30 s until it gets an answer.
+ *   project-only save path. The status is asked again: every 30 s while the
+ *   request itself fails, every minute while the library is unavailable, on
+ *   returning to the page (at most every 30 s), and at once when a recording
+ *   is refused in a way that suggests the library is gone. Settings hands in
+ *   the answers it gets with `applyLibraryStatus()`.
  * - `recordAsset()` mints the asset id, turns data:/blob: media into a Blob
  *   synchronously-at-call (a blob: URL revoked later must not lose the bytes),
  *   queues the upload (concurrency 2, its own queue: never counted in the
  *   store's pendingMediaSaves, so tabs stay usable), and returns at once.
  *   Failures are retried while the library is temporarily unavailable, then
- *   reported once through `onRecorderError`.
+ *   reported once through `onRecorderError`. Once the library is known to be
+ *   off, queued and retrying recordings resolve `done` null at once, so a
+ *   project run can still save to its own folder.
  * - `beginRun()` / `endRun()` bracket a run. The start graph is held by
  *   reference and only encoded/uploaded when the run records its first
  *   asset. `endRun(id, graph)` writes the final snapshot if the run recorded
@@ -53,7 +58,12 @@ import {
 } from "./snapshot";
 
 const CONCURRENCY = 2;
+/** After the status request itself failed. */
 const STATUS_RETRY_MS = 30_000;
+/** While the library is known to be unavailable: a drive plugged back in, a folder fixed elsewhere. */
+const UNAVAILABLE_POLL_MS = 60_000;
+/** Coming back to the page asks again, at most this often. */
+const FOCUS_REFRESH_MS = 30_000;
 /** The same failure is reported at most once in this window. */
 const ERROR_REPEAT_MS = 60_000;
 /** Runs are sequential, so more open than this means some never got an endRun; the oldest are let go. */
@@ -62,50 +72,131 @@ const MAX_OPEN_RUNS = 32;
 /* Library status ----------------------------------------------------- */
 
 let libraryStatus: LibraryStatus | null = null;
+/** The latest status request (what initAssetLibrary hands out). */
 let statusRequest: Promise<LibraryStatus | null> | null = null;
-let statusRetry: ReturnType<typeof setTimeout> | null = null;
+/** A request still waiting for its answer, shared by the recorder's own re-checks. */
+let statusInFlight: Promise<LibraryStatus | null> | null = null;
+let statusTimer: ReturnType<typeof setTimeout> | null = null;
+/** When the status was last asked for or handed in; throttles the focus re-check. */
+let statusAskedAt = 0;
+/** Requests are numbered so a slow, older answer never replaces a newer one. */
+let statusSeq = 0;
+let appliedSeq = 0;
 
 const recordedListeners = createEmitter<RecordAssetResult>();
 const errorListeners = createEmitter<string>();
 const statusListeners = createEmitter<LibraryStatus>();
 
+function clearStatusTimer(): void {
+  if (statusTimer) clearTimeout(statusTimer);
+  statusTimer = null;
+}
+
+function pageHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+/** Arms the next status check unless one is armed already. A hidden page waits for the focus re-check instead. */
+function scheduleStatusCheck(ms: number): void {
+  if (statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    if (!pageHidden()) void askStatus();
+  }, ms);
+}
+
+function setStatus(status: LibraryStatus, seq: number): void {
+  appliedSeq = seq;
+  const changed = JSON.stringify(status) !== JSON.stringify(libraryStatus);
+  libraryStatus = status;
+  if (status.available) clearStatusTimer();
+  else scheduleStatusCheck(UNAVAILABLE_POLL_MS);
+  if (changed) statusListeners.emit(status);
+}
+
 async function loadStatus(): Promise<LibraryStatus | null> {
+  const seq = ++statusSeq;
+  statusAskedAt = Date.now();
   try {
     const status = await fetchLibraryStatus();
-    applyLibraryStatus(status);
+    // A newer answer (or one handed in by Settings) already applies.
+    if (seq < appliedSeq) return libraryStatus;
+    setStatus(status, seq);
     return status;
   } catch (error) {
     console.warn("The asset library is not reachable yet:", error instanceof Error ? error.message : error);
-    if (!statusRetry) {
-      statusRetry = setTimeout(() => {
-        statusRetry = null;
-        statusRequest = loadStatus();
-      }, STATUS_RETRY_MS);
-    }
+    if (seq > appliedSeq) scheduleStatusCheck(STATUS_RETRY_MS);
     return null;
   }
 }
 
-/** Idempotent: every call before the answer shares the one request. */
+function askStatus(): Promise<LibraryStatus | null> {
+  clearStatusTimer();
+  const request = loadStatus();
+  statusRequest = request;
+  statusInFlight = request;
+  void request.finally(() => {
+    if (statusInFlight === request) statusInFlight = null;
+  });
+  return request;
+}
+
+/** The recorder's own re-checks (focus, a refused recording, a long pause) share a request under way. */
+function recheckStatus(): Promise<LibraryStatus | null> {
+  return statusInFlight ?? askStatus();
+}
+
+const WATCHERS = Symbol.for("node-banana.assetLibraryStatusWatchers");
+type Watchers = { focus: () => void; visibility: () => void };
+
+/**
+ * Coming back to the page asks for the status again: the library may have
+ * been fixed, switched or unplugged meanwhile. A hot reload runs this module
+ * again, so the previous copy's listeners are replaced rather than stacked.
+ */
+function watchPage(): void {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const onReturn = () => {
+    if (pageHidden() || Date.now() - statusAskedAt < FOCUS_REFRESH_MS) return;
+    void recheckStatus();
+  };
+  const holder = globalThis as typeof globalThis & { [WATCHERS]?: Watchers };
+  const previous = holder[WATCHERS];
+  if (previous) {
+    window.removeEventListener("focus", previous.focus);
+    document.removeEventListener("visibilitychange", previous.visibility);
+  }
+  const watchers: Watchers = { focus: onReturn, visibility: onReturn };
+  window.addEventListener("focus", watchers.focus);
+  document.addEventListener("visibilitychange", watchers.visibility);
+  holder[WATCHERS] = watchers;
+}
+
+/**
+ * Idempotent: every call before the answer shares the one request. From then
+ * on the status is asked again on returning to the page (at most every
+ * 30 s), every minute while the library is unavailable, and at once when a
+ * recording is refused because the library is gone.
+ */
 export function initAssetLibrary(): Promise<LibraryStatus | null> {
   // The library is the browser's to record into; a server render has nothing to ask.
   if (typeof window === "undefined") return Promise.resolve(null);
-  statusRequest ??= loadStatus();
-  return statusRequest;
+  if (!statusRequest) {
+    watchPage();
+    askStatus();
+  }
+  return statusRequest!;
 }
 
 /** Asks the server again, e.g. after Settings moved or switched the library. */
 export function refreshAssetLibrary(): Promise<LibraryStatus | null> {
-  if (statusRetry) clearTimeout(statusRetry);
-  statusRetry = null;
-  statusRequest = loadStatus();
-  return statusRequest;
+  return askStatus();
 }
 
 /** Takes a status the caller already has (a PUT /library answer) without asking again. */
 export function applyLibraryStatus(status: LibraryStatus): void {
-  libraryStatus = status;
-  statusListeners.emit(status);
+  statusAskedAt = Date.now();
+  setStatus(status, ++statusSeq);
 }
 
 export function isRecorderEnabled(): boolean {
@@ -120,6 +211,40 @@ export function getRecorderLibraryStatus(): LibraryStatus | null {
 /** Known to be unavailable (as opposed to not asked yet). */
 function knownUnavailable(): boolean {
   return libraryStatus !== null && !libraryStatus.available;
+}
+
+/** An answer that may mean the library itself is gone: the guard refused, or the root failed its check. */
+function mayMeanLibraryGone(error: unknown): boolean {
+  if (!(error instanceof AssetApiError)) return false;
+  return error.status === 403 || error.status === 404 || error.code === "unavailable";
+}
+
+/** Not worth another try: the library is off, so the caller falls back (a project's own folder) at once. */
+function libraryOff(fallback?: unknown): Error {
+  const reason = libraryStatus?.reason || (fallback instanceof Error && fallback.message) || "The asset library is not available.";
+  return new Error(reason);
+}
+
+/**
+ * `withRetry` for the library's writes. It gives up at once when the
+ * library is known to be off, and when an answer suggests the library is
+ * gone it asks for the status first: if that confirms it, recording turns
+ * off (so `isRecorderEnabled()` sends later runs down the fallback path) and
+ * this write stops instead of backing off for 15 s.
+ */
+function retry<T>(task: (attempt: number) => Promise<T>): Promise<T> {
+  return withRetry(async (attempt) => {
+    if (knownUnavailable()) throw libraryOff();
+    try {
+      return await task(attempt);
+    } catch (error) {
+      if (mayMeanLibraryGone(error)) {
+        const status = await recheckStatus();
+        if (status && !status.available) throw libraryOff(error);
+      }
+      throw error;
+    }
+  });
 }
 
 /* Errors -------------------------------------------------------------- */
@@ -215,7 +340,7 @@ function resultFromView(asset: AssetView): RecordAssetResult {
 async function upload(meta: RecordAssetMeta, media: TakenMedia): Promise<RecordAssetResult> {
   const blob = media.kind === "bytes" ? await media.blob : null;
   if (blob && !meta.mime && blob.type) meta.mime = blob.type;
-  return withRetry(async (attempt) => {
+  return retry(async (attempt) => {
     try {
       const begun = await beginRecord({
         meta,
@@ -281,8 +406,8 @@ function track(label: string, task: () => Promise<void>): Promise<void> {
 }
 
 async function writeSnapshot(run: AssetRunContext, phase: "start" | "final", graph: CapturedGraph, media: PrefetchedMedia | null) {
-  const encoded = await withRetry(() => encodeSnapshot(graph, media ? { prefetched: media } : {}));
-  const { missingMedia } = await withRetry(() =>
+  const encoded = await retry(() => encodeSnapshot(graph, media ? { prefetched: media } : {}));
+  const { missingMedia } = await retry(() =>
     putRun(run.runId, {
       meta: {
         id: run.runId,
@@ -301,7 +426,7 @@ async function writeSnapshot(run: AssetRunContext, phase: "start" | "final", gra
   if (!missingMedia.length || !encoded.readMedia) return;
   await mapWithConcurrency(missingMedia, 2, async (sha256) => {
     const blob = await encoded.readMedia!(sha256);
-    if (blob) await withRetry(() => uploadMedia(sha256, blob)).catch((error) => console.warn("Snapshot media upload failed:", error));
+    if (blob) await retry(() => uploadMedia(sha256, blob)).catch((error) => console.warn("Snapshot media upload failed:", error));
   });
 }
 
@@ -309,7 +434,7 @@ function startRunSnapshot(state: RunState): void {
   const { run } = state;
   state.startWrite = track("workflow snapshot", async () => {
     try {
-      await withRetry(() => upsertWorkflowEntry(run.workflowId, { name: run.workflowName, projectPath: run.projectDir }));
+      await retry(() => upsertWorkflowEntry(run.workflowId, { name: run.workflowName, projectPath: run.projectDir }));
     } catch (error) {
       console.warn("Couldn't classify the workflow in the library:", error instanceof Error ? error.message : error);
     }
