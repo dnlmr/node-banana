@@ -27,9 +27,12 @@ import { atomicWriteFile, isInsideRoot } from "./fsutil";
 export const LIBRARY_FOLDER_NAME = "Node Banana";
 export const DATA_DIR_NAME = ".nodebanana";
 
+/** Environment variables as a plain map (`process.env` fits; tests pass their own). */
+export type EnvMap = Readonly<Record<string, string | undefined>>;
+
 export interface PathContext {
   platform: NodeJS.Platform;
-  env: NodeJS.ProcessEnv;
+  env: EnvMap;
   homedir: string;
   /**
    * Windows only: the expanded "My Pictures" shell folder. Undefined queries
@@ -58,7 +61,7 @@ export function envVar(ctx: PathContext, name: string): string | undefined {
 }
 
 /** Hosted deployments (Vercel) have a read-only filesystem and no local user. */
-export function isHostedServer(env: NodeJS.ProcessEnv = process.env): boolean {
+export function isHostedServer(env: EnvMap = process.env): boolean {
   return Boolean(env.VERCEL);
 }
 
