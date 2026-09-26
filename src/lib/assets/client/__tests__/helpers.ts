@@ -3,6 +3,7 @@
  * Node's Response, so fetch mocks answer with plain Response-shaped objects.
  */
 
+import { createHash } from "node:crypto";
 import { vi } from "vitest";
 import type { AssetView, LibraryStatus, RecordAssetResult } from "../../types";
 
@@ -59,6 +60,46 @@ export function stubFetch(handler: (call: FetchCall) => Response | Promise<Respo
   return { calls, fetchMock };
 }
 
+/**
+ * An in-memory stand-in for the snapshot media routes and blob: URLs:
+ * `blobs` answers blob: fetches (delete an entry to "revoke" it), `media` is
+ * the server's media store. `route` can answer any call first.
+ */
+export function fakeMediaServer(route?: (call: FetchCall) => Response | Promise<Response> | undefined) {
+  const blobs = new Map<string, Blob>();
+  const media = new Map<string, Blob>();
+  const answer = async (call: FetchCall): Promise<Response> => {
+    const answered = await route?.(call);
+    if (answered) return answered;
+    if (call.url === "/api/assets/media/has") {
+      const { hashes } = jsonBody<{ hashes: string[] }>(call);
+      return jsonResponse({ missing: hashes.filter((hash) => !media.has(hash)) });
+    }
+    const mediaRoute = /^\/api\/assets\/media\/([0-9a-f]{64})$/.exec(call.url);
+    if (mediaRoute && call.method === "PUT") {
+      const blob = call.body as Blob;
+      const bytes = await readBytes(blob);
+      if ((await sha256Of(bytes)) !== mediaRoute[1]) return jsonResponse({ error: "Hash mismatch" }, { status: 400 });
+      media.set(mediaRoute[1], new Blob([bytes as BlobPart], { type: call.headers["x-nb-mime"] }));
+      return jsonResponse({ sha256: mediaRoute[1], bytes: bytes.length });
+    }
+    if (mediaRoute) {
+      const blob = media.get(mediaRoute[1]);
+      return blob ? blobResponse(blob) : jsonResponse({ error: "Not found" }, { status: 404 });
+    }
+    return jsonResponse({ error: `Unexpected ${call.method} ${call.url}` }, { status: 500 });
+  };
+  const stub = stubFetch((call) => {
+    // Like a real fetch, a blob: URL is resolved when fetch() is called.
+    if (call.url.startsWith("blob:")) {
+      const blob = blobs.get(call.url);
+      return blob ? blobResponse(blob) : Promise.reject(new TypeError("Failed to fetch"));
+    }
+    return answer(call);
+  });
+  return { ...stub, blobs, media };
+}
+
 export function jsonBody<T = Record<string, unknown>>(call: FetchCall): T {
   return JSON.parse(String(call.body)) as T;
 }
@@ -81,10 +122,9 @@ export function readBytes(blob: Blob): Promise<Uint8Array> {
   });
 }
 
+/** Node's own hash, so tests can count the client's crypto.subtle calls. */
 export async function sha256Of(bytes: Uint8Array | string): Promise<string> {
-  const data = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-  const digest = await crypto.subtle.digest("SHA-256", data as BufferSource);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 export function dataUrlOf(text: string, mime = "image/png"): string {
