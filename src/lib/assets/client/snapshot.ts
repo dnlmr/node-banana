@@ -5,9 +5,12 @@
  * replaced by `{ $nbMedia: sha256, mime, bytes }`. http(s) strings are left
  * as they are (never dereferenced). Media bytes are hashed in the browser
  * (crypto.subtle SHA-256), the server is asked which it lacks
- * (`mediaHas`), and only those are uploaded. A bounded string→hash map
- * (rebuilt per snapshot from the strings actually found, and seeded by the
- * recorder with every recorded asset) avoids re-hashing the same strings.
+ * (`mediaHas`), and only those are uploaded. Bounded string→hash maps (one
+ * per workflow, rebuilt by each of its snapshots from the strings actually
+ * found, and one seeded by the recorder with every recorded asset) avoid
+ * re-hashing the same strings. blob: URLs are still read whenever a graph
+ * is captured, hash known or not: that binds the bytes, which the server
+ * may turn out to lack after the node revoked the URL.
  * Keys named `$nbMedia` already present in node data are escaped on encode
  * so a crafted workflow cannot inject refs.
  */
@@ -42,7 +45,14 @@ export const INLINE_VIDEO_LIMIT = 20 * 1024 * 1024;
 const MAX_DEPTH = 64;
 /** Recorded media remembered for the next snapshot: entries, and characters of media string held. */
 const REMEMBER_LIMIT = 64;
-const REMEMBER_CHARS = 256 * 1024 * 1024;
+const REMEMBER_CHARS = 64 * 1024 * 1024;
+/**
+ * Workflows whose snapshot hashes are kept, and characters of media string
+ * they may hold between them. The workflow just snapshotted always keeps
+ * its own (its canvas holds those strings anyway); others go oldest first.
+ */
+const KNOWN_WORKFLOWS = 8;
+const KNOWN_CHARS = 64 * 1024 * 1024;
 
 /** Run-time node (and edge) fields a snapshot never keeps. */
 const RUNTIME_NODE_KEYS = new Set(["selected", "dragging"]);
@@ -99,14 +109,42 @@ interface MediaInfo {
   bytes: number;
 }
 
-/** Hashes of the strings the last snapshot found; replaced wholesale by each snapshot. */
-let known = new Map<string, MediaInfo>();
+/**
+ * Per workflow, the hashes of the strings its last snapshot found; each
+ * snapshot replaces its own workflow's map, so running in one tab does not
+ * make the next run in another hash its media again. Oldest first.
+ */
+const known = new Map<string, { media: Map<string, MediaInfo>; chars: number }>();
+let knownChars = 0;
 /** Hashes the recorder learned from recordings, kept until a snapshot finds them or they age out. */
 const remembered = new Map<string, MediaInfo>();
 let rememberedChars = 0;
 
 function lookup(media: string): MediaInfo | undefined {
-  return known.get(media) ?? remembered.get(media);
+  for (const graph of known.values()) {
+    const info = graph.media.get(media);
+    if (info) return info;
+  }
+  return remembered.get(media);
+}
+
+function keepKnown(workflowId: string, media: Map<string, MediaInfo>): void {
+  const previous = known.get(workflowId);
+  if (previous) {
+    known.delete(workflowId);
+    knownChars -= previous.chars;
+  }
+  let chars = 0;
+  for (const key of media.keys()) chars += key.length;
+  known.set(workflowId, { media, chars });
+  knownChars += chars;
+  // Another workflow's strings may be held by nothing else any more (a closed tab).
+  for (const [id, graph] of known) {
+    if (known.size <= KNOWN_WORKFLOWS && knownChars <= KNOWN_CHARS) break;
+    if (id === workflowId) continue;
+    known.delete(id);
+    knownChars -= graph.chars;
+  }
 }
 
 /** Remember that `media` (a data: URL string) has this hash, so snapshots do not hash or upload it again. */
@@ -166,15 +204,18 @@ function fetchBlobUrl(url: string): Promise<Blob | null> {
 }
 
 /**
- * Starts reading every blob: URL in the graph that no earlier snapshot has
- * hashed. Synchronous up to the fetch() calls; call it when the graph is
- * captured, not when it is encoded.
+ * Starts reading every blob: URL in the graph, including ones an earlier
+ * snapshot hashed: a known hash does not mean the server still holds the
+ * bytes (a switched library), and once the node revokes the URL they could
+ * not be sent. Reading a blob: URL only takes a handle on its bytes; they
+ * are hashed later, and only when no hash is known. Synchronous up to the
+ * fetch() calls; call it when the graph is captured, not when it is encoded.
  */
 export function prefetchBlobUrls(graph: CapturedGraph, into: PrefetchedMedia = new Map()): PrefetchedMedia {
   const found = new Set<string>();
   for (const root of graphRoots(graph)) collectMedia(root, found);
   for (const media of found) {
-    if (isBlobUrl(media) && !into.has(media) && !lookup(media)) into.set(media, fetchBlobUrl(media));
+    if (isBlobUrl(media) && !into.has(media)) into.set(media, fetchBlobUrl(media));
   }
   return into;
 }
@@ -251,7 +292,7 @@ export async function encodeSnapshot(graph: CapturedGraph, options: { prefetched
   // Bind every blob: URL before the first await.
   const prefetched = options.prefetched ?? new Map<string, Promise<Blob | null>>();
   for (const media of found) {
-    if (isBlobUrl(media) && !prefetched.has(media) && !lookup(media)) prefetched.set(media, fetchBlobUrl(media));
+    if (isBlobUrl(media) && !prefetched.has(media)) prefetched.set(media, fetchBlobUrl(media));
   }
 
   const refs = new Map<string, MediaInfo | null>();
@@ -272,14 +313,14 @@ export async function encodeSnapshot(graph: CapturedGraph, options: { prefetched
     }
   });
 
-  // Keep only what this graph holds, so the map never outgrows the live canvas.
+  // Keep only what this graph holds, so a workflow's map never outgrows its canvas.
   const next = new Map<string, MediaInfo>();
   for (const [media, info] of refs) {
     if (!info) continue;
     next.set(media, info);
     forget(media);
   }
-  known = next;
+  keepKnown(graph.workflowId, next);
 
   const sources = new Map<string, string>();
   for (const [media, info] of refs) if (info && !sources.has(info.sha256)) sources.set(info.sha256, media);

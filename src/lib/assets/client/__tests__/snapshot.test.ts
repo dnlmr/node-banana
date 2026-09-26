@@ -180,6 +180,67 @@ describe("encodeSnapshot", () => {
     expect((nodeData(workflow, 2).outputVideo as SnapshotMediaRef).bytes).toBe(5);
   });
 
+  it("binds a blob: URL whose hash it knows, so bytes the server lost can still be sent after a revoke", async () => {
+    const server = fakeMediaServer();
+    server.blobs.set(VIDEO_URL, new Blob(["VIDEO"], { type: "video/mp4" }));
+    const graph = graphFixture();
+    await snapshot.encodeSnapshot(graph);
+    const videoSha = await sha256Of("VIDEO");
+    expect(server.media.has(videoSha)).toBe(true);
+
+    // The library was switched to a folder that lacks the video; then the node re-runs and revokes its URL.
+    server.media.clear();
+    const prefetched = snapshot.prefetchBlobUrls(graph);
+    server.blobs.delete(VIDEO_URL);
+    const { workflow } = await snapshot.encodeSnapshot(graph, { prefetched });
+    expect((nodeData(workflow, 2).outputVideo as SnapshotMediaRef).$nbMedia).toBe(videoSha);
+    await expect(readText(server.media.get(videoSha)!)).resolves.toBe("VIDEO");
+  });
+
+  it("keeps each workflow's hashes, so alternating tabs does not hash their videos again", async () => {
+    const server = fakeMediaServer();
+    const otherUrl = "blob:http://localhost/video-2";
+    server.blobs.set(VIDEO_URL, new Blob(["VIDEO"], { type: "video/mp4" }));
+    server.blobs.set(otherUrl, new Blob(["OTHER"], { type: "video/mp4" }));
+    const tab = (workflowId: string, url: string) =>
+      snapshot.captureGraph({
+        nodes: [{ id: "videoStitch-1", type: "videoStitch", data: { outputVideo: url } }],
+        edges: [],
+        edgeStyle: "curved",
+        workflowId,
+        workflowName: workflowId,
+      });
+    const digest = vi.spyOn(crypto.subtle, "digest");
+
+    await snapshot.encodeSnapshot(tab("wf_a", VIDEO_URL));
+    await snapshot.encodeSnapshot(tab("wf_b", otherUrl));
+    expect(digest).toHaveBeenCalledTimes(2);
+    digest.mockClear();
+    await snapshot.encodeSnapshot(tab("wf_a", VIDEO_URL));
+    await snapshot.encodeSnapshot(tab("wf_b", otherUrl));
+    expect(digest).not.toHaveBeenCalled();
+  });
+
+  it("keeps the hashes of a bounded number of workflows, dropping the oldest", async () => {
+    const server = fakeMediaServer();
+    const graphs = Array.from({ length: 10 }, (_, i) =>
+      snapshot.captureGraph({
+        nodes: [{ id: "n", type: "imageInput", data: { image: dataUrlOf(`IMAGE-${i}`) } }],
+        edges: [],
+        edgeStyle: "curved",
+        workflowId: `wf_${i}`,
+        workflowName: null,
+      }),
+    );
+    for (const graph of graphs) await snapshot.encodeSnapshot(graph);
+    expect(server.media.size).toBe(10);
+    const digest = vi.spyOn(crypto.subtle, "digest");
+    await snapshot.encodeSnapshot(graphs[9]);
+    expect(digest).not.toHaveBeenCalled();
+    await snapshot.encodeSnapshot(graphs[0]);
+    expect(digest).toHaveBeenCalledTimes(1);
+  });
+
   it("stores unreadable media as null", async () => {
     fakeMediaServer();
     const { workflow, mediaHashes } = await snapshot.encodeSnapshot(graphFixture());
