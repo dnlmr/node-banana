@@ -274,6 +274,40 @@ describe("move", () => {
     expect((await listAssets({})).assets[0].displayPath.startsWith(target)).toBe(true);
   });
 
+  it("leaves the other build's move markers alone when that move holds the lock, so it can still be undone", async () => {
+    const root = path.join(base, "Shared");
+    const library = new AssetLibrary(root, { trash: async () => {} });
+    await library.ready();
+    const rel = "Generations/2026-09-27/x.png";
+    fs.mkdirSync(path.join(root, "Generations", "2026-09-27"), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), makePng(2, 2, 1));
+    // The other build (a live process) is moving this library to X and has copied x.png so far.
+    const x = path.join(base, "X");
+    fs.mkdirSync(path.join(x, "Generations", "2026-09-27"), { recursive: true });
+    fs.mkdirSync(path.join(x, ".nodebanana"), { recursive: true });
+    fs.copyFileSync(path.join(root, rel), path.join(x, rel));
+    fs.writeFileSync(path.join(x, ".nodebanana", "move-source.json"), JSON.stringify({ fromRoot: root, startedAt: Date.now() }));
+    const markerFile = path.join(root, ".nodebanana", "move.json");
+    const logFile = path.join(root, ".nodebanana", "move-copied.ndjson");
+    fs.writeFileSync(markerFile, JSON.stringify({ v: 1, toRoot: x, startedAt: Date.now(), pid: process.ppid, state: "copying" }));
+    fs.writeFileSync(logFile, `${JSON.stringify(rel)}\n`);
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
+
+    const y = path.join(base, "Y");
+    const move = () => runMove(jobContext(), { library, waitForWrites: async () => true, toRoot: y, setPaused: () => {}, switchRoot: async () => {} });
+    await expect(move()).rejects.toMatchObject({ code: "busy" });
+    expect(fs.existsSync(markerFile)).toBe(true);
+    expect(fs.existsSync(logFile)).toBe(true);
+
+    // The other build then dies mid-copy. The next move here undoes its partial copy before starting its own.
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: 999_999, at: Date.now(), purpose: "move" }));
+    await move();
+    expect(walk(x)).toEqual([]);
+    expect(walk(path.join(y, "Generations"))).toEqual(["2026-09-27/x.png"]);
+    await expect(validateMoveTarget(root, x)).resolves.toBe(x);
+    await library.drain();
+  });
+
   it("won't switch to a folder a move stopped copying into", async () => {
     await getLibraryStatus();
     const target = path.join(base, "Unfinished");

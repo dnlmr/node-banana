@@ -811,6 +811,8 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
   deps.setPaused(true);
   const copied = new Map<string, { source: string; dest: string; size: number; mtimeMs: number }>();
   let lock: Awaited<ReturnType<typeof acquireLock>> = null;
+  /** The markers are this move's: until then they may be another build's live move, not ours to remove. */
+  let ownsMarkers = false;
   let switched = false;
   let switchedAt = 0;
   try {
@@ -820,9 +822,13 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     lock = await acquireLock(from.layout.lock, { heartbeat: true, purpose: "move" });
     if (!lock) throw new LibraryError("The library is busy in another window. Try again in a moment.", 409, "busy");
     await from.drain();
+    // Markers left while we hold the lock are a move whose process died part-way: undo it
+    // first, rather than write over the record of what it copied.
+    if (await exists(markerFile)) await recoverMoveLocked(fromRoot, markerFile, logFile);
 
     const marker: MoveMarker = { v: 1, toRoot, startedAt: Date.now(), pid: process.pid, state: "copying" };
     await atomicWriteFile(markerFile, JSON.stringify(marker), { fsync: true });
+    ownsMarkers = true;
     await fs.writeFile(logFile, "");
     await fs.mkdir(path.join(toRoot, DATA_DIR), { recursive: true });
     await atomicWriteFile(targetMarker, JSON.stringify({ fromRoot, startedAt: marker.startedAt }), { fsync: true });
@@ -872,7 +878,7 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     await unlinkWithRetry(targetMarker).catch(() => {});
     deps.setPaused(false);
   } catch (error) {
-    if (!switched) {
+    if (!switched && ownsMarkers) {
       for (const { dest } of copied.values()) await unlinkWithRetry(dest).catch(() => {});
       await unlinkWithRetry(targetMarker).catch(() => {});
       await removeEmptyDirs([...[...copied.values()].map(({ dest }) => path.dirname(dest)), path.join(toRoot, DATA_DIR)], toRoot);
