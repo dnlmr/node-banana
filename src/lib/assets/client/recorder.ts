@@ -26,7 +26,8 @@
  *   reference and only encoded/uploaded when the run records its first
  *   asset. `endRun(id, graph)` writes the final snapshot if the run recorded
  *   anything; `endRun(id, null)` means the canvas was replaced mid-run and no
- *   final snapshot must be written.
+ *   final snapshot must be written. `holdRun()` keeps a run open past its
+ *   end for a recording it may still make.
  */
 
 import type {
@@ -560,6 +561,27 @@ export function endRun(runId: string, graph: CapturedGraph | null): void {
   state.ended = { graph, media: mayWrite ? prefetchBlobUrls(graph) : null };
   // Recordings still uploading decide whether the run recorded anything.
   if (state.pending === 0) finishRun(state);
+}
+
+/**
+ * Keeps a run open for a recording it may still make after it ends (a node
+ * waiting on an earlier run's upload, to record its own copy if that one
+ * fails). Until the release, the run waits as it does for a recording under
+ * way, so one made meanwhile still gets the run's snapshots; recorded after
+ * the run finished, an asset would name a run with none. The release works
+ * once. A run that is not open holds nothing.
+ */
+export function holdRun(runId: string): () => void {
+  const state = runs.get(runId);
+  if (!state) return () => {};
+  state.pending += 1;
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    state.pending -= 1;
+    if (state.ended && state.pending === 0) finishRun(state);
+  };
 }
 
 /* Recording ----------------------------------------------------------- */

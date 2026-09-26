@@ -9,7 +9,7 @@ import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFr
 import { revokeBlobUrl } from "@/store/utils/executionUtils";
 import { dataUrlToBlob, isDataUrl, readBlobBytes } from "@/lib/assets/client/mediaBlob";
 import type { NodeExecutionContext } from "./types";
-import { assetParameters, assetProducer, recordingResult, recordOutput } from "./assetRecording";
+import { assetParameters, assetProducer, holdRecordingRun, recordingResult, recordOutput } from "./assetRecording";
 
 const FINGERPRINT_SAMPLES = 8;
 const FINGERPRINT_SAMPLE_BYTES = 4096;
@@ -109,10 +109,14 @@ async function recordEditedVideo(
     if (remembered && fingerprint === remembered.fingerprint) {
       rememberRecordedVideo(key, remembered);
       // That recording may still be uploading. If it then fails, this run's
-      // copy is the one to keep, unless a later run has recorded since.
-      void remembered.landed.then((landed) => {
-        if (!landed && !lastRecordedVideo.has(key)) record(fingerprint);
-      });
+      // copy is the one to keep, unless a later run has recorded since. This
+      // run stays open until then, so that copy gets its workflow snapshot.
+      const release = holdRecordingRun(ctx);
+      void remembered.landed
+        .then((landed) => {
+          if (!landed && !lastRecordedVideo.has(key)) record(fingerprint);
+        })
+        .finally(release);
       return;
     }
     if (!remembered && fingerprint === (await previousVideoFingerprint(previousOutput))) {
