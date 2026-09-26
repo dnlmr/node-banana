@@ -801,6 +801,20 @@ describe("ProjectSetupModal", () => {
       expect(screen.queryByText("Folder already has a workflow")).toBeNull();
     });
 
+    it("saves into the folder it already lives in without asking, even when its file has no id", async () => {
+      mockFolders({ "/projects/Fox": { name: "Fox" } });
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowId: null, workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="settings" />);
+
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+      expect(screen.queryByText("Folder already has a workflow")).toBeNull();
+    });
+
     it("says where generations go without a project, once the library has answered", () => {
       mockLibraryStatus.mockReturnValue({ available: true, root: "/Users/me/Pictures/Node Banana" });
       const { unmount } = render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="new" />);

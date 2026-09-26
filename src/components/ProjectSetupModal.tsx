@@ -406,8 +406,9 @@ export function ProjectSetupModal({
         ? (saveDirectoryPath ? generateWorkflowId() : workflowId || generateWorkflowId())
         : useWorkflowStore.getState().workflowId || generateWorkflowId();
 
-      // Saving over another workflow's folder would overwrite it; ask first
-      if (result.exists && !replaceExisting) {
+      // Saving over another workflow's folder would overwrite it; ask first.
+      // The folder this workflow already lives in is its own, whatever its file says.
+      if (result.exists && !replaceExisting && fullProjectPath !== saveDirectoryPath) {
         const existing = await findWorkflowInFolder(fullProjectPath);
         if (existing && existing.id !== id) {
           setFolderConflict({ path: fullProjectPath, existingName: existing.name });
