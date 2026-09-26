@@ -7,6 +7,11 @@ vi.mock('@/components/settings/EnvironmentImport', () => ({
   EnvironmentImport: ({ onImported }: { onImported: (value: unknown) => void }) => <button onClick={() => onImported({ preferences: {} })}>Complete environment import</button>,
 }));
 
+// The Library page talks to the asset library; its own tests cover it.
+vi.mock("@/components/settings/LibrarySettingsTab", () => ({
+  LibrarySettingsTab: () => <div data-testid="library-settings">Library settings</div>,
+}));
+
 // Mock the workflow store
 const mockSetUseExternalImageStorage = vi.fn();
 const mockUpdateProviderApiKey = vi.fn();
@@ -1216,5 +1221,63 @@ describe("Noodles tab", () => {
     // The Canvas tab no longer carries them
     fireEvent.click(screen.getByRole("button", { name: "Canvas" }));
     expect(screen.queryByTestId("connection-preview")).toBeNull();
+  });
+});
+
+describe("Library page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState()));
+  });
+
+  it("sits second in the rail, after Project", () => {
+    render(<ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+    const rail = screen.getByRole("navigation", { name: "Settings pages" });
+    const pages = Array.from(rail.querySelectorAll("button")).map((button) => button.textContent);
+    expect(pages.slice(0, 3)).toEqual(["Project", "Library", "Providers"]);
+  });
+
+  it("opens on the Library page when asked, with Done in place of Cancel and Save", () => {
+    const onClose = vi.fn();
+    render(<ProjectSetupModal isOpen={true} onClose={onClose} onSave={vi.fn()} mode="settings" initialTab="library" />);
+    expect(screen.getByRole("button", { name: "Library" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Library" })).toBeInTheDocument();
+    expect(screen.getByText("Where generations are saved, on every workflow.")).toBeInTheDocument();
+    expect(screen.getByTestId("library-settings")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockUpdateProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("moves an open dialog to a newly requested page, and only on a new request", () => {
+    const props = { isOpen: true, onClose: vi.fn(), onSave: vi.fn(), mode: "settings" as const };
+    const { rerender } = render(<ProjectSetupModal {...props} initialTab="project" pageRequest={1} />);
+    expect(screen.getByRole("button", { name: "Project" })).toHaveAttribute("aria-current", "page");
+
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={2} />);
+    expect(screen.getByRole("button", { name: "Library" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("library-settings")).toBeInTheDocument();
+
+    // The user moves on; a re-render without a new request leaves them there
+    fireEvent.click(screen.getByRole("button", { name: "Providers" }));
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={2} />);
+    expect(screen.getByRole("button", { name: "Providers" })).toHaveAttribute("aria-current", "page");
+
+    // The same page asked for again
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={3} />);
+    expect(screen.getByRole("button", { name: "Library" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("renders into the body, so it opens while its host is hidden", () => {
+    const { container } = render(
+      <div hidden>
+        <ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" initialTab="library" />
+      </div>
+    );
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
   });
 });

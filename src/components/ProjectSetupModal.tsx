@@ -14,6 +14,7 @@ import { saveComfySettings, getComfySettings } from "@/lib/comfy/settings";
 import { EnvironmentImport } from '@/components/settings/EnvironmentImport';
 import { isDesktop, comfySecretFields } from '@/lib/desktop/credentials';
 import { ConnectionSettings } from "@/components/settings/ConnectionSettings";
+import { LibrarySettingsTab } from "@/components/settings/LibrarySettingsTab";
 import {
   Dialog,
   DialogButton,
@@ -86,11 +87,12 @@ const getProviderIcon = (provider: ProviderType) => {
   }
 };
 
-export type SettingsTab = "project" | "providers" | "comfy" | "nodeDefaults" | "canvas" | "noodles";
+export type SettingsTab = "project" | "library" | "providers" | "comfy" | "nodeDefaults" | "canvas" | "noodles";
 
 /** The rail's entries, with each page's heading and one-line subtitle. */
 const SETTINGS_PAGES: { id: SettingsTab; label: string; title: string; description: string }[] = [
   { id: "project", label: "Project", title: "Project", description: "Name, location and how the file is written." },
+  { id: "library", label: "Library", title: "Library", description: "Where generations are saved, on every workflow." },
   { id: "providers", label: "Providers", title: "Providers", description: "API keys for the model providers this project can call." },
   { id: "comfy", label: "ComfyUI", title: "ComfyUI", description: "Where Comfy app nodes run." },
   { id: "nodeDefaults", label: "Node defaults", title: "Node defaults", description: "Applied when a node is added from the bar or a shortcut." },
@@ -135,6 +137,12 @@ interface ProjectSetupModalProps {
   mode: "new" | "settings";
   /** Page to open on in settings mode; the menu's API keys entry passes "providers". */
   initialTab?: SettingsTab;
+  /**
+   * Bumped by the host when something outside the dialog asks for a page
+   * (the first-run hint, the Assets view): an open dialog moves to
+   * `initialTab` again instead of staying where the user left it.
+   */
+  pageRequest?: number;
 }
 
 export function ProjectSetupModal({
@@ -143,6 +151,7 @@ export function ProjectSetupModal({
   onSave,
   mode,
   initialTab,
+  pageRequest,
 }: ProjectSetupModalProps) {
   const sanitizeProjectFolderName = (projectName: string): string => {
     return projectName
@@ -307,6 +316,13 @@ export function ProjectSetupModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, mode, workflowName, saveDirectoryPath, useExternalImageStorage, canvasNavigationSettings]);
 
+  // A page asked for while the dialog is already open: go there, keep the drafts.
+  useEffect(() => {
+    if (isOpen && mode === "settings" && initialTab && pageRequest !== undefined) setActiveTab(initialTab);
+    // Only a new request moves the page; the open effect above handles opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRequest]);
+
   const handleBrowse = async () => {
     setIsBrowsing(true);
     setError(null);
@@ -440,6 +456,9 @@ export function ProjectSetupModal({
   const handleSave = () => {
     if (activeTab === "project") {
       handleSaveProject();
+    } else if (activeTab === "library") {
+      // Library actions apply as they are made; there is nothing to save.
+      onClose();
     } else if (activeTab === "providers") {
       handleSaveProviders();
     } else if (activeTab === "comfy") {
@@ -492,6 +511,8 @@ export function ProjectSetupModal({
     <Dialog
       open={isOpen}
       onClose={onClose}
+      // In a body portal, so it still opens while its host is hidden (the Assets view)
+      portal
       className={cn(splitPanelClass, "w-[840px] h-[560px] max-w-[92vw] max-h-[85vh]")}
       panelProps={{ onKeyDown: handleKeyDown }}
     >
@@ -573,6 +594,9 @@ export function ProjectSetupModal({
             {error && <DialogStatus tone="error">{error}</DialogStatus>}
           </div>
         )}
+
+        {/* Library Tab Content */}
+        {activeTab === "library" && <LibrarySettingsTab />}
 
         {/* Providers Tab Content */}
         {activeTab === "providers" && (
@@ -929,9 +953,11 @@ export function ProjectSetupModal({
         </DialogPageBody>
 
         <DialogPageFooter>
-          <DialogButton variant="ghost" size="md" onClick={onClose}>
-            Cancel
-          </DialogButton>
+          {activeTab !== "library" && (
+            <DialogButton variant="ghost" size="md" onClick={onClose}>
+              Cancel
+            </DialogButton>
+          )}
           <DialogButton
             variant="primary"
             size="md"
@@ -940,7 +966,7 @@ export function ProjectSetupModal({
           >
             {activeTab === "project"
               ? (isValidating ? "Validating..." : mode === "new" ? "Create" : "Save")
-              : "Save"
+              : activeTab === "library" ? "Done" : "Save"
             }
           </DialogButton>
         </DialogPageFooter>
