@@ -1227,7 +1227,8 @@ describe("Noodles tab", () => {
 describe("Library page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    // The env status plays no part here; left pending, it cannot update after a test ends.
+    mockFetch.mockReturnValue(new Promise(() => {}));
     mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState()));
   });
 
