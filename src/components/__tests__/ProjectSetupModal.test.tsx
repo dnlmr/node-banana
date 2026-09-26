@@ -14,13 +14,22 @@ const mockToggleProvider = vi.fn();
 const mockUseWorkflowStore = vi.fn();
 
 vi.mock("@/store/workflowStore", () => ({
-  useWorkflowStore: (selector?: (state: unknown) => unknown) => {
-    if (selector) {
-      return mockUseWorkflowStore(selector);
-    }
-    return mockUseWorkflowStore((s: unknown) => s);
-  },
+  useWorkflowStore: Object.assign(
+    (selector?: (state: unknown) => unknown) => {
+      if (selector) {
+        return mockUseWorkflowStore(selector);
+      }
+      return mockUseWorkflowStore((s: unknown) => s);
+    },
+    { getState: () => mockUseWorkflowStore((s: unknown) => s) }
+  ),
   generateWorkflowId: () => "mock-workflow-id",
+}));
+
+// What the asset library last said about itself (null until it has answered)
+const mockLibraryStatus = vi.fn((): { available: boolean; root: string | null } | null => null);
+vi.mock("@/lib/assets/client/recorder", () => ({
+  getRecorderLibraryStatus: () => mockLibraryStatus(),
 }));
 
 // Stand-in for the model browser: a search box rendered, like the real one,
@@ -696,6 +705,112 @@ describe("ProjectSetupModal", () => {
       await waitFor(() => {
         expect(mockSetUseExternalImageStorage).toHaveBeenCalledWith(false);
       });
+    });
+  });
+
+  describe("Workflow identity and existing folders", () => {
+    /** Folders on "disk": path → the workflow saved there (null = empty folder). */
+    function mockFolders(folders: Record<string, { id?: string; name: string } | null>) {
+      mockFetch.mockImplementation((url: string) => {
+        if (url === "/api/env-status") {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+        }
+        if (url.startsWith("/api/workflow?")) {
+          const params = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+          const folder = params.get("path") ?? "";
+          const exists = folder in folders;
+          if (params.get("load") === "true") {
+            const workflow = folders[folder];
+            return Promise.resolve({
+              ok: !!workflow,
+              json: () => Promise.resolve(workflow ? { success: true, workflow: { version: 1, nodes: [], edges: [], ...workflow } } : { success: false }),
+            });
+          }
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, exists, isDirectory: exists }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) });
+      });
+    }
+
+    function fillAndCreate(projectName: string, directory: string) {
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: projectName } });
+      fireEvent.change(screen.getByPlaceholderText("/Users/username/projects/my-project"), { target: { value: directory } });
+      fireEvent.click(screen.getByText("Create"));
+    }
+
+    it("keeps the id of a canvas that has never had a folder, so its generations join the project", async () => {
+      mockFolders({});
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ workflowId: "wf_canvas", saveDirectoryPath: null })));
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("wf_canvas", "Fox", "/projects/Fox"));
+    });
+
+    it("gives a canvas that already has a folder a new id", async () => {
+      mockFolders({});
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ workflowId: "wf_canvas", saveDirectoryPath: "/projects/Old" })));
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+    });
+
+    it("asks before saving over a different workflow, and replaces it when told to", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_someone_else", name: "Their Fox" } });
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      expect(await screen.findByText("Folder already has a workflow")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("“Their Fox” is saved in /projects/Fox");
+      expect(onSave).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText("Replace"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+    });
+
+    it("saves as '<name> 2' in a folder of its own, leaving the other workflow alone", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_someone_else", name: "Their Fox" } });
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+      fireEvent.click(await screen.findByText("Save as “Fox 2”"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox 2", "/projects/Fox 2"));
+      expect(screen.getByPlaceholderText("my-project")).toHaveValue("Fox 2");
+    });
+
+    it("saves over its own workflow without asking", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_mine", name: "Fox" } });
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowId: "wf_mine", workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="settings" />);
+
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("wf_mine", "Fox", "/projects/Fox"));
+      expect(screen.queryByText("Folder already has a workflow")).toBeNull();
+    });
+
+    it("says where generations go without a project, once the library has answered", () => {
+      mockLibraryStatus.mockReturnValue({ available: true, root: "/Users/me/Pictures/Node Banana" });
+      const { unmount } = render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="new" />);
+      expect(screen.getByText("Generations are saved to /Users/me/Pictures/Node Banana even without a project.")).toBeInTheDocument();
+      unmount();
+
+      mockLibraryStatus.mockReturnValue({ available: false, root: null });
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="new" />);
+      expect(screen.queryByText(/Generations are saved to/)).toBeNull();
+      mockLibraryStatus.mockReturnValue(null);
     });
   });
 

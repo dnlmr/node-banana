@@ -32,7 +32,8 @@ import {
   DialogTextButton,
   splitPanelClass,
 } from "@/components/ui/Dialog";
-import { Field, Segmented, Select, Slider, Switch, TextInput, labelClass, type SegmentedOption } from "@/components/ui/Controls";
+import { Field, Segmented, Select, Slider, Switch, TextInput, helpClass, labelClass, type SegmentedOption } from "@/components/ui/Controls";
+import { getRecorderLibraryStatus } from "@/lib/assets/client/recorder";
 import { APP_VERSION } from "@/lib/appVersion";
 import { cn } from "@/components/nodes/ui/cn";
 import { ComfyMark } from "@/components/icons/ComfyMark";
@@ -179,6 +180,7 @@ export function ProjectSetupModal({
   };
 
   const {
+    workflowId,
     workflowName,
     saveDirectoryPath,
     useExternalImageStorage,
@@ -207,6 +209,8 @@ export function ProjectSetupModal({
   const [isValidating, setIsValidating] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The chosen folder already holds a different workflow: replace it, or save beside it
+  const [folderConflict, setFolderConflict] = useState<{ path: string; existingName: string | null } | null>(null);
 
   // Provider tab state
   const [localProviders, setLocalProviders] = useState<ProviderSettings>(providerSettings);
@@ -285,6 +289,7 @@ export function ProjectSetupModal({
         comfy: !!providerSettings.providers.comfy?.apiKey,
       });
       setError(null);
+      setFolderConflict(null);
 
       // Load node defaults
       setLocalNodeDefaults(loadNodeDefaults());
@@ -336,8 +341,31 @@ export function ProjectSetupModal({
     }
   };
 
-  const handleSaveProject = async () => {
-    if (!name.trim()) {
+  /** The Node Banana workflow a folder already holds, if any. */
+  const findWorkflowInFolder = async (folder: string): Promise<{ id: string | null; name: string | null } | null> => {
+    try {
+      const response = await fetch(`/api/workflow?path=${encodeURIComponent(folder)}&load=true`);
+      const result = await response.json();
+      if (!result?.success || !result.workflow) return null;
+      const { id, name: existingName } = result.workflow as { id?: unknown; name?: unknown };
+      return {
+        id: typeof id === "string" ? id : null,
+        name: typeof existingName === "string" && existingName ? existingName : null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  /** "Fox" → "Fox 2", "Fox 2" → "Fox 3". */
+  const nextProjectName = (projectName: string): string => {
+    const trimmed = projectName.trim();
+    const numbered = trimmed.match(/^(.*\S)\s+(\d+)$/);
+    return numbered ? `${numbered[1]} ${Number(numbered[2]) + 1}` : `${trimmed} 2`;
+  };
+
+  const saveProject = async (projectName: string, replaceExisting: boolean) => {
+    if (!projectName.trim()) {
       setError("Project name is required");
       return;
     }
@@ -347,7 +375,7 @@ export function ProjectSetupModal({
       return;
     }
 
-    const fullProjectPath = ensureProjectSubfolderPath(directoryPath, name);
+    const fullProjectPath = ensureProjectSubfolderPath(directoryPath, projectName);
 
     if (!(fullProjectPath.startsWith("/") || /^[A-Za-z]:[\\\/]/.test(fullProjectPath) || fullProjectPath.startsWith("\\\\"))) {
       setError("Project directory must be an absolute path (starting with /, a drive letter, or a UNC path)");
@@ -356,6 +384,7 @@ export function ProjectSetupModal({
 
     setIsValidating(true);
     setError(null);
+    setFolderConflict(null);
 
     try {
       // Validate path shape when it already exists
@@ -370,12 +399,28 @@ export function ProjectSetupModal({
         return;
       }
 
-      const id = mode === "new" ? generateWorkflowId() : useWorkflowStore.getState().workflowId || generateWorkflowId();
+      // A canvas that has never had a folder keeps its id when it becomes a
+      // project, so what it already generated belongs to the project too. One
+      // that already has a folder becomes a new workflow.
+      const id = mode === "new"
+        ? (saveDirectoryPath ? generateWorkflowId() : workflowId || generateWorkflowId())
+        : useWorkflowStore.getState().workflowId || generateWorkflowId();
+
+      // Saving over another workflow's folder would overwrite it; ask first
+      if (result.exists && !replaceExisting) {
+        const existing = await findWorkflowInFolder(fullProjectPath);
+        if (existing && existing.id !== id) {
+          setFolderConflict({ path: fullProjectPath, existingName: existing.name });
+          setIsValidating(false);
+          return;
+        }
+      }
+
       // Update external storage setting
       setUseExternalImageStorage(externalStorage);
       // Remember the base directory for next time
       setLastProjectBaseDir(directoryPath);
-      onSave(id, name.trim(), fullProjectPath);
+      onSave(id, projectName.trim(), fullProjectPath);
       setIsValidating(false);
     } catch (err) {
       setError(
@@ -383,6 +428,15 @@ export function ProjectSetupModal({
       );
       setIsValidating(false);
     }
+  };
+
+  const handleSaveProject = () => saveProject(name, false);
+
+  /** Keep the other workflow, and save this one as "<name> 2" in a folder of its own. */
+  const handleSaveBeside = () => {
+    const next = nextProjectName(name);
+    setName(next);
+    saveProject(next, false);
   };
 
   const handleSaveProviders = () => {
@@ -482,6 +536,9 @@ export function ProjectSetupModal({
   if (!isOpen) return null;
 
   const page = SETTINGS_PAGES.find((p) => p.id === activeTab) ?? SETTINGS_PAGES[0];
+  // Where generations go without a project, once the asset library has said
+  const libraryStatus = getRecorderLibraryStatus();
+  const libraryRoot = libraryStatus?.available ? libraryStatus.root : null;
   const llmProvider = localNodeDefaults.llm?.provider || "google";
   const llmTemperature = localNodeDefaults.llm?.temperature ?? 0.7;
   const llmMaxTokens = localNodeDefaults.llm?.maxTokens ?? 8192;
@@ -556,6 +613,9 @@ export function ProjectSetupModal({
                   {isBrowsing ? "..." : "Browse"}
                 </DialogButton>
               </div>
+              {libraryRoot && (
+                <p className={helpClass}>Generations are saved to {libraryRoot} even without a project.</p>
+              )}
             </Field>
 
             <DialogRow
@@ -571,6 +631,24 @@ export function ProjectSetupModal({
             </DialogRow>
 
             {error && <DialogStatus tone="error">{error}</DialogStatus>}
+
+            {folderConflict && folderConflict.path === ensureProjectSubfolderPath(directoryPath, name) && (
+              <div role="alert" className="flex flex-col gap-2.5">
+                <DialogStatus tone="neutral">Folder already has a workflow</DialogStatus>
+                <p className="text-xs leading-4 text-neutral-400">
+                  {folderConflict.existingName ? `“${folderConflict.existingName}”` : "Another workflow"} is saved in{" "}
+                  {folderConflict.path}. Replace it with this one, or keep it and save this workflow in a new folder.
+                </p>
+                <div className="flex gap-2">
+                  <DialogButton variant="outline" size="md" onClick={() => saveProject(name, true)} disabled={isValidating}>
+                    Replace
+                  </DialogButton>
+                  <DialogButton variant="outline" size="md" onClick={handleSaveBeside} disabled={isValidating}>
+                    Save as “{nextProjectName(name)}”
+                  </DialogButton>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
