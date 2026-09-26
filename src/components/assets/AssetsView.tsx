@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/shallow";
 import { clearGenerationToasts } from "@/components/GenerationToast";
+import { libraryOffForGood } from "@/lib/assets/client/libraryStatus";
 import { onPosterReady } from "@/lib/assets/client/poster";
 import { onAssetRecorded, onLibraryStatus } from "@/lib/assets/client/recorder";
 import { sameQuery } from "@/lib/assets/query";
@@ -24,6 +25,8 @@ import type { GridDirection } from "./masonryLayout";
 const RAIL_WIDTH = 232;
 const PANEL_WIDTH = 340;
 const FACETS_AFTER_RECORDING_MS = 1500;
+/** Coming back to the page asks again about a library that is off for good, at most this often (as the recorder does). */
+const RETURN_RECHECK_MS = 30_000;
 
 const ARROWS: Record<string, GridDirection> = {
   ArrowLeft: "left",
@@ -184,8 +187,9 @@ function Popovers() {
  * The Assets view: every asset the library holds, as a masonry of day
  * sections with a filter rail, a detail view, bulk actions and tags. It is
  * a layer over the canvas inside the canvas frame; the canvas stays mounted
- * (inert) underneath. While open it polls for new arrivals, listens to the
- * recorder, and owns the keyboard (see handleAssetsKey).
+ * (inert) underneath. While open it polls for new arrivals and the library
+ * status (unless the library is off for good), listens to the recorder, and
+ * owns the keyboard (see handleAssetsKey).
  */
 export function AssetsView() {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -204,6 +208,7 @@ export function AssetsView() {
     // may be from before a move or a job ended: a switch meanwhile reloads the list, a running job is followed,
     // one that ended since the list loaded reloads it
     void store.refreshLibrary();
+    let libraryAskedAt = Date.now();
     clearGenerationToasts();
     // A detail left open takes focus itself
     if (!store.detailId) rootRef.current?.focus({ preventScroll: true });
@@ -227,16 +232,24 @@ export function AssetsView() {
       if (state.openModalCount < previous.openModalCount) void useAssetStore.getState().refreshLibrary();
     });
     const pollNow = () => {
+      libraryAskedAt = Date.now();
       const current = useAssetStore.getState();
       void current.pollArrivals();
       void current.refreshLibrary();
     };
-    // Nothing is asked while the page is hidden (a background tab, a minimised window); coming back asks at once
+    // A hosted server, or the request guard refusing this page, answers the same until the page reloads,
+    // and each ask adds a refusal to the server's log
+    const offForGood = () => libraryOffForGood(useAssetStore.getState().library);
+    // Nothing is asked while the page is hidden (a background tab, a minimised window), nor every 5 s of a
+    // library off for good; coming back asks at once, or at most every 30 s when it is off for good (the
+    // recorder asks on focus as well, as often, and a different answer reaches the view from it)
     const poll = setInterval(() => {
-      if (document.visibilityState !== "hidden") pollNow();
+      if (document.visibilityState !== "hidden" && !offForGood()) pollNow();
     }, ARRIVALS_POLL_MS);
     const onVisibility = () => {
-      if (document.visibilityState === "visible") pollNow();
+      if (document.visibilityState !== "visible") return;
+      if (offForGood() && Date.now() - libraryAskedAt < RETURN_RECHECK_MS) return;
+      pollNow();
     };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("keydown", handleAssetsKey, { capture: true });

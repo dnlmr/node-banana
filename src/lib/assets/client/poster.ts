@@ -126,7 +126,14 @@ export function capturePoster(assetId: string, mime?: string): Promise<boolean> 
 }
 
 const posterReady = createEmitter<string>();
-const inFlight = new Map<string, Promise<boolean>>();
+
+/** Whether a capture is waiting out the delay before another try, and who wants to hear when it starts one. */
+interface RetryWait {
+  waiting: boolean;
+  listeners: Set<() => void>;
+}
+
+const inFlight = new Map<string, { run: Promise<boolean>; retry: RetryWait }>();
 /** Videos whose poster this session stored, and ones it gave up on. */
 const stored = new Set<string>();
 const gaveUp = new Set<string>();
@@ -134,6 +141,41 @@ const gaveUp = new Set<string>();
 /** Fires with the asset id once a poster was stored, so tiles can load their thumbnail again. */
 export function onPosterReady(listener: (assetId: string) => void): () => void {
   return posterReady.on(listener);
+}
+
+export interface EnsurePosterOptions {
+  /**
+   * Called each time a failed capture starts waiting to try again, and at
+   * once when the capture asked for is waiting already. Nothing is drawn or
+   * uploaded during such a wait (up to 30 s), so a caller that lets only a
+   * few captures run at a time can give this one's turn to another video.
+   */
+  onRetryWait?: () => void;
+}
+
+async function captureWithRetries(asset: Pick<AssetView, "id" | "mime">, retry: RetryWait): Promise<boolean> {
+  for (let attempt = 1; ; attempt += 1) {
+    const outcome = await enqueue(asset.id, asset.mime);
+    if (outcome === "stored") {
+      stored.add(asset.id);
+      posterReady.emit(asset.id);
+      return true;
+    }
+    if (outcome === "unsupported" || attempt >= MAX_ATTEMPTS) {
+      gaveUp.add(asset.id);
+      return false;
+    }
+    retry.waiting = true;
+    for (const listener of retry.listeners) {
+      try {
+        listener();
+      } catch {
+        // A listener's trouble is its own; the capture carries on.
+      }
+    }
+    await delay(RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]);
+    retry.waiting = false;
+  }
 }
 
 /**
@@ -144,28 +186,24 @@ export function onPosterReady(listener: (assetId: string) => void): () => void {
  * Resolves true once this session has stored a poster for it (now or
  * earlier, so a tile holding an old view can load its thumbnail again).
  */
-export function ensurePoster(asset: Pick<AssetView, "id" | "kind" | "mime" | "hasPoster">): Promise<boolean> {
+export function ensurePoster(
+  asset: Pick<AssetView, "id" | "kind" | "mime" | "hasPoster">,
+  { onRetryWait }: EnsurePosterOptions = {},
+): Promise<boolean> {
   if (asset.kind !== "video" || asset.hasPoster || gaveUp.has(asset.id)) return Promise.resolve(false);
   if (stored.has(asset.id)) return Promise.resolve(true);
   const running = inFlight.get(asset.id);
-  if (running) return running;
-  const run = (async () => {
-    for (let attempt = 1; ; attempt += 1) {
-      const outcome = await enqueue(asset.id, asset.mime);
-      if (outcome === "stored") {
-        stored.add(asset.id);
-        posterReady.emit(asset.id);
-        return true;
-      }
-      if (outcome === "unsupported" || attempt >= MAX_ATTEMPTS) {
-        gaveUp.add(asset.id);
-        return false;
-      }
-      await delay(RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]);
+  if (running) {
+    if (onRetryWait) {
+      running.retry.listeners.add(onRetryWait);
+      if (running.retry.waiting) onRetryWait();
     }
-  })().finally(() => {
+    return running.run;
+  }
+  const retry: RetryWait = { waiting: false, listeners: new Set(onRetryWait ? [onRetryWait] : []) };
+  const run = captureWithRetries(asset, retry).finally(() => {
     inFlight.delete(asset.id);
   });
-  inFlight.set(asset.id, run);
+  inFlight.set(asset.id, { run, retry });
   return run;
 }

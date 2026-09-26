@@ -853,6 +853,37 @@ describe("runs and snapshots", () => {
     expect(server.runs.map((run) => run.body.phase)).toEqual(["start", "final"]);
   });
 
+  it("keeps a held run open for a recording made after it ended, which then gets the run's snapshots", async () => {
+    const server = fakeLibrary();
+    recorder.beginRun(RUN, graph());
+    const release = recorder.holdRun(RUN.runId);
+    recorder.endRun(RUN.runId, graph([{ id: "n", type: "videoTrim", data: {} }]));
+    await settleAll();
+    expect(server.runs).toHaveLength(0);
+
+    // Recorded, then let go (twice: the second does nothing) before it lands
+    const handle = recorder.recordAsset(input(dataUrlOf("A")), RUN);
+    release();
+    release();
+    const result = await handle.done;
+    await settleAll();
+    expect(result?.asset.runId).toBe(RUN.runId);
+    expect(server.runs.map((run) => `${run.runId}:${run.body.phase}`)).toEqual([`${RUN.runId}:start`, `${RUN.runId}:final`]);
+  });
+
+  it("finishes a held run that recorded nothing once let go, and holds nothing for a run it does not know", async () => {
+    const server = fakeLibrary();
+    recorder.beginRun(RUN, graph());
+    const release = recorder.holdRun(RUN.runId);
+    recorder.endRun(RUN.runId, graph());
+    release();
+    // Finished: a recording now names a run that has no snapshot
+    await recorder.recordAsset(input(dataUrlOf("A")), RUN).done;
+    await settleAll();
+    expect(server.runs).toHaveLength(0);
+    expect(() => recorder.holdRun("r-unknown")()).not.toThrow();
+  });
+
   it("forgets a run whose recordings all failed", async () => {
     const server = fakeLibrary({
       route: (call) => (call.url === "/api/assets" ? jsonResponse({ error: "Refused" }, { status: 400 }) : undefined),

@@ -50,6 +50,30 @@ describe("poster requests", () => {
     expect(handed()).toContain(`v${MAX_ACTIVE_POSTERS}`);
   });
 
+  it("gives a turn up while its capture waits to try again, once", async () => {
+    const retryWait = new Map<string, () => void>();
+    poster.ensurePoster.mockImplementation((asset: { id: string }, options?: { onRetryWait?: () => void }) => {
+      if (options?.onRetryWait) retryWait.set(asset.id, options.onRetryWait);
+      return new Promise<boolean>((resolve) => poster.finish.set(asset.id, resolve));
+    });
+    for (let i = 0; i < 10; i++) requestPoster(video(`v${i}`));
+    expect(handed()).toHaveLength(MAX_ACTIVE_POSTERS);
+
+    // v0 could not be decoded and waits 5 s before trying again: the next tile goes meanwhile
+    retryWait.get("v0")?.();
+    expect(handed()).toHaveLength(MAX_ACTIVE_POSTERS + 1);
+    expect(handed()[MAX_ACTIVE_POSTERS]).toBe(`v${MAX_ACTIVE_POSTERS}`);
+
+    // Its next wait, and its end, give up nothing more
+    retryWait.get("v0")?.();
+    await settle("v0");
+    expect(handed()).toHaveLength(MAX_ACTIVE_POSTERS + 1);
+
+    // A capture that ends hands its turn on as before
+    await settle("v1");
+    expect(handed()).toHaveLength(MAX_ACTIVE_POSTERS + 2);
+  });
+
   it("asks once per video, and withdrawing one already handed on changes nothing", async () => {
     const leave = requestPoster(video("v0"));
     requestPoster(video("v0"));

@@ -14,7 +14,7 @@ import type {
   RecordAssetResult,
   RecordedAssetHandle,
 } from "@/lib/assets/types";
-import type { RecordingHandle } from "@/lib/assets/client/recorder";
+import { holdRun, type RecordingHandle } from "@/lib/assets/client/recorder";
 import type { SelectedModel, WorkflowNodeData } from "@/types";
 import type { NodeExecutionContext } from "./types";
 
@@ -32,6 +32,22 @@ export function recordOutput(ctx: NodeExecutionContext, input: RecordAssetInput)
   } catch (error) {
     console.error("Failed to record asset:", error);
     return null;
+  }
+}
+
+/**
+ * Keep the node's run open for an output it may record after the run ends,
+ * until the returned release is called: recorded under a run that already
+ * finished, an asset has no workflow snapshot to open. Nothing to hold
+ * while the library is not recording the run.
+ */
+export function holdRecordingRun(ctx: NodeExecutionContext): () => void {
+  if (!ctx.recordAsset || !ctx.assetRun) return () => {};
+  try {
+    return holdRun(ctx.assetRun.runId);
+  } catch (error) {
+    console.error("Failed to hold the run for a recording:", error);
+    return () => {};
   }
 }
 

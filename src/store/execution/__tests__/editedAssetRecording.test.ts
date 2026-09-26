@@ -6,7 +6,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NodeExecutionContext } from "../types";
 import type { WorkflowNode, WorkflowNodeData, WorkflowEdge } from "@/types";
-import type { RecordAssetInput, RecordAssetResult, RecordedAssetHandle } from "@/lib/assets/types";
+import type { AssetRunContext, RecordAssetInput, RecordAssetResult, RecordedAssetHandle } from "@/lib/assets/types";
+import { beginRun, endRun, recordAsset as recordInLibrary } from "@/lib/assets/client/recorder";
+import type { CapturedGraph } from "@/lib/assets/client/snapshot";
+import { assetView, jsonResponse, recordResult } from "@/lib/assets/client/__tests__/helpers";
 import { executeRemoveBackground } from "../removeBackgroundExecutor";
 import { executeImageResize, executeGifEncoder } from "../imageProcessingExecutors";
 import { executeVideoStitch, executeVideoTrim, executeEaseCurve, executeVideoFrameGrab } from "../videoProcessingExecutors";
@@ -418,6 +421,58 @@ describe("a re-run of a video edit", () => {
     await executeVideoTrim(ctx);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(recordAsset).toHaveBeenCalledTimes(2);
+  });
+
+  it("recorded late, once the upload it waited on failed, keeps its run's workflow snapshot", async () => {
+    // The failed upload is reported
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    (URL.createObjectURL as unknown as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce("blob:http://localhost/late-1")
+      .mockReturnValueOnce("blob:http://localhost/late-2");
+    const { ctx } = makeCtx(trimNode("vt-late"), { videos: ["data:video/mp4;base64,a"] });
+    const run = (runId: string): AssetRunContext => ({ runId, workflowId: "wf_late", workflowName: "Late", projectDir: null, startedAt: 1 });
+    const graph: CapturedGraph = { nodes: [], edges: [], edgeStyle: "curved", workflowId: "wf_late", workflowName: "Late" };
+    /** Runs one execution the way the store does: its own asset run, closed once the node returns. */
+    const execute = async (assetRun: AssetRunContext, output: Blob) => {
+      ctx.assetRun = assetRun;
+      ctx.recordAsset = (input) => recordInLibrary(input, assetRun);
+      beginRun(assetRun, graph);
+      mocks.trimVideoAsync.mockResolvedValueOnce(output);
+      await executeVideoTrim(ctx);
+      endRun(assetRun.runId, graph);
+    };
+
+    // The library, with the first upload stalled until it fails
+    let failFirst!: () => void;
+    let records = 0;
+    const snapshots: string[] = [];
+    mockFetch.mockImplementation(async (url: string, init: RequestInit = {}) => {
+      if (url === "/api/assets" && init.method === "POST") {
+        const { meta } = JSON.parse(String(init.body)) as { meta: { id: string; runId: string } };
+        if (++records === 1) {
+          return new Promise((resolve) => (failFirst = () => resolve(jsonResponse({ error: "The upload stalled." }, { status: 400 }))));
+        }
+        return jsonResponse({ result: recordResult(assetView({ id: meta.id, kind: "video", mime: "video/mp4", runId: meta.runId })) });
+      }
+      const snapshot = /^\/api\/assets\/runs\/([^/]+)$/.exec(url);
+      if (snapshot) {
+        snapshots.push(`${snapshot[1]}:${(JSON.parse(String(init.body)) as { phase: string }).phase}`);
+        return jsonResponse({ missingMedia: [] });
+      }
+      if (url.startsWith("/api/assets/workflows/")) return jsonResponse({ id: "wf_late", createdAt: 1, updatedAt: 1 });
+      return { blob: async () => new Blob(["v"], { type: "video/mp4" }) };
+    });
+
+    await execute(run("r-late-first"), encoded(BIG, 5, 1));
+    // Run again while that upload is under way: the same video, so it waits on it
+    await execute(run("r-late-again"), encoded(BIG, 5, 2));
+    expect(records).toBe(1);
+
+    // The first upload fails: the second run's copy is recorded, under a run still open
+    failFirst();
+    await vi.waitFor(() => expect(snapshots).toEqual(["r-late-again:start", "r-late-again:final"]));
+    expect(records).toBe(2);
+    errors.mockRestore();
   });
 
   it("is recorded again after a recording that failed", async () => {

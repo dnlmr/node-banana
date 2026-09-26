@@ -367,7 +367,11 @@ describe("AssetsView", () => {
   it("has a poster made for a video tile without one, and shows its thumbnail once stored", async () => {
     await renderView([asset("vid1", { kind: "video", mime: "video/mp4", ext: "mp4" }), asset("a1")]);
     expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
-    expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid1", kind: "video" }));
+    expect(poster.ensurePoster).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "vid1", kind: "video" }),
+      // Its turn goes to another tile while a failed capture waits to try again
+      { onRetryWait: expect.any(Function) },
+    );
     // Asked before the poster existed: the server had nothing (204)
     fireEvent.error(tile("vid1").querySelector("img")!);
     expect(tile("vid1").querySelector("img")).toBeNull();
@@ -389,7 +393,7 @@ describe("AssetsView", () => {
     const grid = screen.getByTestId("asset-grid");
     grid.scrollTop = 600;
     fireEvent.scroll(grid);
-    await waitFor(() => expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid9" })));
+    await waitFor(() => expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid9" }), expect.anything()));
   });
 
   it("prepends a recorded asset that matches while scrolled to the top", async () => {
@@ -636,6 +640,49 @@ describe("AssetsView", () => {
         intervals.mockRestore();
       }
     });
+
+    it.each(["hosted", "guard"] as const)(
+      "asks nothing every 5 s of a library off for good (%s), and on coming back at most every 30 s",
+      async (reasonCode) => {
+        api.fetchLibraryStatus.mockResolvedValue(library({ available: false, reason: "Not on this server.", reasonCode }));
+        const intervals = vi.spyOn(globalThis, "setInterval");
+        let clock: ReturnType<typeof vi.spyOn> | null = null;
+        try {
+          await renderView();
+          const tick = intervals.mock.calls.find(([, ms]) => ms === ARRIVALS_POLL_MS)![0] as () => void;
+          await waitFor(() => expect(useAssetStore.getState().library?.reasonCode).toBe(reasonCode));
+          api.fetchLibraryStatus.mockClear();
+          api.fetchAssetPage.mockClear();
+          const start = Date.now();
+          clock = vi.spyOn(Date, "now").mockReturnValue(start);
+
+          act(() => tick());
+          act(() => tick());
+          expect(api.fetchLibraryStatus).not.toHaveBeenCalled();
+          expect(api.fetchAssetPage).not.toHaveBeenCalled();
+
+          // Back within 30 s of the last ask: nothing
+          visibility = "hidden";
+          visibility = "visible";
+          act(() => {
+            document.dispatchEvent(new Event("visibilitychange"));
+          });
+          expect(api.fetchLibraryStatus).not.toHaveBeenCalled();
+
+          // Later: asked once, and the 5 s poll still asks nothing
+          clock.mockReturnValue(start + 30_000);
+          act(() => {
+            document.dispatchEvent(new Event("visibilitychange"));
+          });
+          expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(1);
+          act(() => tick());
+          expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(1);
+        } finally {
+          clock?.mockRestore();
+          intervals.mockRestore();
+        }
+      },
+    );
   });
 
   it("goes back to the canvas when a workflow opens or the tab changes, however that was asked for", async () => {
