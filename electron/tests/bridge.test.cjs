@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { LIBRARY_PICKER_TITLE, browseDirectoryTitle, createBridgeClient } = require('../lib/bridge.cjs');
+const { EXPORT_PICKER_TITLE, LIBRARY_PICKER_TITLE, browseDirectoryTitle, createBridgeClient } = require('../lib/bridge.cjs');
 const { DEFAULT_PICKER_TITLE, createServerMessageHandler } = require('../lib/bridge-main.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -91,6 +91,9 @@ test('the browse-directory picker keeps its reply shape and is cancelled by a cl
   assert.deepEqual(posted, [{ type: 'choose-directory', id: 1, title: LIBRARY_PICKER_TITLE }, { type: 'choose-directory', id: 2 }]);
   assert.equal(LIBRARY_PICKER_TITLE, 'Choose where Node Banana saves your media');
   assert.equal(browseDirectoryTitle(new URLSearchParams('')), undefined);
+  // Export and "Save a copy…" ask for a destination, not a workflow folder.
+  assert.equal(EXPORT_PICKER_TITLE, 'Choose a folder to export to');
+  assert.equal(browseDirectoryTitle(new URLSearchParams('purpose=export')), EXPORT_PICKER_TITLE);
   // The user may browse for as long as the request stays open.
   await delay(20);
   bridge.receive({ id: 1, result: { success: true, cancelled: false, path: '/library' } });

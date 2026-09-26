@@ -37,13 +37,20 @@ export function normalizeSelectedPath(selectedPath: string, platform: string): s
 
 /**
  * The picker's title for what the folder is for: `?purpose=library` is the
- * asset library's "Change…". Only these fixed strings are ever used, since
- * the title is spliced into the shell commands below.
+ * asset library's "Change…", `?purpose=export` the destination of Export and
+ * "Save a copy…". Only these fixed strings are ever used, since the title is
+ * spliced into the shell commands below. The desktop app's copy is
+ * browseDirectoryTitle in electron/lib/bridge.cjs.
  */
 const PICKER_TITLES = {
   default: "Select a folder to save workflows",
   library: "Choose where Node Banana saves your media",
+  export: "Choose a folder to export to",
 } as const;
+
+function pickerTitle(purpose: string | null): string {
+  return purpose === "library" || purpose === "export" ? PICKER_TITLES[purpose] : PICKER_TITLES.default;
+}
 
 // GET: Open native directory picker and return the selected path. Only Node
 // Banana's own page may pop a dialog on this computer (see guard.ts).
@@ -51,8 +58,7 @@ export async function GET(request: Request) {
   const refused = guardAssetRequest(request);
   if (refused) return refused;
   const platform = process.platform;
-  const purpose = new URL(request.url).searchParams.get("purpose");
-  const title = purpose === "library" ? PICKER_TITLES.library : PICKER_TITLES.default;
+  const title = pickerTitle(new URL(request.url).searchParams.get("purpose"));
 
   try {
     let selectedPath: string | null = null;
