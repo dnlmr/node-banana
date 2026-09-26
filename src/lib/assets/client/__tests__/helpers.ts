@@ -65,7 +65,7 @@ export function stubFetch(handler: (call: FetchCall) => Response | Promise<Respo
  * `blobs` answers blob: fetches (delete an entry to "revoke" it), `media` is
  * the server's media store. `route` can answer any call first.
  */
-export function fakeMediaServer(route?: (call: FetchCall) => Response | Promise<Response> | undefined) {
+export function fakeMediaServer(route?: (call: FetchCall) => Response | undefined | Promise<Response | undefined>) {
   const blobs = new Map<string, Blob>();
   const media = new Map<string, Blob>();
   const answer = async (call: FetchCall): Promise<Response> => {

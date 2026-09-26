@@ -31,7 +31,7 @@ function playableVideo(size: { width: number; height: number; duration: number }
   override(video, "videoHeight", { get: () => size.height });
   override(media, "duration", { get: () => size.duration });
   override(media, "src", {
-    get() {
+    get(this: HTMLMediaElement) {
       return this.getAttribute("src") ?? "";
     },
     set(this: HTMLMediaElement, value: string) {

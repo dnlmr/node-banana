@@ -86,7 +86,9 @@ async function resultFor(meta: RecordAssetMeta, bytes: Uint8Array): Promise<Reco
 }
 
 /** The record, upload, run and workflow routes, in memory. `route` answers first. */
-function fakeLibrary(options: { status?: LibraryStatus; route?: (call: FetchCall) => Response | Promise<Response> | undefined } = {}) {
+function fakeLibrary(
+  options: { status?: LibraryStatus; route?: (call: FetchCall) => Response | undefined | Promise<Response | undefined> } = {},
+) {
   const tickets = new Map<string, RecordAssetMeta>();
   const records: RecordAssetRequest[] = [];
   const uploads: { meta: RecordAssetMeta; blob: Blob }[] = [];

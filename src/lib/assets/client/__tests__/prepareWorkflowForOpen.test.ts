@@ -113,9 +113,9 @@ describe("prepareWorkflowForOpen", () => {
   });
 
   it.each([
-    ["imageHistory", "selectedHistoryIndex", "nanoBanana", "outputImage"],
-    ["videoHistory", "selectedVideoHistoryIndex", "generateVideo", "outputVideo"],
-    ["audioHistory", "selectedAudioHistoryIndex", "generateAudio", "outputAudio"],
+    ["imageHistory", "selectedHistoryIndex", "nanoBanana"],
+    ["videoHistory", "selectedVideoHistoryIndex", "generateVideo"],
+    ["audioHistory", "selectedAudioHistoryIndex", "generateAudio"],
   ] as const)("selects the %s entry recorded as this asset", (history, index, type) => {
     const entries = [{ id: "3", assetId: "a-other" }, { id: "2", assetId: "a-asset" }, { id: "1" }];
     const prepared = prepareWorkflowForOpen(file([node("n1", type, { [history]: entries, [index]: 0 })]), {
