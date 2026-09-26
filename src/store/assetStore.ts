@@ -9,10 +9,12 @@ import type {
   AssetKind,
   AssetOrigin,
   AssetQuery,
+  AssetScope,
   AssetSelection,
   AssetSort,
   AssetView,
   LibraryJobStatus,
+  LibraryJobType,
   LibraryStatus,
 } from "@/lib/assets/types";
 
@@ -97,7 +99,11 @@ interface PageSlot {
 interface UndoEntry {
   label: string;
   steps: AssetBulkRequest[];
-  /** Records the action took off the grid; Undo puts back the ones that still match. */
+  /** The list the action was taken on: Undo patches it in place only while it is still the one shown. */
+  query: AssetQuery | null;
+  /** The action reached past the loaded pages (select all matching): Undo reloads the list. */
+  wide: boolean;
+  /** Records the action took off the grid, as they were; Undo puts them back into that list. */
   removed: AssetView[];
   /** Tags and favorite as they were, for records the action changed. */
   before: Record<string, Pick<AssetView, "tags" | "favorite">>;
@@ -163,6 +169,8 @@ interface AssetStoreState {
   loadingMore: boolean;
   /** The query the loaded items answer. */
   loadedQuery: AssetQuery | null;
+  /** The library folder the loaded items came from (null before the library was known). */
+  loadedRoot: string | null;
 
   /** Arrived while the grid was scrolled down; shown by the "N new" pill. */
   arrivals: AssetView[];
@@ -209,12 +217,18 @@ interface AssetStoreState {
   ensurePage: (page: number) => Promise<void>;
   trimLoaded: (visibleFrom: number, visibleTo: number) => void;
   pollArrivals: () => Promise<void>;
-  receiveArrivals: (assets: AssetView[]) => void;
+  /** New assets for the top of the list. `matched`: the server already matched them against the loaded query. */
+  receiveArrivals: (assets: AssetView[], options?: { matched?: boolean }) => void;
   showArrivals: () => void;
   setScroll: (scrollTop: number, atTop: boolean) => void;
 
+  /** A video's poster was stored: its tile loads the thumbnail again. */
+  markPosterReady: (id: string) => void;
+
   refreshFacets: () => Promise<void>;
+  /** Asks the server where the library is and what job it runs; follows a job, reloads after a switch. */
   refreshLibrary: () => Promise<void>;
+  /** A status learned elsewhere (the recorder, Settings): applied as refreshLibrary applies its answer. */
   setLibrary: (status: LibraryStatus | null) => void;
   trackJob: (job: LibraryJobStatus, doneMessage?: (job: LibraryJobStatus) => string) => void;
   cancelJob: () => Promise<void>;
@@ -293,31 +307,63 @@ export function hasActiveFilters(filters: AssetFilters): boolean {
   );
 }
 
-/** Client-side mirror of the server's filter semantics (AND across groups, OR within). */
-export function matchesAssetQuery(asset: AssetView, query: AssetQuery): boolean {
+/** The search box as lowercase terms, every one of which must match (the server's `searchTerms`). */
+function searchTerms(q: string | undefined): string[] {
+  return (q ?? "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 16);
+}
+
+/** A project folder as the server compares it: case-folded where the file system folds case. */
+function projectKey(projectPath: string, platform: string | undefined): string {
+  const trimmed = projectPath.length > 1 ? projectPath.replace(/[\\/]+$/, "") || projectPath : projectPath;
+  return platform === "darwin" || platform === "win32" ? trimmed.toLowerCase() : trimmed;
+}
+
+/**
+ * Client-side mirror of the server's filter semantics (compileQuery in
+ * server/search.ts): AND across groups, OR within; search terms split on
+ * whitespace and all required; tags and, on macOS and Windows, project
+ * folders compared without case. It decides where the server cannot:
+ * which recorder results join the list and which selected assets the
+ * filters hide. Records the server returned are never dropped by it.
+ */
+export function matchesAssetQuery(asset: AssetView, query: AssetQuery, platform?: string): boolean {
   const scope = query.scope ?? "library";
   if (scope === "trash" ? !asset.trashedAt : !!asset.trashedAt) return false;
   if (scope === "missing" && !asset.missing) return false;
   if (query.favorite !== undefined && asset.favorite !== query.favorite) return false;
   if (query.kinds?.length && !query.kinds.includes(asset.kind)) return false;
   if (query.origins?.length && !query.origins.includes(asset.origin)) return false;
-  if (query.tags?.length && !query.tags.some((tag) => asset.tags.includes(tag))) return false;
+  if (query.tags?.length) {
+    const wanted = new Set(query.tags.map((tag) => tag.toLowerCase()));
+    if (!asset.tags.some((tag) => wanted.has(tag.toLowerCase()))) return false;
+  }
   if (query.models?.length && !(asset.model && query.models.includes(asset.model.modelId))) return false;
   if (query.workflowIds?.length && !query.workflowIds.includes(asset.workflowId)) return false;
-  if (query.projects?.length && !query.projects.includes(asset.workflow?.projectPath ?? "")) return false;
+  if (query.projects?.length) {
+    const wanted = new Set(query.projects.map((project) => (project === "" ? "" : projectKey(project, platform))));
+    const own = asset.workflow?.projectPath;
+    if (!wanted.has(own ? projectKey(own, platform) : "")) return false;
+  }
   if (query.from !== undefined && asset.createdAt < query.from) return false;
   if (query.to !== undefined && asset.createdAt >= query.to) return false;
-  if (query.q) {
-    const needle = query.q.toLowerCase();
-    const haystack = [
-      asset.prompt,
+  const terms = searchTerms(query.q);
+  if (terms.length) {
+    const text = [
+      asset.prompt ?? "",
       asset.filename,
-      asset.model?.modelId,
-      asset.model?.displayName,
-      asset.workflow?.name ?? asset.workflowName,
-      ...asset.tags,
-    ];
-    if (!haystack.some((value) => value?.toLowerCase().includes(needle))) return false;
+      asset.model?.modelId ?? "",
+      asset.model?.displayName ?? "",
+      asset.workflowName ?? "",
+      asset.tags.join("\n"),
+    ]
+      .join("\n")
+      .toLowerCase();
+    const name = asset.workflow?.name?.toLowerCase() ?? "";
+    for (const term of terms) if (!text.includes(term) && !name.includes(term)) return false;
   }
   return true;
 }
@@ -330,6 +376,72 @@ export function compareAssets(a: Pick<AssetView, "createdAt" | "id">, b: Pick<As
 
 export function selectionHas(selection: AssetSelection, id: string): boolean {
   return selection.mode === "ids" ? selection.ids.includes(id) : !selection.excludeIds.includes(id);
+}
+
+/** The slice of the library a Library view lists. */
+export function viewScope(view: AssetLibraryView): AssetScope {
+  return view === "trash" ? "trash" : view === "missing" ? "missing" : "library";
+}
+
+/** Whether `op` suits an asset in that state: what each view's actions are for. */
+function opSuits(op: AssetBulkOp, trashed: boolean, missing: boolean): boolean {
+  switch (op.action) {
+    case "trash":
+      return !trashed;
+    case "restore":
+      return trashed;
+    // For good: from the Trash, or a record whose file is already gone
+    case "delete":
+      return trashed || missing;
+    default:
+      return true;
+  }
+}
+
+type ScopeState = Pick<AssetStoreState, "filters" | "items" | "selectedRecords" | "detailAsset" | "loadedQuery">;
+
+/**
+ * The part of a selection that belongs to the current view and that `op`
+ * may act on. A selection never carries over to another view (setFilters
+ * clears it), so this is the guard behind that: Delete permanently in the
+ * Trash never reaches a live asset. Null when nothing is left to act on.
+ */
+export function selectionInView(
+  state: ScopeState,
+  selection: AssetSelection,
+  op: AssetBulkOp,
+): { selection: AssetSelection; skipped: number } | null {
+  const scope = viewScope(state.filters.view);
+  if (selection.mode === "query") {
+    const fits = (selection.query.scope ?? "library") === scope && opSuits(op, scope === "trash", scope === "missing");
+    return fits ? { selection, skipped: 0 } : null;
+  }
+  const listed = new Map(state.items.map((item) => [item.id, item.asset]));
+  const listScope = state.loadedQuery ? state.loadedQuery.scope ?? "library" : null;
+  const ids = selection.ids.filter((id) => {
+    const record = listed.get(id) ?? state.selectedRecords[id] ?? (state.detailAsset?.id === id ? state.detailAsset : null);
+    if (record) return matchesAssetQuery(record, { scope }) && opSuits(op, !!record.trashedAt, !!record.missing);
+    // A slot whose page is not loaded: the list it sits in says what it is
+    return listed.has(id) && listScope === scope && opSuits(op, scope === "trash", scope === "missing");
+  });
+  if (ids.length === 0) return null;
+  return {
+    selection: ids.length === selection.ids.length ? selection : { mode: "ids", ids },
+    skipped: selection.ids.length - ids.length,
+  };
+}
+
+/** The spelling `tags` holds of `tag`: the server compares tags without case. */
+function findTag(tags: string[], tag: string): string | undefined {
+  const key = tag.toLowerCase();
+  return tags.find((own) => own.toLowerCase() === key);
+}
+
+/** `tags` with `added` appended, skipping any it already holds in another case (as the server does). */
+function withTags(tags: string[], added: string[]): string[] {
+  const next = [...tags];
+  for (const tag of added) if (!findTag(next, tag)) next.push(tag);
+  return next;
 }
 
 function gridItem(asset: AssetView, page: number): AssetGridItem {
@@ -345,6 +457,13 @@ function gridItem(asset: AssetView, page: number): AssetGridItem {
 }
 
 const EMPTY_SELECTION: AssetSelection = { mode: "ids", ids: [] };
+
+/** Said when a selection has nothing the current view's action may touch. */
+export const NOT_IN_VIEW: Record<AssetScope, string> = {
+  library: "Nothing selected can be changed that way from this view.",
+  trash: "None of the selected assets are in the Trash.",
+  missing: "None of the selected assets are missing their files.",
+};
 
 function loadTileSize(): AssetTileSize {
   try {
@@ -369,7 +488,40 @@ let refreshController: AbortController | null = null;
 let facetsTimer: ReturnType<typeof setTimeout> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let jobTimer: ReturnType<typeof setTimeout> | null = null;
+/** The job trackJob is following. */
+let trackedJobId: string | null = null;
+/** Finished jobs whose effect on the list has been taken care of. */
+const settledJobs = new Set<string>();
+/** When the request behind the loaded list went out: a job that finished later changed what it should show. */
+let listSince = 0;
+/** Jobs that change which assets exist, or where. */
+const LIST_JOBS: ReadonlySet<LibraryJobType> = new Set(["import", "cleanup", "move"]);
+
+function plural(count: number, word: string): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? word : `${word}s`}`;
+}
+
+/** What a finished job says when whoever started it gave no words of its own. */
+function jobDoneMessage(job: LibraryJobStatus): string {
+  switch (job.type) {
+    case "import":
+      return `Imported ${plural(job.done, "file")}`;
+    case "export":
+      return `Exported ${plural(job.done, "file")}`;
+    case "move":
+      return "Library moved";
+    case "cleanup":
+      return job.message ?? "Cleaned up";
+  }
+}
+
+/** The list (requestSeq) an arrivals poll is running for, or -1. */
+let pollingSeq = -1;
+/** Full arrival pages fetched in a row before the list is loaded again instead. */
+const MAX_ARRIVAL_PAGES = 25;
 let noticeSeq = 0;
+/** A dropped page's items that its cursor no longer brings back are fetched one by one up to this many; past it the list loads again. */
+const LEFT_OUT_MAX = 50;
 /** Failed page requests wait this long before the grid may ask again. */
 const LOAD_RETRY_MS = 5000;
 let lastLoadFailure = 0;
@@ -391,34 +543,68 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     }, FACETS_DEBOUNCE_MS);
   };
 
-  /** Selection and records follow a patched record. */
+  /**
+   * A library job as the status reports it. One running is followed (polled
+   * every second, whoever started it: Settings, another window); one that
+   * ended unwatched after the list was loaded reloads the list.
+   */
+  const adoptJob = (job: LibraryJobStatus | null) => {
+    if (job?.state === "running") {
+      if (trackedJobId !== job.id) get().trackJob(job);
+      return;
+    }
+    const current = get().job;
+    // A running snapshot nobody follows any more is over
+    if (current?.state === "running" && trackedJobId !== current.id) set({ job: job ?? null });
+    if (job && !settledJobs.has(job.id) && trackedJobId !== job.id) {
+      settledJobs.add(job.id);
+      if (LIST_JOBS.has(job.type) && (job.finishedAt ?? Date.now()) > listSince && get().status !== "idle") {
+        void get().refresh();
+        void get().refreshFacets();
+      }
+    }
+  };
+
+  /**
+   * A new library status. When the list came from another folder (a switch
+   * or move) or the library came or went, what is loaded belongs to another
+   * library: the selection and detail go and the list loads again. Jobs are
+   * followed while the view shows.
+   */
+  const applyLibrary = (next: LibraryStatus) => {
+    const previous = get().library;
+    // Asked every few seconds while the view shows: an unchanged answer changes nothing on screen
+    if (!previous || JSON.stringify(previous) !== JSON.stringify(next)) set({ library: next });
+    const { loadedRoot, status, appView } = get();
+    // A list loaded before any status came is taken to be from the first library reported
+    if (loadedRoot === null && previous === null && status !== "idle" && next.root) set({ loadedRoot: next.root });
+    const moved = loadedRoot !== null && next.root !== loadedRoot;
+    const cameOrWent = previous !== null && previous.available !== next.available;
+    if ((moved || cameOrWent) && status !== "idle") {
+      get().clearSelection();
+      get().closeDetail();
+      void get().refresh();
+      void get().refreshFacets();
+    }
+    if (appView === "assets") adoptJob(next.job);
+  };
+
+  /**
+   * Selection, grid and detail follow a patched record. A tile stays where
+   * it is even when it no longer answers the filters (unfavorited in
+   * Favorites, say): the server decides membership, at the next refresh.
+   */
   const replaceRecords = (updated: Map<string, AssetView>) => {
     if (updated.size === 0) return;
     set((state) => {
       const selectedRecords = { ...state.selectedRecords };
       for (const [id, asset] of updated) if (selectedRecords[id]) selectedRecords[id] = asset;
-      const query = state.loadedQuery;
-      // Records that no longer answer the query leave the grid (unfavorited in Favorites, say)
-      let removedAny = false;
-      const items: AssetGridItem[] = [];
-      for (const item of state.items) {
+      const items = state.items.map((item) => {
         const asset = updated.get(item.id);
-        if (!asset) {
-          items.push(item);
-        } else if (query && !matchesAssetQuery(asset, query)) {
-          removedAny = true;
-        } else {
-          items.push({ ...item, asset });
-        }
-      }
+        return asset ? { ...item, asset } : item;
+      });
       const detail = state.detailId ? updated.get(state.detailId) : undefined;
-      return {
-        items,
-        selectedRecords,
-        layoutVersion: removedAny ? state.layoutVersion + 1 : state.layoutVersion,
-        total: removedAny ? Math.max(0, state.total - (state.items.length - items.length)) : state.total,
-        detailAsset: detail ?? state.detailAsset,
-      };
+      return { items, selectedRecords, detailAsset: detail ?? state.detailAsset };
     });
   };
 
@@ -446,12 +632,11 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     });
   };
 
-  /** Put records back where they sort (Undo of Trash/Restore). */
+  /** Put records back where they sort (Undo of Trash/Restore, into the list they left). */
   const insertItems = (assets: AssetView[]) => {
     set((state) => {
-      const query = state.loadedQuery;
       const present = new Set(state.items.map((item) => item.id));
-      const incoming = assets.filter((asset) => !present.has(asset.id) && (!query || matchesAssetQuery(asset, query)));
+      const incoming = assets.filter((asset) => !present.has(asset.id));
       if (incoming.length === 0) return {};
       const sort = state.sort;
       const items = [...state.items];
@@ -481,23 +666,36 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     );
   };
 
-  /** What undoes `op` on `ids`, given each record as it was before. */
+  /**
+   * What undoes `op` on `ids`: only the assets it changed, each back to how
+   * it was. Favorite and tag ops need every id in `before` (runBulk checks).
+   */
   const inverseOf = (op: AssetBulkOp, ids: string[], before: Map<string, AssetView>): AssetBulkRequest[] => {
     const on = (list: string[], inverse: AssetBulkOp): AssetBulkRequest[] =>
       list.length ? [{ selection: { mode: "ids", ids: list }, op: inverse }] : [];
+    const was = (id: string) => before.get(id)!;
     switch (op.action) {
       case "trash":
         return on(ids, { action: "restore" });
       case "restore":
         return on(ids, { action: "trash" });
       case "favorite":
-        return on(ids.filter((id) => !before.get(id)?.favorite), { action: "unfavorite" });
+        return on(ids.filter((id) => !was(id).favorite), { action: "unfavorite" });
       case "unfavorite":
-        return on(ids.filter((id) => before.get(id)?.favorite ?? true), { action: "favorite" });
+        return on(ids.filter((id) => was(id).favorite), { action: "favorite" });
       case "tag":
-        return op.tags.flatMap((tag) => on(ids.filter((id) => !before.get(id)?.tags.includes(tag)), { action: "untag", tags: [tag] }));
-      case "untag":
-        return op.tags.flatMap((tag) => on(ids.filter((id) => before.get(id)?.tags.includes(tag) ?? false), { action: "tag", tags: [tag] }));
+        return op.tags.flatMap((tag) => on(ids.filter((id) => !findTag(was(id).tags, tag)), { action: "untag", tags: [tag] }));
+      case "untag": {
+        // Each tag goes back as it was spelled
+        const bySpelling = new Map<string, string[]>();
+        for (const tag of op.tags) {
+          for (const id of ids) {
+            const own = findTag(was(id).tags, tag);
+            if (own) bySpelling.set(own, [...(bySpelling.get(own) ?? []), id]);
+          }
+        }
+        return [...bySpelling].flatMap(([tag, list]) => on(list, { action: "tag", tags: [tag] }));
+      }
       default:
         return [];
     }
@@ -517,8 +715,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       let next: AssetView = record;
       if (op.action === "favorite") next = { ...record, favorite: true };
       else if (op.action === "unfavorite") next = { ...record, favorite: false };
-      else if (op.action === "tag") next = { ...record, tags: [...record.tags, ...op.tags.filter((tag) => !record.tags.includes(tag))] };
-      else if (op.action === "untag") next = { ...record, tags: record.tags.filter((tag) => !op.tags.includes(tag)) };
+      else if (op.action === "tag") next = { ...record, tags: withTags(record.tags, op.tags) };
+      else if (op.action === "untag") next = { ...record, tags: record.tags.filter((tag) => !findTag(op.tags, tag)) };
       updated.set(id, next);
     }
     replaceRecords(updated);
@@ -555,6 +753,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     error: null,
     loadingMore: false,
     loadedQuery: null,
+    loadedRoot: null,
 
     arrivals: [],
     atTop: true,
@@ -585,6 +784,9 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     toggleAppView: () => get().setAppView(get().appView === "assets" ? "canvas" : "assets"),
 
     setFilters: (patch) => {
+      // A selection belongs to the Library view it was made in: Trash and
+      // Missing offer other, permanent actions on whatever is selected
+      if (patch.view !== undefined && patch.view !== get().filters.view) get().clearSelection();
       set((state) => ({ filters: { ...state.filters, ...patch } }));
       void get().refresh();
     },
@@ -632,6 +834,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       pageFailures.clear();
       lastLoadFailure = 0;
       const query = currentQuery();
+      const root = get().library?.root ?? null;
+      listSince = Date.now();
       // "Select all matching" belongs to the query it was made for
       set((state) => ({
         status: "loading",
@@ -663,7 +867,12 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
           totalBytes: page.totalBytes,
           status: "ready",
           loadedQuery: query,
+          loadedRoot: root,
           arrivals: [],
+          // A new list starts at the top, even when no grid is mounted to scroll
+          // (an empty result shows no grid, and the next one mounts it afresh)
+          scrollTop: 0,
+          atTop: true,
           scrollToTopSeq: state.scrollToTopSeq + 1,
           focusedId: state.focusedId && seen.has(state.focusedId) ? state.focusedId : null,
         }));
@@ -735,11 +944,40 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       try {
         const page = await api.fetchAssetPage({ ...loadedQuery, cursor: slot.cursor ?? undefined, limit: PAGE_SIZE });
         if (seq !== requestSeq) return;
-        const byId = new Map(page.assets.map((asset) => [asset.id, asset]));
+        const found = new Map(page.assets.map((asset) => [asset.id, asset]));
+        // The same cursor need not bring the same items back: arrivals push the
+        // first page down, deletions shift the rest. Ask for the ones left out by id.
+        const leftOut = get()
+          .items.filter((item) => item.page === pageIndex && !item.asset && !found.has(item.id))
+          .map((item) => item.id);
+        if (leftOut.length > LEFT_OUT_MAX) {
+          void get().refresh();
+          return;
+        }
+        const gone = new Set<string>();
+        let unanswered = false;
+        await Promise.all(
+          leftOut.map(async (id) => {
+            try {
+              const asset = await api.fetchAsset(id);
+              if (asset) found.set(id, asset);
+              else gone.add(id);
+            } catch {
+              unanswered = true;
+            }
+          }),
+        );
+        if (seq !== requestSeq) return;
         set((state) => ({
-          items: state.items.map((item) => (item.page === pageIndex && !item.asset && byId.has(item.id) ? { ...item, asset: byId.get(item.id)! } : item)),
-          pages: state.pages.map((p, i) => (i === pageIndex ? { ...p, loaded: true } : p)),
+          items: state.items.map((item) => (item.page === pageIndex && !item.asset && found.has(item.id) ? { ...item, asset: found.get(item.id)! } : item)),
+          // Loaded only once every slot has its record, or a later scroll could never fill the rest
+          pages: unanswered ? state.pages : state.pages.map((p, i) => (i === pageIndex ? { ...p, loaded: true } : p)),
+          // A detail opened on one of them was waiting for its record
+          ...(state.detailId && !state.detailAsset && found.has(state.detailId) ? { detailAsset: found.get(state.detailId)! } : {}),
         }));
+        removeItems(gone);
+        if (get().detailId && gone.has(get().detailId!)) get().closeDetail();
+        if (unanswered) pageFailures.set(pageIndex, Date.now());
       } catch {
         // Tiles of that page keep their placeholders; scrolling retries after a pause
         pageFailures.set(pageIndex, Date.now());
@@ -778,6 +1016,9 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const { status, loadedQuery, headCursor, items } = get();
       if (status !== "ready" || !loadedQuery || (loadedQuery.sort ?? "newest") !== "newest") return;
       const seq = requestSeq;
+      // One poll at a time per list: a slow one must not deliver the same arrivals twice
+      if (pollingSeq === seq) return;
+      pollingSeq = seq;
       try {
         if (!headCursor) {
           // Nothing loaded yet: the first page is the arrival
@@ -785,25 +1026,40 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
             const page = await api.fetchAssetPage({ ...loadedQuery, limit: PAGE_SIZE });
             if (seq !== requestSeq || page.assets.length === 0) return;
             set({ headCursor: page.headCursor, nextCursor: page.nextCursor });
-            get().receiveArrivals(page.assets);
+            get().receiveArrivals(page.assets, { matched: true });
           }
           return;
         }
-        const page = await api.fetchAssetPage({ ...loadedQuery, newerThan: headCursor, limit: PAGE_SIZE });
-        if (seq !== requestSeq) return;
-        if (page.assets.length) set({ headCursor: page.headCursor ?? headCursor });
-        get().receiveArrivals(page.assets);
+        // A full page may have more above it: the server moves the head to the
+        // newest item it sent, so ask again from there until a page comes back short
+        let head = headCursor;
+        for (let round = 0; round < MAX_ARRIVAL_PAGES; round++) {
+          const page = await api.fetchAssetPage({ ...loadedQuery, newerThan: head, limit: PAGE_SIZE });
+          if (seq !== requestSeq) return;
+          const next = page.headCursor ?? head;
+          if (page.assets.length) set({ headCursor: next });
+          // The server matched these against the loaded query itself
+          get().receiveArrivals(page.assets, { matched: true });
+          if (page.assets.length < PAGE_SIZE || next === head) return;
+          head = next;
+        }
+        // Still coming after that many pages: loading the list again is cheaper, and leaves no gap
+        void get().refresh();
       } catch {
         // The next poll tries again
+      } finally {
+        if (pollingSeq === seq) pollingSeq = -1;
       }
     },
 
-    receiveArrivals: (assets) => {
+    receiveArrivals: (assets, options) => {
       const state = get();
       const query = state.loadedQuery;
       if (state.status !== "ready" || !query) return;
       const present = new Set([...state.items.map((item) => item.id), ...state.arrivals.map((asset) => asset.id)]);
-      const fresh = assets.filter((asset) => !present.has(asset.id) && matchesAssetQuery(asset, query));
+      const fresh = assets.filter(
+        (asset) => !present.has(asset.id) && (options?.matched || matchesAssetQuery(asset, query, state.library?.platform)),
+      );
       if (fresh.length === 0) return;
       fresh.sort((a, b) => compareAssets(a, b, state.sort));
       const bytes = fresh.reduce((sum, asset) => sum + asset.bytes, 0);
@@ -818,9 +1074,13 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         } else {
           set({ total: state.total + fresh.length, totalBytes: state.totalBytes + bytes });
         }
-      } else if (state.atTop && state.arrivals.length === 0) {
+      } else if ((state.atTop && state.arrivals.length === 0) || state.items.length === 0) {
+        // At the top, or nothing on screen to keep in place (the empty state shows)
+        const incoming = [...fresh, ...state.arrivals].sort((a, b) => compareAssets(a, b, state.sort));
         set({
-          items: [...fresh.map((asset) => gridItem(asset, -1)), ...state.items],
+          items: [...incoming.map((asset) => gridItem(asset, -1)), ...state.items],
+          arrivals: [],
+          ...(state.items.length === 0 ? { scrollTop: 0, atTop: true } : {}),
           layoutVersion: state.layoutVersion + 1,
           total: state.total + fresh.length,
           totalBytes: state.totalBytes + bytes,
@@ -855,6 +1115,17 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       if (atTop && !state.atTop && state.arrivals.length) get().showArrivals();
     },
 
+    markPosterReady: (id) =>
+      set((state) => {
+        const withPoster = (asset: AssetView): AssetView => (asset.id === id && !asset.hasPoster ? { ...asset, hasPoster: true } : asset);
+        return {
+          items: state.items.map((item) => (item.id === id && item.asset && !item.asset.hasPoster ? { ...item, asset: withPoster(item.asset) } : item)),
+          arrivals: state.arrivals.map(withPoster),
+          ...(state.selectedRecords[id] ? { selectedRecords: { ...state.selectedRecords, [id]: withPoster(state.selectedRecords[id]!) } } : {}),
+          ...(state.detailAsset?.id === id ? { detailAsset: withPoster(state.detailAsset) } : {}),
+        };
+      }),
+
     refreshFacets: async () => {
       try {
         const facets = await api.fetchFacets();
@@ -866,32 +1137,40 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
 
     refreshLibrary: async () => {
       try {
-        const library = await api.fetchLibraryStatus();
-        set({ library, ...(library.job ? { job: library.job } : {}) });
+        applyLibrary(await api.fetchLibraryStatus());
       } catch {
         // The recorder's status (if any) stands
       }
     },
 
-    setLibrary: (library) => set({ library }),
+    setLibrary: (library) => {
+      if (library) applyLibrary(library);
+      else set({ library: null });
+    },
 
     trackJob: (job, doneMessage) => {
       if (jobTimer) clearTimeout(jobTimer);
+      jobTimer = null;
+      trackedJobId = job.id;
       set({ job });
       const poll = async (current: LibraryJobStatus) => {
         if (current.state !== "running") {
           jobTimer = null;
+          if (trackedJobId === current.id) trackedJobId = null;
+          settledJobs.add(current.id);
           const message =
             current.state === "done"
-              ? doneMessage?.(current) ?? "Done"
+              ? doneMessage?.(current) ?? jobDoneMessage(current)
               : current.state === "cancelled"
                 ? "Cancelled"
                 : current.error ?? current.message ?? "The job failed";
           get().showNotice({ message, tone: current.state === "failed" ? "error" : "info" });
-          if (current.type === "import" || current.type === "cleanup") {
+          // Show what it changed (even a cancelled import brought some in): the list, its counts, the library
+          if (LIST_JOBS.has(current.type) && get().status !== "idle") {
             void get().refresh();
-            scheduleFacets();
+            void get().refreshFacets();
           }
+          void get().refreshLibrary();
           return;
         }
         jobTimer = setTimeout(async () => {
@@ -1012,6 +1291,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const asset = get().items.find((item) => item.id === id)?.asset ?? get().selectedRecords[id] ?? null;
       set({ detailId: id, detailAsset: asset, focusedId: id, popover: null });
       const item = get().items.find((i) => i.id === id);
+      // Its page was dropped: the detail shows the record once the page is back (ensurePage)
       if (item && !item.asset) void get().ensurePage(item.page);
     },
 
@@ -1045,10 +1325,16 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     showNotice: (notice) => set({ notice: { ...notice, id: ++noticeSeq } }),
     dismissNotice: () => set({ notice: null }),
 
-    runBulk: async (selection, op) => {
+    runBulk: async (requested, op) => {
+      if (requested.mode === "ids" && requested.ids.length === 0) return null;
+      const targetsSelection = requested === get().selection;
+      const scoped = selectionInView(get(), requested, op);
+      if (!scoped) {
+        get().showNotice({ message: NOT_IN_VIEW[viewScope(get().filters.view)], tone: "error" });
+        return null;
+      }
+      const { selection, skipped } = scoped;
       const targetIds = selection.mode === "ids" ? selection.ids : [];
-      if (selection.mode === "ids" && targetIds.length === 0) return null;
-      const targetsSelection = selection === get().selection;
       // Records as they were, for Undo and for putting them back on the grid
       const before = new Map<string, AssetView>();
       if (selection.mode === "ids") {
@@ -1067,13 +1353,15 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         return null;
       }
 
+      const listQuery = get().loadedQuery;
       const detailId = get().detailId;
       const detailIndex = detailId ? get().items.findIndex((item) => item.id === detailId) : -1;
       applyLocally(op, result.ids);
       const removing = op.action === "trash" || op.action === "restore" || op.action === "delete";
 
       // The open detail moves on when its asset leaves the list
-      if (detailId && removing && result.ids.includes(detailId)) {
+      const detailLeft = detailIndex >= 0 && !get().items.some((item) => item.id === detailId);
+      if (detailId && ((removing && result.ids.includes(detailId)) || detailLeft)) {
         const items = get().items;
         const next = items[Math.min(detailIndex, items.length - 1)];
         if (next && detailIndex >= 0) set({ detailId: next.id, detailAsset: next.asset, focusedId: next.id });
@@ -1082,7 +1370,11 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       // Whatever was selected has left the list
       if (targetsSelection && removing) get().clearSelection();
 
-      const steps = inverseOf(op, result.ids, before);
+      // Undo puts back exactly what changed, so it needs each changed asset as
+      // it was. A select-all reaching past the loaded pages leaves some unknown:
+      // rather than guess (and strip favorites and tags they already had), no Undo.
+      const priorKnown = removing || result.ids.every((id) => before.has(id));
+      const steps = priorKnown ? inverseOf(op, result.ids, before) : [];
       if (steps.length) {
         // A query selection can change thousands: look ids up, never scan
         const changed = new Set(result.ids);
@@ -1090,17 +1382,24 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         const entry: UndoEntry = {
           label: describe(op, result.affected),
           steps,
+          query: listQuery,
+          wide: selection.mode === "query",
           removed,
           before: Object.fromEntries([...before].filter(([id]) => changed.has(id)).map(([id, record]) => [id, { tags: record.tags, favorite: record.favorite }])),
         };
         set((state) => ({ undoStack: [...state.undoStack, entry].slice(-UNDO_LIMIT) }));
       }
       const failed = result.errors.length;
-      get().showNotice(
-        failed
-          ? { message: `${describe(op, result.affected)} · ${failed} could not be changed`, tone: "error", undo: steps.length > 0 }
-          : { message: describe(op, result.affected), tone: "info", undo: steps.length > 0 },
-      );
+      const notes = [
+        failed ? `${failed.toLocaleString("en-US")} could not be changed` : "",
+        skipped ? `${skipped.toLocaleString("en-US")} not in this view left as they were` : "",
+        priorKnown || result.ids.length === 0 ? "" : "Undo isn't available: not all of them were loaded",
+      ].filter(Boolean);
+      get().showNotice({
+        message: [describe(op, result.affected), ...notes].join(" · "),
+        tone: failed ? "error" : "info",
+        undo: steps.length > 0,
+      });
       scheduleFacets();
       // "All matching" reached past the loaded pages: counts and paging start over
       if (selection.mode === "query" && removing) void get().refresh();
@@ -1118,15 +1417,20 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         void get().refresh();
         return;
       }
-      if (entry.removed.length) {
-        insertItems(entry.removed);
-      }
       const restored = new Map<string, AssetView>();
       for (const [id, prior] of Object.entries(entry.before)) {
         const record = knownRecord(id);
         if (record) restored.set(id, { ...record, ...prior });
       }
       replaceRecords(restored);
+      const loaded = get().loadedQuery;
+      if (!entry.wide && entry.query && loaded && sameQuery(entry.query, loaded)) {
+        // Back into the list they left, where they sort
+        if (entry.removed.length) insertItems(entry.removed);
+      } else {
+        // Another list is shown now, or the action reached past the loaded one: ask again
+        void get().refresh();
+      }
       get().showNotice({ message: `Undid: ${entry.label}`, tone: "info" });
       scheduleFacets();
     },
@@ -1146,14 +1450,22 @@ export function selectionCount(state: SelectionState): number {
     : Math.max(0, state.selectionTotal - state.selection.excludeIds.length);
 }
 
-/** Selected assets the current filters hide ("3 selected (1 hidden by filters)"). */
-export function hiddenSelectionCount(state: Pick<AssetStoreState, "selection" | "selectedRecords" | "filters" | "sort">): number {
+/**
+ * Selected assets the current filters hide ("3 selected (1 hidden by
+ * filters)"). A tile in the grid is never hidden, even one an edit made stop
+ * matching: it stays until the list is loaded again.
+ */
+export function hiddenSelectionCount(
+  state: Pick<AssetStoreState, "selection" | "selectedRecords" | "filters" | "sort" | "items"> & { library?: LibraryStatus | null },
+): number {
   if (state.selection.mode !== "ids" || state.selection.ids.length === 0) return 0;
   const query = buildAssetQuery(state.filters, state.sort);
+  const shown = new Set(state.items.map((item) => item.id));
   let hidden = 0;
   for (const id of state.selection.ids) {
+    if (shown.has(id)) continue;
     const record = state.selectedRecords[id];
-    if (record && !matchesAssetQuery(record, query)) hidden++;
+    if (record && !matchesAssetQuery(record, query, state.library?.platform)) hidden++;
   }
   return hidden;
 }

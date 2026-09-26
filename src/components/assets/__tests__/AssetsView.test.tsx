@@ -19,7 +19,10 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/assets/client/api", () => api);
 
-const recorder = vi.hoisted(() => ({ listener: null as ((result: unknown) => void) | null }));
+const recorder = vi.hoisted(() => ({
+  listener: null as ((result: unknown) => void) | null,
+  statusListener: null as ((status: unknown) => void) | null,
+}));
 vi.mock("@/lib/assets/client/recorder", () => ({
   getRecorderLibraryStatus: () => null,
   onAssetRecorded: (listener: (result: unknown) => void) => {
@@ -28,7 +31,26 @@ vi.mock("@/lib/assets/client/recorder", () => ({
       recorder.listener = null;
     };
   },
-  onLibraryStatus: () => () => {},
+  onLibraryStatus: (listener: (status: unknown) => void) => {
+    recorder.statusListener = listener;
+    return () => {
+      recorder.statusListener = null;
+    };
+  },
+}));
+
+const poster = vi.hoisted(() => ({
+  ensurePoster: vi.fn(async () => false),
+  listener: null as ((id: string) => void) | null,
+}));
+vi.mock("@/lib/assets/client/poster", () => ({
+  ensurePoster: poster.ensurePoster,
+  onPosterReady: (listener: (id: string) => void) => {
+    poster.listener = listener;
+    return () => {
+      poster.listener = null;
+    };
+  },
 }));
 
 const openWorkflow = vi.hoisted(() => ({
@@ -201,6 +223,8 @@ describe("AssetsView", () => {
     fireEvent.click(within(panel).getByRole("button", { name: "Open workflow" }));
     await waitFor(() => expect(openWorkflow.openAssetWorkflow).toHaveBeenCalledWith(expect.objectContaining({ id: "a2" }), "snapshot"));
     await waitFor(() => expect(useAssetStore.getState().appView).toBe("canvas"));
+    // Coming back lands on the grid, on that tile, not on the detail left behind
+    expect(useAssetStore.getState()).toMatchObject({ detailId: null, detailAsset: null, focusedId: "a2" });
   });
 
   it("offers a project asset its project, and the copy as it was when made", async () => {
@@ -333,6 +357,21 @@ describe("AssetsView", () => {
     expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
   });
 
+  it("has a poster made for a video tile without one, and shows its thumbnail once stored", async () => {
+    await renderView([asset("vid1", { kind: "video", mime: "video/mp4", ext: "mp4" }), asset("a1")]);
+    expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
+    expect(poster.ensurePoster).toHaveBeenCalledWith(expect.objectContaining({ id: "vid1", kind: "video" }));
+    // Asked before the poster existed: the server had nothing (204)
+    fireEvent.error(tile("vid1").querySelector("img")!);
+    expect(tile("vid1").querySelector("img")).toBeNull();
+
+    act(() => poster.listener?.("vid1"));
+    expect(useAssetStore.getState().items[0]!.asset!.hasPoster).toBe(true);
+    expect(tile("vid1").querySelector("img")!.getAttribute("src")).toBe(`/api/assets/thumb/${"vid1".padEnd(64, "0")}?w=320&poster=1`);
+    // Once per video, not on every render
+    expect(poster.ensurePoster).toHaveBeenCalledTimes(1);
+  });
+
   it("prepends a recorded asset that matches while scrolled to the top", async () => {
     await renderView();
     act(() => recorder.listener?.({ asset: asset("a4", { createdAt: T0 + 1000 }), filename: "a4.png", legacyId: "a4", reusedFile: false }));
@@ -408,6 +447,97 @@ describe("AssetsView", () => {
         op: { action: "delete", deleteProjectFiles: false },
       }),
     );
+  });
+
+  it("leaves a selection behind when the Trash opens, so Delete there cannot reach live assets", async () => {
+    await renderView();
+    fireEvent.click(tile("a3"), { metaKey: true });
+    fireEvent.click(tile("a1"), { metaKey: true });
+    expect(screen.getByRole("toolbar", { name: "Selected assets" })).toHaveTextContent("2 selected");
+
+    api.fetchAssetPage.mockResolvedValue(page([asset("t1", { trashedAt: 1 })]));
+    fireEvent.click(screen.getByRole("button", { name: /^Trash\s*0$/ }));
+    await waitFor(() => expect(tile("t1")).toBeInTheDocument());
+    expect(screen.queryByRole("toolbar", { name: "Selected assets" })).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Delete" });
+    expect(useAssetStore.getState().confirm).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /permanently/ })).not.toBeInTheDocument();
+  });
+
+  it("loads the list again when Settings switches the library underneath it", async () => {
+    await renderView();
+    await waitFor(() => expect(useAssetStore.getState().library?.root).toBe("/Users/me/Pictures/Node Banana"));
+    fireEvent.click(tile("a2"), { metaKey: true });
+    api.fetchAssetPage.mockResolvedValue(page([asset("b1")]));
+    act(() => recorder.statusListener?.(library({ root: "/Volumes/Work/Node Banana" })));
+    await waitFor(() => expect(tile("b1")).toBeInTheDocument());
+    expect(tile("a2")).toBeNull();
+    expect(screen.queryByRole("toolbar", { name: "Selected assets" })).not.toBeInTheDocument();
+    expect(screen.getByText("/Volumes/Work/Node Banana")).toBeInTheDocument();
+  });
+
+  it("follows an import started in Settings once its dialog closes, and shows what it brought", async () => {
+    await renderView();
+    const running = { id: "j9", type: "import" as const, state: "running" as const, done: 2, total: 4, bytesDone: 0, bytesTotal: 0, startedAt: 1 };
+    api.fetchLibraryStatus.mockResolvedValue(library({ job: running }));
+    // Settings opens over the view, starts the import and closes
+    act(() => useWorkflowStore.getState().incrementModalCount());
+    act(() => useWorkflowStore.getState().decrementModalCount());
+    await waitFor(() => expect(screen.getByText("Importing 2 of 4")).toBeInTheDocument());
+
+    const finished = { ...running, state: "done" as const, done: 4, finishedAt: Date.now() };
+    api.fetchJob.mockResolvedValue(finished);
+    api.fetchLibraryStatus.mockResolvedValue(library({ job: finished }));
+    api.fetchAssetPage.mockResolvedValue(page([asset("a3"), asset("a2"), asset("a1"), asset("imp1", { createdAt: T0 - 86_400_000 * 40 })]));
+    await waitFor(() => expect(tile("imp1")).toBeInTheDocument(), { timeout: 3000 });
+    expect(screen.queryByText(/Importing/)).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Imported 4 files");
+  });
+
+  describe("fullscreen detail", () => {
+    let fullscreenElement: Element | null = null;
+    const enterFullscreen = () =>
+      act(() => {
+        fullscreenElement = document.querySelector("[data-asset-detail]");
+        document.dispatchEvent(new Event("fullscreenchange"));
+      });
+
+    beforeEach(() => {
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fullscreenElement });
+      Object.defineProperty(document, "exitFullscreen", {
+        configurable: true,
+        value: vi.fn(async () => {
+          fullscreenElement = null;
+          document.dispatchEvent(new Event("fullscreenchange"));
+        }),
+      });
+    });
+    afterEach(() => {
+      fullscreenElement = null;
+      delete (document as { fullscreenElement?: unknown }).fullscreenElement;
+      delete (document as { exitFullscreen?: unknown }).exitFullscreen;
+    });
+
+    it("shows the notice inside the detail, where fullscreen can paint it", async () => {
+      await renderView();
+      fireEvent.click(tile("a2"));
+      enterFullscreen();
+      const detail = document.querySelector<HTMLElement>("[data-asset-detail]")!;
+      api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
+      fireEvent.keyDown(window, { key: "Delete" });
+      await waitFor(() => expect(within(detail).getByRole("status")).toHaveTextContent("Trashed 1 asset"));
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+    });
+
+    it("leaves fullscreen before asking to delete for good, so the question can be seen", async () => {
+      useAssetStore.setState({ filters: { ...initial.filters, view: "trash" } });
+      await renderView([asset("t1", { trashedAt: 1 }), asset("t2", { trashedAt: 1 })]);
+      fireEvent.click(tile("t1"));
+      enterFullscreen();
+      fireEvent.keyDown(window, { key: "Delete" });
+      expect(document.exitFullscreen).toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Delete 1 asset permanently?" })).toBeInTheDocument();
+    });
   });
 
   it("goes back to the canvas when a workflow opens or the tab changes, however that was asked for", async () => {

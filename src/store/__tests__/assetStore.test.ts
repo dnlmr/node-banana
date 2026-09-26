@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssetPage, AssetView } from "@/lib/assets/types";
+import type { AssetPage, AssetView, LibraryJobStatus, LibraryStatus } from "@/lib/assets/types";
 import { encodeAssetPageRequest } from "@/lib/assets/query";
 
 const api = vi.hoisted(() => ({
   fetchAssetPage: vi.fn(),
+  fetchAsset: vi.fn(),
   fetchFacets: vi.fn(),
   fetchLibraryStatus: vi.fn(),
   bulkAssets: vi.fn(),
@@ -114,6 +115,16 @@ describe("filters", () => {
     expect(matchesAssetQuery({ ...cat, trashedAt: 1 }, { scope: "trash" })).toBe(true);
     expect(matchesAssetQuery({ ...cat, trashedAt: 1 }, {})).toBe(false);
   });
+
+  it("searches the way the server does: every word somewhere, tags and (on macOS) projects without case", () => {
+    const lake = asset("a1", { prompt: "Golden light over a lakeside", tags: ["Hero"], workflow: { id: "wf_1", name: "Ads", projectPath: "/Users/me/Ads" } });
+    expect(matchesAssetQuery(lake, { q: "golden lakeside" })).toBe(true);
+    expect(matchesAssetQuery(lake, { q: "  golden   ads " })).toBe(true);
+    expect(matchesAssetQuery(lake, { q: "golden forest" })).toBe(false);
+    expect(matchesAssetQuery(lake, { tags: ["hero"] })).toBe(true);
+    expect(matchesAssetQuery(lake, { projects: ["/users/me/ads/"] }, "darwin")).toBe(true);
+    expect(matchesAssetQuery(lake, { projects: ["/users/me/ads"] }, "linux")).toBe(false);
+  });
 });
 
 describe("paging", () => {
@@ -186,6 +197,33 @@ describe("paging", () => {
     await useAssetStore.getState().ensurePage(25);
     expect(api.fetchAssetPage).toHaveBeenLastCalledWith({ cursor: "c25", limit: 200 });
   });
+
+  it("fills a dropped page whose cursor no longer brings all of it back, so no tile stays a placeholder", async () => {
+    const [n2, n1, a3, a2, a1] = [asset("n2", { createdAt: T0 + 5 }), asset("n1", { createdAt: T0 + 4 }), asset("a3", { createdAt: T0 + 3 }), asset("a2", { createdAt: T0 + 2 }), asset("a1", { createdAt: T0 + 1 })];
+    const slot = (a: AssetView, pageIndex: number, loaded: boolean) => ({ id: a.id, createdAt: a.createdAt, kind: a.kind, asset: loaded ? a : null, page: pageIndex });
+    // The first page (a3, a2, a1) was dropped for memory; two arrivals went in above it
+    useAssetStore.setState({
+      status: "ready",
+      loadedQuery: {},
+      items: [slot(n2, -1, true), slot(n1, -1, true), slot(a3, 0, false), slot(a2, 0, false), slot(a1, 0, false)],
+      pages: [{ cursor: null, loaded: false }],
+      total: 5,
+    });
+    // Asked again, "the newest page" starts with the arrivals; a2 fell off its end, a1 was deleted meanwhile
+    api.fetchAssetPage.mockResolvedValueOnce(page([n2, n1, a3]));
+    api.fetchAsset.mockImplementation(async (id: string) => (id === "a2" ? a2 : null));
+    useAssetStore.getState().openDetail("a2");
+    await vi.waitFor(() => expect(useAssetStore.getState().detailAsset?.id).toBe("a2"));
+    expect(api.fetchAsset).toHaveBeenCalledTimes(2);
+    expect(useAssetStore.getState().items.map((item) => [item.id, !!item.asset])).toEqual([
+      ["n2", true],
+      ["n1", true],
+      ["a3", true],
+      ["a2", true],
+    ]);
+    expect(useAssetStore.getState().pages[0]!.loaded).toBe(true);
+    expect(useAssetStore.getState().total).toBe(4);
+  });
 });
 
 describe("new arrivals", () => {
@@ -214,6 +252,43 @@ describe("new arrivals", () => {
     useAssetStore.getState().showArrivals();
     expect(ids()).toEqual(["a3", "a2", "a1"]);
     expect(useAssetStore.getState().scrollToTopSeq).toBe(before + 1);
+  });
+
+  it("keep coming while a page of them comes back full, so none are skipped", async () => {
+    // Oldest first as made; the server sends each page newest first
+    const made = Array.from({ length: 260 }, (_, i) => asset(`n${String(i).padStart(3, "0")}`, { createdAt: T0 + 10 + i }));
+    const newestFirst = (list: AssetView[]) => [...list].reverse();
+    api.fetchAssetPage.mockResolvedValueOnce(page(newestFirst(made.slice(0, 200)), { headCursor: "h199" }));
+    api.fetchAssetPage.mockResolvedValueOnce(page(newestFirst(made.slice(200)), { headCursor: "h259" }));
+    await useAssetStore.getState().pollArrivals();
+    expect(api.fetchAssetPage).toHaveBeenNthCalledWith(2, { newerThan: "h2", limit: 200 });
+    expect(api.fetchAssetPage).toHaveBeenNthCalledWith(3, { newerThan: "h199", limit: 200 });
+    expect(ids()).toHaveLength(262);
+    expect(ids().slice(0, 2)).toEqual(["n259", "n258"]);
+    expect(ids().slice(-3)).toEqual(["n000", "a2", "a1"]);
+    expect(useAssetStore.getState()).toMatchObject({ headCursor: "h259", total: 262 });
+  });
+
+  it("take what the server matched for the list as it is, without second-guessing it", async () => {
+    useAssetStore.setState({ loadedQuery: { tags: ["hero"] } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("a3", { createdAt: T0 + 3, tags: [] })], { headCursor: "h3" }));
+    await useAssetStore.getState().pollArrivals();
+    expect(ids()).toEqual(["a3", "a2", "a1"]);
+  });
+
+  it("start a new list at the top, and go straight into a list that was empty", async () => {
+    useAssetStore.getState().setScroll(4000, false);
+    // Trash is empty: no grid is mounted to scroll back up
+    api.fetchAssetPage.mockResolvedValueOnce(page([]));
+    useAssetStore.getState().setLibraryView("trash");
+    await vi.waitFor(() => expect(useAssetStore.getState().loadedQuery).toEqual({ scope: "trash" }));
+    expect(useAssetStore.getState()).toMatchObject({ scrollTop: 0, atTop: true });
+
+    // Even if the grid last reported being scrolled down, an arrival into nothing shows
+    useAssetStore.setState({ atTop: false, scrollTop: 900 });
+    useAssetStore.getState().receiveArrivals([asset("t1", { trashedAt: 5, createdAt: T0 + 9 })]);
+    expect(ids()).toEqual(["t1"]);
+    expect(useAssetStore.getState()).toMatchObject({ arrivals: [], total: 1, atTop: true, scrollTop: 0 });
   });
 
   it("take recorder results only when they match the current query, once", () => {
@@ -273,6 +348,16 @@ describe("selection", () => {
     expect(useAssetStore.getState().selection).toEqual({ mode: "ids", ids: [] });
   });
 
+  it("drops the selection when the Library view changes: Trash and Missing act on it for good", async () => {
+    useAssetStore.getState().toggleSelect("a3");
+    useAssetStore.getState().toggleSelect("a1");
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("t1", { trashedAt: 1 })]));
+    useAssetStore.getState().setLibraryView("trash");
+    expect(useAssetStore.getState().selection).toEqual({ mode: "ids", ids: [] });
+    expect(useAssetStore.getState().selectedRecords).toEqual({});
+    await vi.waitFor(() => expect(ids()).toEqual(["t1"]));
+  });
+
   it("favorites in bulk unless every selected asset already is one", () => {
     useAssetStore.getState().toggleSelect("a2");
     expect(bulkFavoriteOp(useAssetStore.getState())).toEqual({ action: "unfavorite" });
@@ -316,9 +401,90 @@ describe("asset actions and undo", () => {
     expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.tags).toEqual(["hero"]);
   });
 
+  it("undoes favorites and unfavorites only where they changed something", async () => {
+    useAssetStore.setState({ items: useAssetStore.getState().items.map((item) => (item.id === "a3" ? { ...item, asset: { ...item.asset!, favorite: true } } : item)) });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 3, ids: ["a3", "a2", "a1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a3", "a2", "a1"] }, { action: "favorite" });
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a2", "a1"] }, op: { action: "unfavorite" } }]);
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 3, ids: ["a3", "a2", "a1"], errors: [] });
+    await useAssetStore.getState().undo();
+    expect(useAssetStore.getState().items.map((item) => item.asset!.favorite)).toEqual([true, false, false]);
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 3, ids: ["a3", "a2", "a1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a3", "a2", "a1"] }, { action: "unfavorite" });
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a3"] }, op: { action: "favorite" } }]);
+  });
+
+  it("compares tags without case, as the server does, and puts an untagged one back as it was spelled", async () => {
+    // a2 already carries "hero": tagging "Hero" does not change it
+    api.bulkAssets.mockResolvedValueOnce({ affected: 2, ids: ["a2", "a1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2", "a1"] }, { action: "tag", tags: ["Hero"] });
+    expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.tags).toEqual(["hero"]);
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a1"] }, op: { action: "untag", tags: ["Hero"] } }]);
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "untag", tags: ["HERO"] });
+    expect(useAssetStore.getState().items.find((item) => item.id === "a2")!.asset!.tags).toEqual([]);
+    expect(useAssetStore.getState().undoStack.at(-1)!.steps).toEqual([{ selection: { mode: "ids", ids: ["a2"] }, op: { action: "tag", tags: ["hero"] } }]);
+  });
+
+  it("offers no Undo for a favorite or tag that reached assets it never loaded, rather than guess what they had", async () => {
+    useAssetStore.setState({ total: 10 });
+    useAssetStore.getState().selectAllMatching();
+    const everything = ["a3", "a2", "a1", "u1", "u2", "u3", "u4", "u5", "u6", "u7"];
+    api.bulkAssets.mockResolvedValueOnce({ affected: 10, ids: everything, errors: [] });
+    await useAssetStore.getState().runBulk(useAssetStore.getState().selection, { action: "tag", tags: ["hero"] });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 10, ids: everything, errors: [] });
+    await useAssetStore.getState().runBulk(useAssetStore.getState().selection, { action: "favorite" });
+    expect(useAssetStore.getState().undoStack).toHaveLength(0);
+    expect(useAssetStore.getState().notice).toMatchObject({
+      message: "Added 10 assets to Favorites · Undo isn't available: not all of them were loaded",
+      undo: false,
+    });
+  });
+
+  it("keeps a tile that stops matching the filters after a favorite or tag change, and Undo restores it in place", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "favorites" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("f2", { favorite: true }), asset("f1", { favorite: true })]));
+    await useAssetStore.getState().refresh();
+    useAssetStore.getState().openDetail("f2");
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["f2"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["f2"] }, { action: "unfavorite" });
+    // Still there, count unchanged, and the detail can still step through the list
+    expect(ids()).toEqual(["f2", "f1"]);
+    expect(useAssetStore.getState().total).toBe(2);
+    expect(useAssetStore.getState().detailAsset?.favorite).toBe(false);
+    // Selected there, it is not "hidden by filters" either: it is on screen
+    useAssetStore.getState().toggleSelect("f2");
+    expect(hiddenSelectionCount(useAssetStore.getState())).toBe(0);
+    await useAssetStore.getState().stepDetail(1);
+    expect(useAssetStore.getState().detailId).toBe("f1");
+
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["f2"], errors: [] });
+    await useAssetStore.getState().undo();
+    expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["f2"] }, op: { action: "favorite" } });
+    expect(useAssetStore.getState().items[0]!.asset!.favorite).toBe(true);
+    expect(useAssetStore.getState().total).toBe(2);
+  });
+
+  it("keeps a search result that is favorited, whatever the client makes of the search", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, q: "golden lakeside" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("g1", { prompt: "golden light over a lakeside", favorite: true })]));
+    await useAssetStore.getState().refresh();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["g1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["g1"] }, { action: "unfavorite" });
+    expect(ids()).toEqual(["g1"]);
+    expect(useAssetStore.getState().total).toBe(1);
+  });
+
   it("does not offer Undo for a permanent delete", async () => {
-    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a1"], errors: [] });
-    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a1"] }, { action: "delete" });
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "trash" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("t1", { trashedAt: 1 })]));
+    await useAssetStore.getState().refresh();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["t1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["t1"] }, { action: "delete" });
     expect(useAssetStore.getState().undoStack).toHaveLength(0);
     expect(useAssetStore.getState().notice).toMatchObject({ message: "Deleted 1 asset", undo: false });
   });
@@ -349,6 +515,162 @@ describe("asset actions and undo", () => {
     await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a1"] }, { action: "trash" });
     expect(ids()).toEqual(["a3", "a2", "a1"]);
     expect(useAssetStore.getState().notice).toMatchObject({ message: "The library is busy", tone: "error" });
+  });
+});
+
+describe("actions stay inside the view", () => {
+  const live = asset("a2");
+  const trashed = asset("t1", { trashedAt: 1 });
+
+  it("deletes permanently from the Trash only what is in the Trash", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "trash" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([trashed]));
+    await useAssetStore.getState().refresh();
+    // However a live asset got into the selection, the delete never reaches it
+    useAssetStore.setState({ selection: { mode: "ids", ids: ["a2", "t1"] }, selectedRecords: { a2: live, t1: trashed } });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["t1"], errors: [] });
+    await useAssetStore.getState().runBulk(useAssetStore.getState().selection, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+    expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["t1"] }, op: { action: "delete" } });
+    expect(useAssetStore.getState().notice?.message).toBe("Deleted 1 asset · 1 not in this view left as they were");
+
+    // Nothing of it in the Trash: nothing is sent
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+    expect(useAssetStore.getState().notice).toMatchObject({ message: "None of the selected assets are in the Trash.", tone: "error" });
+  });
+
+  it("removes from the library only records whose file is missing, and never trashes from the Trash", async () => {
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "missing" } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("m1", { missing: true })]));
+    await useAssetStore.getState().refresh();
+    useAssetStore.setState({ selectedRecords: { a2: live } });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "delete" });
+    expect(api.bulkAssets).not.toHaveBeenCalled();
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["m1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["m1"] }, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenLastCalledWith({ selection: { mode: "ids", ids: ["m1"] }, op: { action: "delete" } });
+
+    useAssetStore.setState({ filters: { ...DEFAULT_FILTERS, view: "trash" }, loadedQuery: { scope: "trash" }, items: [], selectedRecords: { t1: trashed } });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["t1"] }, { action: "trash" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a select-all made for another view, and a permanent delete from the library view", async () => {
+    api.fetchAssetPage.mockResolvedValueOnce(page([live]));
+    await useAssetStore.getState().refresh();
+    await useAssetStore.getState().runBulk({ mode: "query", query: {}, excludeIds: [] }, { action: "delete" });
+    await useAssetStore.getState().runBulk({ mode: "query", query: { scope: "trash" }, excludeIds: [] }, { action: "restore" });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["a2"] }, { action: "delete" });
+    expect(api.bulkAssets).not.toHaveBeenCalled();
+    // A missing file's record may still be removed from the library view (the detail's banner)
+    useAssetStore.setState({ selectedRecords: { m1: asset("m1", { missing: true }) } });
+    api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["m1"], errors: [] });
+    await useAssetStore.getState().runBulk({ mode: "ids", ids: ["m1"] }, { action: "delete" });
+    expect(api.bulkAssets).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("library jobs and switches", () => {
+  const status = (overrides: Partial<LibraryStatus> = {}): LibraryStatus => ({
+    available: true,
+    root: "/lib",
+    source: "default",
+    defaultRoot: "/lib",
+    cacheDir: "/cache",
+    platform: "darwin",
+    synced: null,
+    counts: { assets: 2, trashed: 0, bytes: 0 },
+    empty: false,
+    job: null,
+    ...overrides,
+  });
+  const job = (overrides: Partial<LibraryJobStatus> = {}): LibraryJobStatus => ({
+    id: "j1",
+    type: "import",
+    state: "running",
+    done: 3,
+    total: 10,
+    bytesDone: 0,
+    bytesTotal: 0,
+    startedAt: 1,
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    useAssetStore.setState({ appView: "assets", library: status() });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("a2"), asset("a1")]));
+    await useAssetStore.getState().refresh();
+    expect(useAssetStore.getState().loadedRoot).toBe("/lib");
+  });
+
+  it("follows a job started elsewhere every second, then shows what it changed", async () => {
+    vi.useFakeTimers();
+    try {
+      api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: job() }));
+      await useAssetStore.getState().refreshLibrary();
+      expect(useAssetStore.getState().job).toMatchObject({ id: "j1", state: "running", done: 3 });
+
+      api.fetchJob.mockResolvedValueOnce(job({ done: 7 }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.fetchJob).toHaveBeenLastCalledWith("j1");
+      expect(useAssetStore.getState().job).toMatchObject({ state: "running", done: 7 });
+
+      const finished = job({ state: "done", done: 10, finishedAt: Date.now() });
+      api.fetchJob.mockResolvedValueOnce(finished);
+      api.fetchAssetPage.mockResolvedValueOnce(page([asset("a2"), asset("old", { createdAt: T0 - 1e9 }), asset("a1")]));
+      api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: finished, counts: { assets: 3, trashed: 0, bytes: 0 } }));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(ids()).toEqual(["a2", "old", "a1"]));
+      expect(useAssetStore.getState().job).toMatchObject({ state: "done" });
+      expect(api.fetchFacets).toHaveBeenCalled();
+      expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(2);
+      expect(useAssetStore.getState().notice?.message).toBe("Imported 10 files");
+
+      // No more polling, and the finished job does not reload the list again
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(api.fetchJob).toHaveBeenCalledTimes(2);
+      expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a running job it no longer follows once the status has none", async () => {
+    useAssetStore.setState({ job: job({ id: "stale" }) });
+    api.fetchLibraryStatus.mockResolvedValueOnce(status());
+    await useAssetStore.getState().refreshLibrary();
+    expect(useAssetStore.getState().job).toBeNull();
+  });
+
+  it("reloads the list once for a job that finished unseen after it loaded, and not for one before", async () => {
+    api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: job({ id: "before", state: "done", finishedAt: 1 }) }));
+    await useAssetStore.getState().refreshLibrary();
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(1);
+
+    const later = job({ id: "later", state: "done", finishedAt: Date.now() + 60_000 });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("a2"), asset("old", { createdAt: T0 - 1e9 }), asset("a1")]));
+    api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: later }));
+    await useAssetStore.getState().refreshLibrary();
+    await vi.waitFor(() => expect(ids()).toEqual(["a2", "old", "a1"]));
+    api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: later }));
+    await useAssetStore.getState().refreshLibrary();
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads the list again when the library now lives elsewhere, without the old selection or detail", async () => {
+    useAssetStore.getState().toggleSelect("a2");
+    useAssetStore.getState().openDetail("a1");
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("b1")]));
+    useAssetStore.getState().setLibrary(status({ root: "/Volumes/Other/Node Banana" }));
+    expect(useAssetStore.getState()).toMatchObject({ selection: { mode: "ids", ids: [] }, detailId: null });
+    await vi.waitFor(() => expect(ids()).toEqual(["b1"]));
+    expect(useAssetStore.getState().loadedRoot).toBe("/Volumes/Other/Node Banana");
+    expect(api.fetchFacets).toHaveBeenCalled();
+
+    // The same folder again changes nothing
+    useAssetStore.getState().setLibrary(status({ root: "/Volumes/Other/Node Banana" }));
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
   });
 });
 

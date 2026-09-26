@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { WorkflowCanvas } from "@/components/WorkflowCanvas";
 import { useAssetStore } from "@/store/assetStore";
@@ -172,6 +172,40 @@ describe("WorkflowCanvas behind the Assets view", () => {
 
     fireEvent.keyDown(window, { key: "a" });
     expect(useAssetStore.getState().appView).toBe("assets");
+  });
+
+  it("does not switch views while a menu or dropdown is open over the canvas", () => {
+    renderCanvas();
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    document.body.appendChild(menu);
+    try {
+      fireEvent.keyDown(window, { key: "a" });
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    } finally {
+      menu.remove();
+    }
+    fireEvent.keyDown(window, { key: "a" });
+    expect(useAssetStore.getState().appView).toBe("assets");
+  });
+
+  it("does not switch views while the connection-drop menu is open, whose Enter would add a node unseen", () => {
+    const elementsFromPoint = document.elementsFromPoint;
+    document.elementsFromPoint = () => [];
+    try {
+      renderCanvas();
+      const onConnectEnd = mocks.reactFlowProps.current!.onConnectEnd as (event: unknown, state: unknown) => void;
+      act(() =>
+        onConnectEnd(
+          { clientX: 300, clientY: 200 },
+          { isValid: false, fromNode: { id: "image-1", type: "imageInput", data: {} }, fromHandle: { id: "image", type: "source" } },
+        ),
+      );
+      fireEvent.keyDown(window, { key: "a" });
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    } finally {
+      document.elementsFromPoint = elementsFromPoint;
+    }
   });
 
   it("does not switch views while a dialog holds the canvas", () => {

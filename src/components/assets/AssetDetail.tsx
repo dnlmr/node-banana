@@ -17,7 +17,7 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useShallow } from "zustand/shallow";
 import { cn } from "@/components/nodes/ui/cn";
 import { DialogButton, DialogEyebrow, DialogSpinner } from "@/components/ui/Dialog";
@@ -55,6 +55,7 @@ import {
 } from "./assetActions";
 import { workflowActions } from "./AssetContextMenu";
 import { gridReveal } from "./AssetGrid";
+import { AssetNotice } from "./AssetNotice";
 import { AssetPlaceholder, KIND_TONE } from "./AssetTile";
 import { TagInput } from "./TagEditor";
 
@@ -66,6 +67,20 @@ export function toggleDetailFullscreen() {
   if (!el) return;
   if (document.fullscreenElement) void document.exitFullscreen?.();
   else void el.requestFullscreen?.().catch(() => {});
+}
+
+function subscribeFullscreen(onChange: () => void): () => void {
+  document.addEventListener("fullscreenchange", onChange);
+  return () => document.removeEventListener("fullscreenchange", onChange);
+}
+
+/** Whether the detail is truly fullscreen: then nothing outside it is painted. */
+export function useDetailFullscreen(): boolean {
+  return useSyncExternalStore(
+    subscribeFullscreen,
+    () => !!document.fullscreenElement?.matches?.("[data-asset-detail]"),
+    () => false,
+  );
 }
 
 /** A kind-coloured square and a line, where the media cannot be shown. */
@@ -427,7 +442,7 @@ export function AssetDetail() {
       stepDetail: state.stepDetail,
     })),
   );
-  const [fullscreen, setFullscreen] = useState(false);
+  const fullscreen = useDetailFullscreen();
   const layerRef = useRef<HTMLDivElement>(null);
   const open = detailId !== null;
 
@@ -442,14 +457,13 @@ export function AssetDetail() {
     };
   }, [open]);
 
-  useEffect(() => {
-    const onChange = () => setFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", onChange);
-    return () => {
-      document.removeEventListener("fullscreenchange", onChange);
+  // Leaving the view leaves fullscreen too
+  useEffect(
+    () => () => {
       if (document.fullscreenElement) void document.exitFullscreen?.();
-    };
-  }, []);
+    },
+    [],
+  );
 
   if (!detailId) return null;
   const index = items.findIndex((item) => item.id === detailId);
@@ -520,6 +534,11 @@ export function AssetDetail() {
             >
               <ChevronRight size={20} strokeWidth={1.75} />
             </button>
+          )}
+          {fullscreen && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-5 z-10 flex justify-center">
+              <AssetNotice />
+            </div>
           )}
         </div>
       </div>

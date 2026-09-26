@@ -4,6 +4,7 @@ import { AudioWaveform, Box, Check, FileWarning, Image as ImageIcon, Play, Star,
 import { memo, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { cn } from "@/components/nodes/ui/cn";
 import { assetFileUrl, assetThumbUrl } from "@/lib/assets/client/api";
+import { ensurePoster } from "@/lib/assets/client/poster";
 import { THUMB_WIDTHS, type AssetKind, type AssetView } from "@/lib/assets/types";
 import { VIDEO_HOVER_DELAY_MS } from "@/hooks/useVideoAutoplay";
 import { assetTitle, formatDuration, KIND_LABELS } from "./assetFormat";
@@ -28,6 +29,19 @@ export const KIND_ICONS: Record<AssetKind, typeof ImageIcon> = {
 export function thumbBucket(tileWidth: number, dpr: number = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1): 320 | 640 {
   const needed = tileWidth * dpr;
   return THUMB_WIDTHS.find((width) => width >= needed) ?? THUMB_WIDTHS[THUMB_WIDTHS.length - 1];
+}
+
+/** Videos this session has asked a poster for: once each, even when the capture fails. */
+const postersAsked = new Set<string>();
+
+/**
+ * The grid thumbnail. A video's comes from a poster the browser makes, so
+ * the URL changes once one exists: an image that failed before it did is
+ * asked for again, not served from memory.
+ */
+export function tileThumbUrl(asset: Pick<AssetView, "sha256" | "hasPoster">, tileWidth: number): string {
+  const url = assetThumbUrl(asset.sha256, thumbBucket(tileWidth));
+  return asset.hasPoster ? `${url}&poster=1` : url;
 }
 
 /** Kind-coloured stand-in: no thumbnail yet (204), a failed one, a missing file, audio. */
@@ -103,7 +117,18 @@ export const AssetTile = memo(function AssetTile({
   const [previewing, setPreviewing] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sha = asset?.sha256;
-  useEffect(() => setThumbFailed(false), [sha]);
+  const hasPoster = !!asset?.hasPoster;
+  useEffect(() => setThumbFailed(false), [sha, hasPoster]);
+  // A video on screen without a poster (recorded a moment ago, imported, or its
+  // capture failed) gets one made; onPosterReady then marks it and this tile reloads
+  const needsPoster = !!asset && asset.kind === "video" && !asset.hasPoster && !asset.missing;
+  useEffect(() => {
+    if (!needsPoster || !asset || postersAsked.has(asset.id)) return;
+    postersAsked.add(asset.id);
+    void ensurePoster(asset);
+    // Once per asset, whatever else about the record changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsPoster, asset?.id]);
   useEffect(() => () => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
   }, []);
@@ -154,7 +179,7 @@ export const AssetTile = memo(function AssetTile({
         {showThumb ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={assetThumbUrl(asset.sha256, thumbBucket(width))}
+            src={tileThumbUrl(asset, width)}
             alt=""
             loading="lazy"
             decoding="async"

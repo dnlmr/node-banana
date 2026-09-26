@@ -1747,13 +1747,18 @@ export function WorkflowCanvas() {
     }
 
     // A (bare) shows the Assets view; Shift+letters add nodes. Not while a
-    // dialog, the annotation editor or the tutorial is up over the canvas.
+    // dialog, the annotation editor or the tutorial is up over the canvas, nor
+    // while a menu or dropdown is open: it would stay mounted (and keep its
+    // document key listener, e.g. Enter adding a node) under the Assets view.
     if (
       event.key.toLowerCase() === "a" &&
       !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat &&
       !useWorkflowStore.getState().isModalOpen &&
       !useAnnotationStore.getState().isModalOpen &&
       !useFTUXStore.getState().tutorialActive &&
+      !connectionDrop &&
+      !nodeSearchMenu &&
+      !document.querySelector('[role="menu"], [role="listbox"], [data-dialog-overlay]') &&
       !(event.target instanceof Element && event.target.closest('[role="dialog"]'))
     ) {
       event.preventDefault();
@@ -1996,7 +2001,7 @@ export function WorkflowCanvas() {
 
         onNodesChange(changes);
       }
-  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, setShortcutsDialogOpen, undo, redo]);
+  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, setShortcutsDialogOpen, undo, redo, connectionDrop, nodeSearchMenu]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);

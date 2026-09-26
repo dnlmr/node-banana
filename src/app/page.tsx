@@ -17,6 +17,7 @@ import { anyWorkflowTabUnsaved } from "@/store/utils/workflowTabs";
 import { useAssetStore } from "@/store/assetStore";
 import { AssetsView } from "@/components/assets/AssetsView";
 import { watchFirstRecording } from "@/components/assets/FirstRunHint";
+import { unloadWarning } from "@/components/assets/unloadWarning";
 import { initAssetLibrary, pendingRecordings } from "@/lib/assets/client/recorder";
 
 export default function Home() {
@@ -70,9 +71,15 @@ function Editor() {
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       const { tabs, hasUnsavedChanges } = useWorkflowStore.getState();
-      // Unsaved tabs, or generations still on their way to the library
-      if (anyWorkflowTabUnsaved(tabs, { hasUnsavedChanges }) || pendingRecordings() > 0) {
+      // Unsaved tabs, or generations still on their way to the library, each said as what it is
+      const warning = unloadWarning({
+        unsavedTabs: anyWorkflowTabUnsaved(tabs, { hasUnsavedChanges }),
+        pendingRecordings: pendingRecordings(),
+      });
+      if (warning) {
         e.preventDefault();
+        // Browsers show their own words; this is the reason for anything that reads it
+        e.returnValue = warning;
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
