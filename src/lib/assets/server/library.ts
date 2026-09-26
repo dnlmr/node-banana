@@ -84,11 +84,11 @@ const MAX_TAIL_BYTES = 32 * 1024 * 1024;
 export const MISSING_TTL_MS = 30_000;
 export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type TrashHook = (file: string) => Promise<unknown>;
+export type TrashHook = (files: string[]) => Promise<unknown>;
 
 export interface AssetLibraryOptions {
   platform?: NodeJS.Platform;
-  /** Sends a file to the OS Trash (desktop.ts in production, a fake in tests). */
+  /** Sends files to the OS Trash in one go (desktop.ts in production, a fake in tests). */
   trash?: TrashHook;
   now?: () => number;
 }
@@ -286,6 +286,12 @@ export class AssetLibrary {
   private refreshPromise: Promise<void> | null = null;
   private isLoaded = false;
   private readonly idLocks = new KeyedMutex();
+  /**
+   * Per content hash: recording holds it from choosing a file to reuse until
+   * its record is indexed, and a delete holds it while deciding whether a
+   * file is still used and releasing it, so neither sees the other halfway.
+   */
+  readonly shaLocks = new KeyedMutex();
   /** Bumped on every change that can alter a query or facet result. */
   private revision = 0;
   private facetsCache: { revision: number; facets: AssetFacets } | null = null;
@@ -303,7 +309,7 @@ export class AssetLibrary {
   constructor(root: string, options: AssetLibraryOptions = {}) {
     this.layout = libraryLayout(root);
     this.platform = options.platform ?? process.platform;
-    this.trash = options.trash ?? (async (file) => (await import("./desktop")).trashFile(file));
+    this.trash = options.trash ?? (async (files) => (await import("./desktop")).trashFiles(files));
     this.now = options.now ?? Date.now;
     this.workflowTable = new WorkflowTable(this.layout.workflowsFile, this.platform);
     this.runs = new RunStore(this.layout, { assetFileFor: (sha256) => this.assetFileFor(sha256) });
@@ -1128,8 +1134,13 @@ export class AssetLibrary {
    * Bytes a surviving run's snapshot still references move into
    * `.nodebanana/media` instead of the OS Trash, so "open original workflow"
    * keeps working; a kept project file is copied there for the same reason.
+   * `purge` (the automatic 30-day empty) unlinks instead of using the OS
+   * Trash, so nothing asks for permissions at startup.
    */
-  async deleteRecords(ids: string[], options: { deleteProjectFiles?: boolean } = {}): Promise<AssetBulkResult> {
+  async deleteRecords(
+    ids: string[],
+    options: { deleteProjectFiles?: boolean; purge?: boolean } = {},
+  ): Promise<AssetBulkResult> {
     await this.ready();
     const removed: AssetRecord[] = [];
     const done = new Set<string>();
@@ -1159,7 +1170,7 @@ export class AssetLibrary {
     );
     await this.publish(lines);
     await this.collectRuns(removed.map((record) => record.runId));
-    await this.releaseFiles(removed, options.deleteProjectFiles === true);
+    await this.releaseFiles(removed, { deleteProjectFiles: options.deleteProjectFiles === true, purge: options.purge === true });
     const affected = [...new Set(ids)].filter((id) => done.has(id));
     return { affected: affected.length, ids: affected, errors };
   }
@@ -1195,36 +1206,59 @@ export class AssetLibrary {
     }
   }
 
-  private async releaseFiles(removed: AssetRecord[], deleteProjectFiles: boolean): Promise<void> {
+  private async releaseFiles(
+    removed: AssetRecord[],
+    options: { deleteProjectFiles: boolean; purge: boolean },
+  ): Promise<void> {
     if (!removed.length) return;
     const byFile = new Map<string, { record: AssetRecord; file: string; keep: boolean }>();
     for (const record of removed) {
       const file = this.filePath(record);
-      const keep = record.file.root === "external" && !deleteProjectFiles;
+      const keep = record.file.root === "external" && !options.deleteProjectFiles;
       if (file) byFile.set(pathKey(file, this.platform), { record, file, keep });
     }
     if (!byFile.size) return;
     const { hashes: referenced, incomplete } = await this.runs.referencedHashes();
-    for (const [key, { record, file, keep }] of byFile) {
-      if (this.byPath.get(key)?.size) continue;
-      if (!(await this.isOwnedFile(record, file))) continue;
-      try {
-        if (keep) {
-          // The project keeps its file; a snapshot that needs the bytes gets its own copy.
-          if (referenced.has(record.sha256)) await this.runs.retainCopy(record.sha256, record.ext, file);
-          continue;
+    // Held across the check and the release, so a recording that chose one of these files to reuse
+    // has indexed its record before we look (sorted, so two deletes never wait on each other).
+    const hashes = [...new Set([...byFile.values()].map(({ record }) => record.sha256))].sort();
+    const releases: (() => void)[] = [];
+    for (const sha256 of hashes) releases.push(await this.shaLocks.acquire(sha256));
+    try {
+      const toTrash: string[] = [];
+      for (const [key, { record, file, keep }] of byFile) {
+        if (this.byPath.get(key)?.size) continue;
+        if (!(await this.isOwnedFile(record, file))) continue;
+        try {
+          if (keep) {
+            // The project keeps its file; a snapshot that needs the bytes gets its own copy.
+            if (referenced.has(record.sha256)) await this.runs.retainCopy(record.sha256, record.ext, file);
+            continue;
+          }
+          // A snapshot that could not be read may need these bytes: keep them rather than guess.
+          const needed = referenced.has(record.sha256) || incomplete;
+          if (needed && (await this.runs.adoptFile(record.sha256, record.ext, file))) continue;
+          toTrash.push(file);
+        } catch (error) {
+          console.warn("[assets] could not remove", file, error);
         }
-        // A snapshot that could not be read may need these bytes: keep them rather than guess.
-        const needed = referenced.has(record.sha256) || incomplete;
-        if (needed && (await this.runs.adoptFile(record.sha256, record.ext, file))) continue;
-        await this.trash(file);
-      } catch (error) {
-        console.warn("[assets] could not remove", file, error);
       }
+      if (!toTrash.length) return;
+      if (options.purge) {
+        for (const file of toTrash) await unlinkWithRetry(file).catch((error) => console.warn("[assets] could not remove", file, error));
+      } else {
+        await this.trash(toTrash).catch((error) => console.warn("[assets] could not remove", toTrash, error));
+      }
+    } finally {
+      releases.forEach((release) => release());
     }
   }
 
-  /** Permanently deletes records that have been in the Trash longer than the retention period. */
+  /**
+   * Permanently deletes records that have been in the Trash longer than the
+   * retention period. It runs unprompted at startup, so it unlinks rather
+   * than use the OS Trash (whose Finder route asks for Automation rights).
+   */
   async emptyExpiredTrash(retentionMs: number = TRASH_RETENTION_MS): Promise<number> {
     await this.ready();
     const cutoff = this.now() - retentionMs;
@@ -1232,7 +1266,7 @@ export class AssetLibrary {
       .filter((record) => record.trashedAt !== undefined && record.trashedAt <= cutoff)
       .map((record) => record.id);
     if (!expired.length) return 0;
-    const result = await this.deleteRecords(expired);
+    const result = await this.deleteRecords(expired, { purge: true });
     return result.affected;
   }
 

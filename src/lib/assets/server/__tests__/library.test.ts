@@ -25,6 +25,7 @@ import {
   putRun,
   upsertWorkflowEntry,
 } from "../index";
+import { Ingestor } from "../ingest";
 import { AssetLibrary } from "../library";
 import { fakeRecord, installBridge, makePng, meta, runId, sha256, streamOf, tempDir } from "./helpers";
 
@@ -390,7 +391,71 @@ describe("permanent delete", () => {
       [old.asset.id]: "gone",
       [recent.asset.id]: "present",
     });
-    expect(trashedPaths()).toEqual([old.asset.displayPath]);
+    // Unprompted at startup: unlinked, never through the OS Trash (whose Finder route asks for permissions).
+    expect(trashedPaths()).toEqual([]);
+    expect(fs.existsSync(old.asset.displayPath)).toBe(false);
+    expect(fs.existsSync(recent.asset.displayPath)).toBe(true);
+  });
+
+  it("sends a whole batch to the OS Trash in one call", async () => {
+    const batches: string[][] = [];
+    const library = new AssetLibrary(root, {
+      trash: async (files) => {
+        batches.push(files);
+        files.forEach((file) => fs.rmSync(file));
+      },
+    });
+    await library.ready();
+    const made = [];
+    for (let i = 0; i < 3; i++) {
+      const record = fakeRecord({ createdAt: T0 + i });
+      const file = path.join(root, record.file.root === "library" ? record.file.rel : "");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Buffer.from(record.id));
+      made.push(await library.addRecord(record));
+    }
+    await library.deleteRecords(made.map((record) => record.id));
+    expect(batches).toHaveLength(1);
+    expect(batches[0].sort()).toEqual(made.map((record) => library.filePath(record)!).sort());
+    await library.drain();
+  });
+
+  it("never releases a file a concurrent recording has chosen to reuse", async () => {
+    const library = new AssetLibrary(root, {
+      trash: async (files) => ([] as string[]).concat(files).forEach((file) => fs.rmSync(file)),
+    });
+    await library.ready();
+    const ingest = new Ingestor({ library: () => library, thumbs: () => null, isPaused: () => false });
+    const recordWith = async (buffer: Buffer) => {
+      const started = await ingest.begin({ meta: meta(), source: { type: "upload" } });
+      if (!("ticket" in started)) throw new Error("expected a ticket");
+      return ingest.complete(started.ticket.uploadId, streamOf(buffer), "image/png");
+    };
+    const png = makePng(3, 3, 71);
+    const trashed = await recordWith(png);
+    await library.patch(trashed.asset.id, { trashed: true });
+
+    // Hold the second recording between choosing the file and indexing its record.
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let arrived!: () => void;
+    const atIndex = new Promise<void>((resolve) => (arrived = resolve));
+    const addRecord = library.addRecord.bind(library);
+    vi.spyOn(library, "addRecord").mockImplementation(async (record) => {
+      arrived();
+      await gate;
+      return addRecord(record);
+    });
+    const second = recordWith(png);
+    await atIndex;
+    const emptying = library.deleteRecords([trashed.asset.id]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    open();
+    const [saved] = await Promise.all([second, emptying]);
+    expect(saved.reusedFile).toBe(true);
+    expect(saved.asset.displayPath).toBe(trashed.asset.displayPath);
+    expect(fs.existsSync(saved.asset.displayPath)).toBe(true);
+    await library.drain();
   });
 });
 

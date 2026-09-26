@@ -28,7 +28,6 @@ import { LibraryError } from "./errors";
 import {
   commitPartial,
   discardPartial,
-  KeyedMutex,
   streamToPartial,
   sweepStaleTemps,
   unlinkWithRetry,
@@ -89,7 +88,6 @@ function withoutUndefined<T extends object>(value: T): T {
 
 export class Ingestor {
   private readonly tickets = new Map<string, Ticket>();
-  private readonly shaLocks = new KeyedMutex();
   private readonly sweptDirs = new Set<string>();
   private active = 0;
   private idleWaiters: (() => void)[] = [];
@@ -271,7 +269,8 @@ export class Ingestor {
     }
     const type = decideMediaType({ head: streamed.head, kind: meta.kind, hintMime: hints.mime, hintExt: hints.ext });
 
-    return this.shaLocks.run(streamed.sha256, async () => {
+    // The library's lock, which a permanent delete takes too before it releases a file with these bytes.
+    return library.shaLocks.run(streamed.sha256, async () => {
       const existing = await library.find(meta.id);
       if (existing) {
         await discardPartial(streamed);

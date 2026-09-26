@@ -12,7 +12,7 @@ import { execFile, type ExecFileOptions } from "child_process";
 import { promises as fs } from "fs";
 import path from "path";
 import type { DesktopServerBridge } from "../types";
-import { LibraryError } from "./errors";
+import { errnoCode, LibraryError } from "./errors";
 import { unlinkWithRetry } from "./fsutil";
 
 export type ExecRunner = (
@@ -107,59 +107,137 @@ export async function openFolder(dir: string, deps: DesktopDeps = {}): Promise<v
 
 export type TrashMethod = "bridge" | "os" | "unlink";
 
+/** Every path in argv, deleted by Finder in one Apple Event. */
 const MAC_FINDER_DELETE = [
   "-e",
   "on run argv",
   "-e",
-  'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)',
+  "set targets to {}",
+  "-e",
+  "repeat with p in argv",
+  "-e",
+  "set end of targets to ((POSIX file (contents of p)) as alias)",
+  "-e",
+  "end repeat",
+  "-e",
+  'tell application "Finder" to delete targets',
   "-e",
   "end run",
 ];
 
+/** Every newline-separated path in NB_TRASH_PATHS to the Recycle Bin (Windows paths can't hold a newline). */
 const WINDOWS_RECYCLE =
   "Add-Type -AssemblyName Microsoft.VisualBasic; " +
-  "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:NB_TRASH_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin')";
+  "foreach ($p in ($env:NB_TRASH_PATHS -split \"`n\")) { if ($p) { try { " +
+  "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin') " +
+  "} catch { } } }";
 
-/**
- * Sends a file to the OS Trash/Recycle Bin, so a permanent delete in the app
- * stays recoverable from the system. Falls back to unlinking only when every
- * trash route fails (no Finder, no gio).
- */
-export async function trashFile(file: string, deps: DesktopDeps = {}): Promise<TrashMethod> {
-  const { platform, exec, bridge } = resolveDeps(deps);
-  if (bridge) {
-    try {
-      const result = await bridge.request("trash", { path: file });
-      if (result.ok) return "bridge";
-    } catch {
-      // Fall through to the OS tools.
+/** Paths per trash process: well under argv limits, and under Windows' 32,767-character variable. */
+const TRASH_BATCH_FILES = 200;
+const TRASH_BATCH_CHARS = 30_000;
+
+function batches(files: string[]): string[][] {
+  const out: string[][] = [];
+  let current: string[] = [];
+  let chars = 0;
+  for (const file of files) {
+    if (current.length && (current.length >= TRASH_BATCH_FILES || chars + file.length + 1 > TRASH_BATCH_CHARS)) {
+      out.push(current);
+      current = [];
+      chars = 0;
     }
+    current.push(file);
+    chars += file.length + 1;
   }
-  const attempts: (() => Promise<void>)[] = [];
+  if (current.length) out.push(current);
+  return out;
+}
+
+/** The OS routes for a batch, in order of preference. */
+function trashRoutes(platform: NodeJS.Platform, exec: ExecRunner): ((files: string[]) => Promise<void>)[] {
   if (platform === "darwin") {
     // macOS 15+ ships /usr/bin/trash; Finder via AppleScript covers older systems.
-    attempts.push(() => exec("/usr/bin/trash", [file], {}));
-    attempts.push(() => exec("osascript", [...MAC_FINDER_DELETE, file], {}));
-  } else if (platform === "win32") {
-    attempts.push(() =>
-      exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_RECYCLE], {
-        env: { ...process.env, NB_TRASH_PATH: file },
-      }),
-    );
-  } else {
-    attempts.push(() => exec("gio", ["trash", file], {}));
+    return [
+      (files) => exec("/usr/bin/trash", files, {}),
+      (files) => exec("osascript", [...MAC_FINDER_DELETE, ...files], {}),
+    ];
   }
-  for (const attempt of attempts) {
+  if (platform === "win32") {
+    return [
+      (files) =>
+        exec("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_RECYCLE], {
+          env: { ...process.env, NB_TRASH_PATHS: files.join("\n") },
+        }),
+    ];
+  }
+  return [(files) => exec("gio", ["trash", ...files], {})];
+}
+
+/**
+ * Sends files to the OS Trash/Recycle Bin, so a permanent delete in the app
+ * stays recoverable from the system. One tool process takes a whole batch
+ * (not one per file). Each file falls back to unlinking only when every
+ * trash route failed to move it (no Finder, no gio). Returns how each file
+ * went; a file missing from the result could not be removed at all.
+ */
+export async function trashFiles(files: readonly string[], deps: DesktopDeps = {}): Promise<Map<string, TrashMethod>> {
+  const { platform, exec, bridge } = resolveDeps(deps);
+  const results = new Map<string, TrashMethod>();
+  let pending = [...new Set(files)];
+  if (bridge) {
+    const left: string[] = [];
+    for (const file of pending) {
+      try {
+        const result = await bridge.request("trash", { path: file });
+        if (result.ok) {
+          results.set(file, "bridge");
+          continue;
+        }
+      } catch {
+        // Fall through to the OS tools.
+      }
+      left.push(file);
+    }
+    pending = left;
+  }
+  for (const route of trashRoutes(platform, exec)) {
+    if (!pending.length) break;
+    for (const batch of batches(pending)) {
+      try {
+        await route(batch);
+      } catch (error) {
+        // One bad path can fail a whole batch; retry its files one by one, unless the tool itself is missing.
+        if (batch.length > 1 && errnoCode(error) !== "ENOENT") {
+          for (const file of batch) {
+            if (await exists(file)) await route([file]).catch(() => {});
+          }
+        }
+      }
+    }
+    // A tool can exit 0 without moving anything (a declined Automation prompt), or move only some.
+    const left: string[] = [];
+    for (const file of pending) {
+      if (await exists(file)) left.push(file);
+      else results.set(file, "os");
+    }
+    pending = left;
+  }
+  for (const file of pending) {
     try {
-      await attempt();
-      // A tool can exit 0 without moving anything (a declined Automation prompt).
-      if (!(await exists(file))) return "os";
-    } catch {
-      // Try the next route.
+      await unlinkWithRetry(file);
+      results.set(file, "unlink");
+    } catch (error) {
+      console.warn("[assets] could not remove", file, error);
     }
   }
-  await unlinkWithRetry(file);
-  return "unlink";
+  return results;
+}
+
+/** {@link trashFiles} for one file; throws when it could not be removed. */
+export async function trashFile(file: string, deps: DesktopDeps = {}): Promise<TrashMethod> {
+  const method = (await trashFiles([file], deps)).get(file);
+  if (!method) throw new LibraryError(`Could not remove ${path.basename(file)}`, 500, "trash_failed");
+  return method;
 }
 
 async function exists(file: string): Promise<boolean> {

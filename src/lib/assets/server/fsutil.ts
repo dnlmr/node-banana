@@ -418,6 +418,13 @@ export class KeyedMutex {
     return result;
   }
 
+  /** Waits for `key` and holds it until the returned function is called (for holding several keys at once). */
+  acquire(key: string): Promise<() => void> {
+    return new Promise((acquired) => {
+      void this.run(key, () => new Promise<void>((release) => acquired(release)));
+    });
+  }
+
   get size(): number {
     return this.tails.size;
   }
