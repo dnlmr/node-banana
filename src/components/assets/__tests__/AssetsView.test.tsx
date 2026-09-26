@@ -22,9 +22,13 @@ vi.mock("@/lib/assets/client/api", () => api);
 const recorder = vi.hoisted(() => ({
   listener: null as ((result: unknown) => void) | null,
   statusListener: null as ((status: unknown) => void) | null,
+  /** What the recorder last heard; may be older than the server's answer. */
+  known: null as unknown,
+  applyLibraryStatus: vi.fn(),
 }));
 vi.mock("@/lib/assets/client/recorder", () => ({
-  getRecorderLibraryStatus: () => null,
+  getRecorderLibraryStatus: () => recorder.known,
+  applyLibraryStatus: recorder.applyLibraryStatus,
   onAssetRecorded: (listener: (result: unknown) => void) => {
     recorder.listener = listener;
     return () => {
@@ -141,6 +145,7 @@ async function renderView(assets: AssetView[] = [asset("a3"), asset("a2"), asset
 
 beforeEach(() => {
   vi.clearAllMocks();
+  recorder.known = null;
   __resetPosterRequestsForTests();
   useAssetStore.setState({ ...initial, appView: "assets" }, true);
   api.fetchFacets.mockResolvedValue(facets());
@@ -489,6 +494,28 @@ describe("AssetsView", () => {
     expect(tile("a2")).toBeNull();
     expect(screen.queryByRole("toolbar", { name: "Selected assets" })).not.toBeInTheDocument();
     expect(screen.getByText("/Volumes/Work/Node Banana")).toBeInTheDocument();
+  });
+
+  it("comes back on a fresh library status, not the recorder's copy from before a move ended", async () => {
+    const view = await renderView();
+    await waitFor(() => expect(useAssetStore.getState().loadedRoot).toBe("/Users/me/Pictures/Node Banana"));
+    fireEvent.click(tile("a2"), { metaKey: true });
+    view.unmount();
+
+    // The recorder last heard of the library mid-move: still the old folder, the job running
+    const moving = { id: "mv1", type: "move" as const, state: "running" as const, done: 1, total: 9, bytesDone: 0, bytesTotal: 0, startedAt: 1 };
+    recorder.known = library({ root: "/Volumes/Old/Node Banana", job: moving });
+    const loads = () => api.fetchAssetPage.mock.calls.filter(([query]) => !("newerThan" in query)).length;
+    const before = loads();
+    render(<AssetsView />);
+    await waitFor(() => expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    // The list and the selection stay; no finished move is followed again
+    expect(useAssetStore.getState().library?.root).toBe("/Users/me/Pictures/Node Banana");
+    expect(useAssetStore.getState().selection).toEqual({ mode: "ids", ids: ["a2"] });
+    expect(loads()).toBe(before);
+    expect(useAssetStore.getState().job).toBeNull();
+    expect(screen.queryByText(/Moving library/)).not.toBeInTheDocument();
   });
 
   it("follows an import started in Settings once its dialog closes, and shows what it brought", async () => {

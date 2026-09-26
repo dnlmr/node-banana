@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as api from "@/lib/assets/client/api";
+import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import { sameQuery } from "@/lib/assets/query";
 import type {
   AssetBulkOp,
@@ -485,6 +486,8 @@ function errorMessage(error: unknown, fallback: string): string {
 /** Bumped per refresh; a response for an older one is dropped. */
 let requestSeq = 0;
 let refreshController: AbortController | null = null;
+/** The library root known when the refresh under way (refreshController) was asked for. */
+let refreshRoot: string | null = null;
 let facetsTimer: ReturnType<typeof setTimeout> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let jobTimer: ReturnType<typeof setTimeout> | null = null;
@@ -494,6 +497,9 @@ let trackedJobId: string | null = null;
 const settledJobs = new Set<string>();
 /** When the request behind the loaded list went out: a job that finished later changed what it should show. */
 let listSince = 0;
+/** Library statuses in the order they were asked for (or handed in): an older answer landing late is dropped. */
+let statusSeq = 0;
+let appliedStatusSeq = 0;
 /** Jobs that change which assets exist, or where. */
 const LIST_JOBS: ReadonlySet<LibraryJobType> = new Set(["import", "cleanup", "move"]);
 
@@ -550,7 +556,9 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
    */
   const adoptJob = (job: LibraryJobStatus | null) => {
     if (job?.state === "running") {
-      if (trackedJobId !== job.id) get().trackJob(job);
+      // One already seen to its end is only a late report (a status asked before it ended): following it again would
+      // show its progress and its notice a second time
+      if (trackedJobId !== job.id && !settledJobs.has(job.id)) get().trackJob(job);
       return;
     }
     const current = get().job;
@@ -578,7 +586,9 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     const { loadedRoot, status, appView } = get();
     // A list loaded before any status came is taken to be from the first library reported
     if (loadedRoot === null && previous === null && status !== "idle" && next.root) set({ loadedRoot: next.root });
-    const moved = loadedRoot !== null && next.root !== loadedRoot;
+    // The list on its way, when one is loading: one asked for after this root was known needs no second reload
+    const listRoot = refreshController ? refreshRoot : loadedRoot;
+    const moved = listRoot !== null && next.root !== listRoot;
     const cameOrWent = previous !== null && previous.available !== next.available;
     // Undo replays actions on the library they were taken in, never on this one
     if (moved || cameOrWent) set({ undoStack: [] });
@@ -837,6 +847,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       lastLoadFailure = 0;
       const query = currentQuery();
       const root = get().library?.root ?? null;
+      refreshRoot = root;
       listSince = Date.now();
       // "Select all matching" belongs to the query it was made for
       set((state) => ({
@@ -869,7 +880,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
           totalBytes: page.totalBytes,
           status: "ready",
           loadedQuery: query,
-          loadedRoot: root,
+          // Asked before the library was known: it came from the one known now
+          loadedRoot: root ?? state.library?.root ?? null,
           arrivals: [],
           // A new list starts at the top, even when no grid is mounted to scroll
           // (an empty result shows no grid, and the next one mounts it afresh)
@@ -1138,14 +1150,26 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
     },
 
     refreshLibrary: async () => {
+      const seq = ++statusSeq;
+      let status: LibraryStatus;
       try {
-        applyLibrary(await api.fetchLibraryStatus());
+        status = await api.fetchLibraryStatus();
       } catch {
         // The recorder's status (if any) stands
+        return;
       }
+      // A newer one (asked later, or handed in by Settings meanwhile) already applies
+      if (seq < appliedStatusSeq) return;
+      appliedStatusSeq = seq;
+      applyLibrary(status);
+      // The recorder follows these reads too: otherwise it keeps a status from before a move or a job
+      // ended, and does not record while it thinks the library is still away
+      applyLibraryStatus(status);
     },
 
     setLibrary: (library) => {
+      // Handed in: newer than any read still under way, unless it is what applies already (the recorder echoing one)
+      if (!library || JSON.stringify(library) !== JSON.stringify(get().library)) appliedStatusSeq = ++statusSeq;
       if (library) applyLibrary(library);
       else set({ library: null });
     },

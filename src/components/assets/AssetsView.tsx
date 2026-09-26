@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/shallow";
 import { clearGenerationToasts } from "@/components/GenerationToast";
 import { onPosterReady } from "@/lib/assets/client/poster";
-import { getRecorderLibraryStatus, onAssetRecorded, onLibraryStatus } from "@/lib/assets/client/recorder";
+import { onAssetRecorded, onLibraryStatus } from "@/lib/assets/client/recorder";
 import { sameQuery } from "@/lib/assets/query";
 import { ARRIVALS_POLL_MS, buildAssetQuery, selectionCount, useAssetStore } from "@/store/assetStore";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -193,16 +193,14 @@ export function AssetsView() {
 
   useEffect(() => {
     const store = useAssetStore.getState();
-    // What the recorder knows first: a library switched meanwhile reloads the list
-    const known = getRecorderLibraryStatus();
-    if (known) store.setLibrary(known);
-    const state = useAssetStore.getState();
-    const query = buildAssetQuery(state.filters, state.sort);
+    const query = buildAssetQuery(store.filters, store.sort);
     // Coming back to the same query keeps what was loaded (and where the user was)
-    if (state.status === "ready" && state.loadedQuery && sameQuery(state.loadedQuery, query)) void store.pollArrivals();
-    else if (state.status !== "loading") void store.refresh();
+    if (store.status === "ready" && store.loadedQuery && sameQuery(store.loadedQuery, query)) void store.pollArrivals();
+    else if (store.status !== "loading") void store.refresh();
     void store.refreshFacets();
-    // A job running (from Settings, say) is followed; one that ended since the list loaded reloads it
+    // Where the library is now and what it runs, asked afresh rather than taken from the recorder, whose copy
+    // may be from before a move or a job ended: a switch meanwhile reloads the list, a running job is followed,
+    // one that ended since the list loaded reloads it
     void store.refreshLibrary();
     clearGenerationToasts();
     // A detail left open takes focus itself

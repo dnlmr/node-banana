@@ -13,6 +13,9 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/assets/client/api", () => api);
 
+const recorder = vi.hoisted(() => ({ applyLibraryStatus: vi.fn() }));
+vi.mock("@/lib/assets/client/recorder", () => recorder);
+
 import {
   DEFAULT_FILTERS,
   buildAssetQuery,
@@ -696,6 +699,66 @@ describe("library jobs and switches", () => {
 
     // The same folder again changes nothing
     useAssetStore.getState().setLibrary(status({ root: "/Volumes/Other/Node Banana" }));
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("never follows a job again once it has seen it end, whatever late status still calls it running", async () => {
+    vi.useFakeTimers();
+    try {
+      api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: job({ id: "late" }) }));
+      await useAssetStore.getState().refreshLibrary();
+      const finished = job({ id: "late", state: "done", done: 10, finishedAt: Date.now() });
+      api.fetchJob.mockResolvedValueOnce(finished);
+      api.fetchAssetPage.mockResolvedValue(page([asset("a2"), asset("a1")]));
+      api.fetchLibraryStatus.mockResolvedValueOnce(status({ job: finished }));
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.waitFor(() => expect(useAssetStore.getState().notice?.message).toBe("Imported 10 files"));
+      const notice = useAssetStore.getState().notice;
+      const pages = api.fetchAssetPage.mock.calls.length;
+
+      // Settings' answer from while it ran, say, handed in through the recorder
+      useAssetStore.getState().setLibrary(status({ job: job({ id: "late" }) }));
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(useAssetStore.getState().job).toMatchObject({ id: "late", state: "done" });
+      expect(api.fetchJob).toHaveBeenCalledTimes(1);
+      expect(useAssetStore.getState().notice).toBe(notice);
+      expect(api.fetchAssetPage).toHaveBeenCalledTimes(pages);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hands its reads to the recorder, and drops one that lands after a newer status", async () => {
+    let answer!: (value: LibraryStatus) => void;
+    api.fetchLibraryStatus.mockReturnValueOnce(new Promise<LibraryStatus>((resolve) => (answer = resolve)));
+    const late = useAssetStore.getState().refreshLibrary();
+    // Settings switched the library while that read was out
+    api.fetchAssetPage.mockResolvedValue(page([asset("b1")]));
+    useAssetStore.getState().setLibrary(status({ root: "/new" }));
+    answer(status());
+    await late;
+    expect(useAssetStore.getState().library?.root).toBe("/new");
+    expect(recorder.applyLibraryStatus).not.toHaveBeenCalled();
+
+    api.fetchLibraryStatus.mockResolvedValueOnce(status({ root: "/new", counts: { assets: 1, trashed: 0, bytes: 0 } }));
+    await useAssetStore.getState().refreshLibrary();
+    expect(recorder.applyLibraryStatus).toHaveBeenCalledWith(expect.objectContaining({ root: "/new", counts: { assets: 1, trashed: 0, bytes: 0 } }));
+  });
+
+  it("loads the new library's list once, however often its status comes while that list is on its way", async () => {
+    useAssetStore.getState().toggleSelect("a2");
+    let deliver!: (value: AssetPage) => void;
+    api.fetchAssetPage.mockReturnValueOnce(new Promise<AssetPage>((resolve) => (deliver = resolve)));
+    api.fetchLibraryStatus.mockResolvedValue(status({ root: "/new" }));
+    await useAssetStore.getState().refreshLibrary();
+    expect(useAssetStore.getState().selection).toEqual({ mode: "ids", ids: [] });
+    // The recorder echoing it, and the next 5 s read, before the list lands
+    useAssetStore.getState().setLibrary(status({ root: "/new" }));
+    await useAssetStore.getState().refreshLibrary();
+    expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
+    deliver(page([asset("b1")]));
+    await vi.waitFor(() => expect(ids()).toEqual(["b1"]));
+    expect(useAssetStore.getState().loadedRoot).toBe("/new");
     expect(api.fetchAssetPage).toHaveBeenCalledTimes(2);
   });
 
