@@ -460,9 +460,27 @@ describe("nanoBanana", () => {
     await vi.waitFor(() => {
       expect((nodes.get("gen-1")!.data as { imageHistory: { id: string }[] }).imageHistory).toEqual([older]);
     });
-    expect((nodes.get("gen-1")!.data as { selectedHistoryIndex: number }).selectedHistoryIndex).toBe(0);
+    // The node still shows the new image, so the selection names no entry rather than the older one
+    expect(nodes.get("gen-1")!.data).toMatchObject({ outputImage: "data:image/png;base64,fox", selectedHistoryIndex: -1 });
     expect(ctx.trackSaveGeneration).not.toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("outside a project, keeps a selection on another entry on that entry when a failed one goes", async () => {
+    const { recordAsset, settle } = heldRecorder();
+    const entry = (id: string) => ({ id, assetId: `a-${id}`, timestamp: 1, prompt: "", aspectRatio: "1:1", model: "m" });
+    const { ctx, nodes } = makeCtx(imageNode({ imageHistory: [entry("b"), entry("c")], selectedHistoryIndex: 0 }), { recordAsset });
+    mockFetch.mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }));
+
+    await executeNanoBanana(ctx);
+    // The user steps back to "c" (index 2) before the recording fails
+    ctx.updateNodeData("gen-1", { selectedHistoryIndex: 2 });
+    settle(null);
+
+    await vi.waitFor(() => {
+      expect((nodes.get("gen-1")!.data as { imageHistory: { id: string }[] }).imageHistory.map((e) => e.id)).toEqual(["b", "c"]);
+    });
+    expect((nodes.get("gen-1")!.data as { selectedHistoryIndex: number }).selectedHistoryIndex).toBe(1);
   });
 
   it("tags each batch item's asset with its index", async () => {

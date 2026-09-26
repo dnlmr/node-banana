@@ -190,8 +190,10 @@ function forgetFailedAsset(ctx: NodeExecutionContext, field: CarouselField, asse
   }
   const selectedField = SELECTED_INDEX[field];
   const selected = typeof data?.[selectedField] === "number" ? (data[selectedField] as number) : 0;
-  // The selection stays on its entry; one on the dropped entry moves to the newest
-  const nextSelected = selected > index ? selected - 1 : selected === index ? 0 : selected;
+  // The selection stays on its entry. One on the dropped entry names none
+  // (-1): the node still shows that output, which is no longer in the list,
+  // and pointing at another generation would put the counter at odds with it.
+  const nextSelected = selected > index ? selected - 1 : selected === index ? -1 : selected;
   ctx.updateNodeData(ctx.node.id, {
     [field]: history.filter((_, i) => i !== index),
     [selectedField]: nextSelected,
