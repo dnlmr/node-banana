@@ -33,11 +33,9 @@ export const JOB_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 const DEFAULT_CODES: Record<number, string> = {
   400: "bad_request",
-  403: "forbidden",
   404: "not_found",
   413: "too_large",
   415: "unsupported_media_type",
-  416: "range_not_satisfiable",
 };
 
 /** An expected failure raised by the route itself (bad input, not found). */

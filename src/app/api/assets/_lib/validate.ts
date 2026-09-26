@@ -54,7 +54,7 @@ export const MAX_RUN_MEDIA_HASHES = 50_000;
 
 type Json = Record<string, unknown>;
 
-export function isObject(value: unknown): value is Json {
+function isObject(value: unknown): value is Json {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
