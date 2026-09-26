@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { WorkflowTabs } from "@/components/WorkflowTabs";
 import type { WorkflowTab } from "@/store/utils/workflowTabs";
+import { useAssetStore } from "@/store/assetStore";
 
 const mockSwitchTab = vi.fn();
 const mockCloseTab = vi.fn();
@@ -171,6 +172,77 @@ describe("WorkflowTabs", () => {
     });
     render(<WorkflowTabs />);
     expect(mockSetViewport).toHaveBeenCalledWith(incoming);
+  });
+
+  describe("Assets entry", () => {
+    beforeEach(() => useAssetStore.setState({ appView: "canvas" }));
+    afterEach(() => useAssetStore.setState({ appView: "canvas" }));
+
+    it("leads the strip as a toggle button, not a tab", () => {
+      render(<WorkflowTabs />);
+      const assets = screen.getByRole("button", { name: "Assets" });
+      expect(assets).toHaveAttribute("aria-pressed", "false");
+      expect(assets).not.toHaveAttribute("role", "tab");
+      // Before the first workflow tab, and the tabs are still only the workflows
+      expect(assets.compareDocumentPosition(screen.getAllByRole("tab")[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getAllByRole("tab")).toHaveLength(2);
+    });
+
+    it("shows Assets, and a second click goes back to the canvas", () => {
+      render(<WorkflowTabs />);
+      fireEvent.click(screen.getByRole("button", { name: "Assets" }));
+      expect(useAssetStore.getState().appView).toBe("assets");
+      expect(screen.getByRole("button", { name: "Assets" })).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(screen.getByRole("button", { name: "Assets" }));
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    });
+
+    it("takes the shown look from the live tab while Assets shows, without changing which tab is live", () => {
+      useAssetStore.setState({ appView: "assets" });
+      render(<WorkflowTabs />);
+      const [, live] = screen.getAllByRole("tab");
+      expect(live).toHaveAttribute("aria-selected", "true");
+      expect(live!.className).not.toContain("bg-canvas-bg");
+      expect(screen.getByRole("button", { name: "Assets" }).className).toContain("bg-canvas-bg");
+    });
+
+    it("goes back to the canvas from the live tab without switching", () => {
+      useAssetStore.setState({ appView: "assets" });
+      render(<WorkflowTabs />);
+      fireEvent.click(screen.getByText("Product shots"));
+      expect(useAssetStore.getState().appView).toBe("canvas");
+      expect(mockSwitchTab).not.toHaveBeenCalled();
+    });
+
+    it("goes back to the canvas and switches from a parked tab", () => {
+      useAssetStore.setState({ appView: "assets" });
+      render(<WorkflowTabs />);
+      fireEvent.click(screen.getByText("Summer campaign"));
+      expect(useAssetStore.getState().appView).toBe("canvas");
+      expect(mockSwitchTab).toHaveBeenCalledWith("tab-1");
+    });
+
+    it("goes back to the canvas from the plus and from closing a tab", () => {
+      useAssetStore.setState({ appView: "assets" });
+      render(<WorkflowTabs />);
+      fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+      expect(useAssetStore.getState().appView).toBe("canvas");
+      expect(mockNewTab).toHaveBeenCalled();
+
+      useAssetStore.setState({ appView: "assets" });
+      fireEvent.click(screen.getByRole("button", { name: "Close Product shots" }));
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    });
+
+    it("keeps the live tab usable during a run, so the way back is never blocked", () => {
+      useState({ isRunning: true });
+      useAssetStore.setState({ appView: "assets" });
+      render(<WorkflowTabs />);
+      expect(screen.getByText("Product shots")).not.toBeDisabled();
+      expect(screen.getByText("Summer campaign")).toBeDisabled();
+      fireEvent.click(screen.getByText("Product shots"));
+      expect(useAssetStore.getState().appView).toBe("canvas");
+    });
   });
 
   it("blocks switching, closing and opening while a run is in flight", () => {

@@ -1,0 +1,183 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render } from "@testing-library/react";
+import { ReactFlowProvider } from "@xyflow/react";
+import { WorkflowCanvas } from "@/components/WorkflowCanvas";
+import { useAssetStore } from "@/store/assetStore";
+
+/**
+ * The canvas stays mounted (inert, invisible) under the Assets view, and its
+ * window-level key handler must not act on the hidden graph. Rendered the
+ * way WorkflowCanvas.test.tsx renders it, with the store mocked; the
+ * Assets view's side of the contract (the modal count it holds) is
+ * modelled by `isModalOpen`.
+ */
+
+const mocks = vi.hoisted(() => ({
+  state: {} as Record<string, unknown>,
+  reactFlowProps: { current: null as Record<string, unknown> | null },
+}));
+
+const mockAddNode = vi.fn().mockReturnValue("new-node-id");
+const mockExecuteWorkflow = vi.fn();
+const mockCopySelectedNodes = vi.fn();
+const mockPasteNodes = vi.fn();
+const mockUndo = vi.fn();
+const mockRedo = vi.fn();
+const mockOnNodesChange = vi.fn();
+const mockSetShortcutsDialogOpen = vi.fn();
+
+vi.mock("@/store/workflowStore", () => {
+  const useWorkflowStore = (selector?: (state: unknown) => unknown) => (selector ? selector(mocks.state) : mocks.state);
+  useWorkflowStore.setState = vi.fn();
+  useWorkflowStore.getState = () => mocks.state;
+  return { useWorkflowStore };
+});
+
+vi.mock("@xyflow/react", async () => {
+  const actual = await vi.importActual<typeof import("@xyflow/react")>("@xyflow/react");
+  const React = await vi.importActual<typeof import("react")>("react");
+  return {
+    ...actual,
+    ReactFlow: (props: Record<string, unknown>) => {
+      mocks.reactFlowProps.current = props;
+      return React.createElement(actual.ReactFlow, props);
+    },
+    useStore: (selector: (state: { transform: [number, number, number]; nodeLookup: Map<string, unknown> }) => unknown) =>
+      selector({ transform: [0, 0, 1], nodeLookup: new Map() }),
+    useUpdateNodeInternals: () => vi.fn(),
+    useReactFlow: () => ({
+      screenToFlowPosition: (pos: unknown) => pos,
+      getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+      zoomIn: vi.fn(),
+      zoomOut: vi.fn(),
+      setViewport: vi.fn(),
+    }),
+  };
+});
+
+vi.mock("@/components/ConnectionDropMenu", () => ({ ConnectionDropMenu: () => null }));
+vi.mock("@/components/MultiSelectToolbar", () => ({ MultiSelectToolbar: () => null }));
+vi.mock("@/components/GlobalImageHistory", () => ({ GlobalImageHistory: () => null }));
+vi.mock("@/components/GroupsOverlay", () => ({ GroupBackgroundsPortal: () => null, GroupControlsOverlay: () => null }));
+vi.mock("@/components/quickstart", () => ({ WelcomeModal: () => null }));
+vi.mock("@/utils/logger", () => ({ logger: { log: vi.fn(), error: vi.fn() } }));
+
+function state(overrides: Record<string, unknown> = {}) {
+  return {
+    nodes: [{ id: "image-1", type: "imageInput", position: { x: 0, y: 0 }, data: {}, selected: true }],
+    edges: [],
+    groups: {},
+    onNodesChange: mockOnNodesChange,
+    onEdgesChange: vi.fn(),
+    onConnect: vi.fn(),
+    addNode: mockAddNode,
+    updateNodeData: vi.fn(),
+    loadWorkflow: vi.fn(),
+    getNodeById: vi.fn(),
+    addToGlobalHistory: vi.fn(),
+    setNodeGroupId: vi.fn(),
+    executeWorkflow: mockExecuteWorkflow,
+    isModalOpen: false,
+    showQuickstart: false,
+    setShowQuickstart: vi.fn(),
+    setHoveredNodeId: vi.fn(),
+    copySelectedNodes: mockCopySelectedNodes,
+    pasteNodes: mockPasteNodes,
+    clearClipboard: vi.fn(),
+    clipboard: { nodes: [{ id: "copied" }], edges: [] },
+    undo: mockUndo,
+    redo: mockRedo,
+    setShortcutsDialogOpen: mockSetShortcutsDialogOpen,
+    providerSettings: { providers: {} },
+    edgeStyle: "angular",
+    edgeAppearance: { thickness: "regular", fadedOpacity: 0.25, gradient: true, loadingPulse: true },
+    currentNodeIds: [],
+    navigationTarget: null,
+    setNavigationTarget: vi.fn(),
+    getNodesWithComments: vi.fn(() => []),
+    markCommentViewed: vi.fn(),
+    canvasNavigationSettings: { panMode: "space", zoomMode: "altScroll", selectionMode: "click" },
+    dimmedNodeIds: new Set<string>(),
+    skippedNodeIds: new Set<string>(),
+    applyEditOperations: vi.fn(() => ({ applied: 0, skipped: [] })),
+    setWorkflowMetadata: vi.fn(),
+    ...overrides,
+  };
+}
+
+const renderCanvas = () =>
+  render(
+    <ReactFlowProvider>
+      <WorkflowCanvas />
+    </ReactFlowProvider>,
+  );
+
+describe("WorkflowCanvas behind the Assets view", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.state = state();
+    useAssetStore.setState({ appView: "canvas" });
+  });
+  afterEach(() => {
+    useAssetStore.setState({ appView: "canvas" });
+  });
+
+  it("ignores its shortcuts while Assets shows: paste, add node, run, copy, undo", () => {
+    const read = vi.fn().mockResolvedValue([]);
+    Object.defineProperty(navigator, "clipboard", { value: { read }, configurable: true, writable: true });
+    // As page.tsx does: Assets shows, and the modal count is held
+    mocks.state = state({ isModalOpen: true });
+    useAssetStore.setState({ appView: "assets" });
+    renderCanvas();
+
+    fireEvent.keyDown(window, { key: "v", metaKey: true });
+    fireEvent.keyDown(window, { key: "g", shiftKey: true });
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(window, { key: "c", metaKey: true });
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    fireEvent.keyDown(window, { key: "?" });
+
+    expect(mockPasteNodes).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(mockAddNode).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCopySelectedNodes).not.toHaveBeenCalled();
+    expect(mockUndo).not.toHaveBeenCalled();
+    expect(mockSetShortcutsDialogOpen).not.toHaveBeenCalled();
+  });
+
+  it("leaves Delete to nothing: React Flow's delete key is off while the view holds the modal count", () => {
+    mocks.state = state({ isModalOpen: true });
+    useAssetStore.setState({ appView: "assets" });
+    renderCanvas();
+    expect(mocks.reactFlowProps.current!.deleteKeyCode).toBeNull();
+    fireEvent.keyDown(window, { key: "Delete" });
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(mockOnNodesChange).not.toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: "remove" })]));
+  });
+
+  it("acts on the same keys again once the canvas is back", () => {
+    renderCanvas();
+    fireEvent.keyDown(window, { key: "v", metaKey: true });
+    fireEvent.keyDown(window, { key: "g", shiftKey: true });
+    expect(mockPasteNodes).toHaveBeenCalled();
+    expect(mockAddNode).toHaveBeenCalledWith("nanoBanana", expect.any(Object));
+  });
+
+  it("shows Assets on a bare A, but not with Shift (that adds an annotation) or over a dialog", () => {
+    renderCanvas();
+    fireEvent.keyDown(window, { key: "a", shiftKey: true });
+    expect(useAssetStore.getState().appView).toBe("canvas");
+    expect(mockAddNode).toHaveBeenCalledWith("annotation", expect.any(Object));
+
+    fireEvent.keyDown(window, { key: "a" });
+    expect(useAssetStore.getState().appView).toBe("assets");
+  });
+
+  it("does not switch views while a dialog holds the canvas", () => {
+    mocks.state = state({ isModalOpen: true });
+    renderCanvas();
+    fireEvent.keyDown(window, { key: "a" });
+    expect(useAssetStore.getState().appView).toBe("canvas");
+  });
+});
