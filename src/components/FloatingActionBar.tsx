@@ -615,6 +615,7 @@ export function FloatingActionBar() {
               >
                 <Play {...MENU_ICON} />
                 Run selected node only
+                <KbdGroup keys={["⌥", "↵"]} className="ml-auto pl-3" />
               </MenuItem>
               <MenuItem
                 role="menuitem"

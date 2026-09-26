@@ -23,7 +23,11 @@ async function main() {
   const isMac = process.platform === 'darwin' && process.arch === 'arm64';
   const isWin = process.platform === 'win32' && process.arch === 'x64';
   if (!isMac && !isWin) throw new Error('Build this preview on an Apple Silicon Mac (darwin/arm64) or a Windows x64 machine (win32/x64).');
-  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'node-banana-release-'));
+  // Build from the temp dir's real path. On macOS os.tmpdir() is /var/…, a
+  // symlink to /private/var/…; Next's file tracer then sees the externalised
+  // packages (the agent SDK) resolve outside the build root and emits hashed
+  // aliases for them that the packaged runtime cannot find.
+  const work = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'node-banana-release-'));
   // The same OS allowlist the packaged backend gets, so a developer key can
   // never reach npm, the Next build or electron-builder by any name. Windows
   // tools additionally resolve program and profile directories.
@@ -67,6 +71,7 @@ async function main() {
     for (const entry of ['public', 'node_modules']) await fs.cp(path.join(source, entry), path.join(runtime, entry), { recursive: true, verbatimSymlinks: true, filter });
     await fs.cp(path.join(source, '.next'), path.join(runtime, '.next'), { recursive: true,
       filter: file => !['cache', 'diagnostics', 'types', 'dev'].some(part => path.relative(path.join(source, '.next'), file).split(path.sep)[0] === part) && !file.endsWith('.map') });
+    await relinkBuildAliases(source, runtime);
     // Use public configuration, not Next's normalized internal manifest options.
     const config = { ...require(path.join(root, 'next.config.shared.cjs')), distDir: '.next' };
     await fs.writeFile(path.join(runtime, 'next.config.js'), `module.exports = ${JSON.stringify(config)};\n`);
@@ -111,3 +116,34 @@ async function main() {
   } finally { await fs.rm(work, { recursive: true, force: true }); }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
+
+/**
+ * Next writes aliases for some externalised packages (the agent SDK's ESM
+ * entry, for one) as `.next/node_modules/<name>-<hash>` symlinks whose targets
+ * are ABSOLUTE paths into the build's throwaway source tree. Copied as-is they
+ * dangle once that tree is removed, and the route importing through them fails
+ * with ERR_MODULE_NOT_FOUND at runtime. Point each at the runtime's own copy
+ * of the package, relatively, so the bundle is self-contained.
+ */
+async function relinkBuildAliases(source, runtime) {
+  const aliases = path.join(runtime, '.next', 'node_modules');
+  const sourceModules = path.join(source, 'node_modules');
+  const realSourceModules = await fs.realpath(sourceModules).catch(() => sourceModules);
+  async function walk(dir) {
+    let entries;
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const link = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        const target = path.resolve(dir, await fs.readlink(link));
+        const rel = [sourceModules, realSourceModules].map(base => path.relative(base, target)).find(r => r && !r.startsWith('..') && !path.isAbsolute(r));
+        if (!rel) throw new Error(`Build alias ${link} points outside the source node_modules: ${target}`);
+        await fs.unlink(link);
+        await fs.symlink(path.relative(dir, path.join(runtime, 'node_modules', rel)), link);
+      } else if (entry.isDirectory()) {
+        await walk(link);
+      }
+    }
+  }
+  await walk(aliases);
+}

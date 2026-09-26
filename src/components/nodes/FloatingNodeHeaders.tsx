@@ -7,7 +7,6 @@ import { selectMountedArea } from "./nodeCulling";
 import { ComfyWordmark } from "../icons/ComfyWordmark";
 import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import type { NodeType } from "@/types";
-import { LifeBuoy } from "lucide-react";
 
 interface HeaderActions {
   getNodeTitle: (node: Node) => string;
@@ -88,58 +87,10 @@ const NodeHeader = memo(function NodeHeader({
   onOpenFallback,
 }: NodeHeaderProps) {
   const data = node.data as any;
-
-  // Browse button for generate nodes
-  const browseAction = GENERATE_TYPES.has(node.type ?? "") ? (
-    <button
-      onClick={() => onBrowse(node.id)}
-      className="nodrag nopan text-[10px] py-0.5 px-1.5 bg-neutral-700 hover:bg-neutral-600 border border-neutral-600 rounded text-neutral-300 transition-colors"
-    >
-      Browse
-    </button>
-  ) : undefined;
-
-  // Optional toggle for input nodes
-  const isOptional = !!data?.isOptional;
-  const optionalToggle = INPUT_TYPES.has(node.type ?? "") ? (
-    <button
-      onClick={() => onToggleOptional(node.id, !isOptional)}
-      className={`nodrag nopan text-[10px] py-0.5 px-1.5 rounded transition-colors ${
-        isOptional
-          ? "bg-amber-600/80 hover:bg-amber-500/80 text-white border border-amber-500/50"
-          : "bg-neutral-700 hover:bg-neutral-600 border border-neutral-600 text-neutral-400"
-      }`}
-      title={isOptional ? "This input is optional — empty inputs will be skipped" : "Mark as optional — empty inputs will skip this branch"}
-    >
-      {isOptional ? "Optional" : "Required"}
-    </button>
-  ) : undefined;
-
-  // Fallback shield button for generation nodes
-  const isGenerationNode = GENERATE_TYPES.has(node.type ?? "") || node.type === "llmGenerate";
-  const hasFallback = !!data?.fallbackModel;
-  const fallbackName = data?.fallbackModel?.displayName;
-  const fallbackButton = isGenerationNode ? (
-    <div className="relative shrink-0">
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenFallback(node.id, node.type ?? "");
-        }}
-        className={`nodrag nopan p-0.5 rounded transition-colors border flex items-center ${
-          hasFallback
-            ? "text-blue-400 border-blue-600/60 hover:text-blue-200"
-            : "text-neutral-500 border-neutral-600 hover:text-neutral-200"
-        }`}
-        title={hasFallback ? `Fallback: ${fallbackName}` : "Set fallback model (runs if primary fails)"}
-      >
-        <LifeBuoy size={14} strokeWidth={2} />
-      </button>
-      {hasFallback && (
-        <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-blue-400 ring-1 ring-neutral-900 pointer-events-none" />
-      )}
-    </div>
-  ) : undefined;
+  const type = node.type ?? "";
+  const canBrowse = GENERATE_TYPES.has(type);
+  const canFallback = GENERATE_TYPES.has(type) || type === "llmGenerate";
+  const canToggleOptional = INPUT_TYPES.has(type);
 
   return (
     <FloatingNodeHeader
@@ -156,26 +107,14 @@ const NodeHeader = memo(function NodeHeader({
       customTitle={data?.customTitle}
       comment={data?.comment}
       provider={data?.selectedModel?.provider}
-      headerAction={
-        browseAction || fallbackButton ? (
-          <>
-            {browseAction}
-            {fallbackButton}
-          </>
-        ) : undefined
-      }
-      headerButtons={optionalToggle}
-      alwaysVisibleButtons={
-        hint ? (
-          <span
-            data-testid="node-readiness-hint"
-            title={`${hint}: this node will be skipped when the workflow runs`}
-            className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] leading-4 text-amber-200/90 whitespace-nowrap"
-          >
-            {hint}
-          </span>
-        ) : undefined
-      }
+      onBrowse={canBrowse ? onBrowse : undefined}
+      canFallback={canFallback}
+      fallbackName={data?.fallbackModel?.displayName}
+      onOpenFallback={onOpenFallback}
+      canToggleOptional={canToggleOptional}
+      isOptional={!!data?.isOptional}
+      onToggleOptional={onToggleOptional}
+      hint={hint}
       onCustomTitleChange={onCustomTitleChange}
       onCommentChange={onCommentChange}
       onRunNode={onRunNode}

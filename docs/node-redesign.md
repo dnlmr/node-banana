@@ -18,6 +18,18 @@ Every node on the canvas is built from the same parts, top to bottom:
    on `bg-panel`: one column of 22px rows, 72px label column, wells on
    `bg-well` with 8px squircle corners and a faint recess (`shadow-well`).
 
+**Header** (`src/components/nodes/FloatingNodeHeader.tsx`) floats 26px above
+the media card, transparent. Left: provider badge and the title, 12px
+semibold uppercase in neutral-400. On generate nodes the title is the model
+picker (chevron, white-6% hover fill, click opens the browser); elsewhere a
+double-click renames it. Right, never fading: the amber readiness pill, the
+lock badge, and a filled blue comment glyph when a comment exists (hover
+reads it, click edits). Then Expand where the node has an editor, Run and
+the kebab, which fade in together on hover or selection and never change
+width. The kebab menu holds Browse, Run (⌥↵), Rename, then
+Fallback, Optional input and Comment; a set fallback puts a blue dot on the
+kebab.
+
 **Dropdowns** (`src/components/nodes/ui/Dropdown.tsx`) replace native
 selects everywhere. The well is the trigger; the list opens under it at the
 same width on the Instrument menu skin, at the panel's density (22px rows,

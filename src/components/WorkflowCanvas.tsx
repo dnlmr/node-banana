@@ -1721,6 +1721,16 @@ export function WorkflowCanvas() {
       return;
     }
 
+    // Run just the selected node (Alt/Option + Enter), as the header's kebab offers.
+    if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "Enter") {
+      const selected = nodes.filter((n) => n.selected);
+      if (selected.length === 1) {
+        event.preventDefault();
+        regenerateNode(selected[0].id);
+      }
+      return;
+    }
+
     // Handle workflow execution (Ctrl/Cmd + Enter)
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       event.preventDefault();
@@ -1956,7 +1966,7 @@ export function WorkflowCanvas() {
 
         onNodesChange(changes);
       }
-  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, setShortcutsDialogOpen, undo, redo]);
+  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, regenerateNode, setShortcutsDialogOpen, undo, redo]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
