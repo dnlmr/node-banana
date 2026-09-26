@@ -90,14 +90,17 @@ export function CornerGrip({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       className={cn(
-        "nodrag nopan absolute bottom-0 right-0 z-10 flex h-4 w-4 cursor-nwse-resize items-end justify-end p-[3px] group/corner",
+        // A generous target: 28px square, hanging a little past the card's
+        // corner so the pointer catches it from outside too. The glyph stays
+        // small and tucked in the corner.
+        "nodrag nopan absolute -bottom-1.5 -right-1.5 z-10 flex h-7 w-7 cursor-nwse-resize items-end justify-end p-[9px] group/corner",
         className
       )}
     >
       <svg
         viewBox="0 0 10 10"
         aria-hidden="true"
-        className="h-2.5 w-2.5 text-neutral-500/80 transition-colors group-hover/corner:text-neutral-300"
+        className="h-2.5 w-2.5 text-neutral-500/80 transition-colors group-hover/corner:text-neutral-200"
         fill="none"
         stroke="currentColor"
         strokeWidth={1.5}
