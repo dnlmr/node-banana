@@ -666,6 +666,17 @@ function openAssetRun(get: () => WorkflowStore): CurrentAssetRun | null {
 }
 
 /**
+ * The run a node's outputs are recorded under, and a recorder bound to it —
+ * captured when the node's context is built, so a later run (or none) never
+ * claims them. Nothing while the library is off.
+ */
+function assetRecordingFor(current: CurrentAssetRun | null): Pick<NodeExecutionContext, "assetRun" | "recordAsset"> {
+  if (!current || !isRecorderEnabled()) return {};
+  const { run } = current;
+  return { assetRun: run, recordAsset: (input) => recordAsset(input, run) };
+}
+
+/**
  * End a run for the asset library, with the graph it ended on — unless the
  * canvas it ran on was replaced (a load, a clear, a tab switch, a new id),
  * when that graph is someone else's.
@@ -2139,58 +2150,51 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     return nodeReadinessPure(nodes, edges);
   },
 
-  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal): NodeExecutionContext => {
-    // Recording goes to the run this node belongs to, captured now: a later
-    // run (or none) must not claim this node's output.
-    const assetRun = isRecorderEnabled() ? get()._currentRun?.run ?? null : null;
-    return {
-      node,
-      getConnectedInputs: get().getConnectedInputs,
-      updateNodeData: get().updateNodeData,
-      getFreshNode: (id: string) => get().nodes.find((n) => n.id === id),
-      getEdges: () => get().edges,
-      getNodes: () => get().nodes,
-      signal,
-      providerSettings: get().providerSettings,
-      addIncurredCost: (cost: number) => get().addIncurredCost(cost),
-      addToGlobalHistory: (item) => get().addToGlobalHistory(item),
-      generationsPath: get().generationsPath,
-      saveDirectoryPath: get().saveDirectoryPath,
-      trackSaveGeneration: (key: string, promise: Promise<void>) => {
-        pendingImageSyncs.set(key, promise);
+  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal): NodeExecutionContext => ({
+    node,
+    getConnectedInputs: get().getConnectedInputs,
+    updateNodeData: get().updateNodeData,
+    getFreshNode: (id: string) => get().nodes.find((n) => n.id === id),
+    getEdges: () => get().edges,
+    getNodes: () => get().nodes,
+    signal,
+    providerSettings: get().providerSettings,
+    addIncurredCost: (cost: number) => get().addIncurredCost(cost),
+    addToGlobalHistory: (item) => get().addToGlobalHistory(item),
+    generationsPath: get().generationsPath,
+    saveDirectoryPath: get().saveDirectoryPath,
+    trackSaveGeneration: (key: string, promise: Promise<void>) => {
+      pendingImageSyncs.set(key, promise);
+      set({ pendingMediaSaves: pendingImageSyncs.size });
+      promise.finally(() => {
+        pendingImageSyncs.delete(key);
         set({ pendingMediaSaves: pendingImageSyncs.size });
-        promise.finally(() => {
-          pendingImageSyncs.delete(key);
-          set({ pendingMediaSaves: pendingImageSyncs.size });
-        });
-      },
-      appendOutputGalleryImage: (targetId: string, image: string) => {
-        set((state) => ({
-          nodes: state.nodes.map((n) =>
-            n.id === targetId && n.type === "outputGallery"
-              ? { ...n, data: { ...n.data, images: [image, ...((n.data as OutputGalleryNodeData).images || [])] } as WorkflowNodeData }
-              : n
-          ) as WorkflowNode[],
-          hasUnsavedChanges: true,
-        }));
-      },
-      appendOutputGalleryVideo: (targetId: string, video: string) => {
-        set((state) => ({
-          nodes: state.nodes.map((n) =>
-            n.id === targetId && n.type === "outputGallery"
-              ? { ...n, data: { ...n.data, videos: [video, ...((n.data as OutputGalleryNodeData).videos || [])] } as WorkflowNodeData }
-              : n
-          ) as WorkflowNode[],
-          hasUnsavedChanges: true,
-        }));
-      },
-      materializeSplitGridCells: (nodeId: string) => get().materializeSplitGridCells(nodeId),
-      ...(assetRun
-        ? { assetRun, recordAsset: (input: RecordAssetInput) => recordAsset(input, assetRun) }
-        : {}),
-      get: get as () => unknown,
-    };
-  },
+      });
+    },
+    appendOutputGalleryImage: (targetId: string, image: string) => {
+      set((state) => ({
+        nodes: state.nodes.map((n) =>
+          n.id === targetId && n.type === "outputGallery"
+            ? { ...n, data: { ...n.data, images: [image, ...((n.data as OutputGalleryNodeData).images || [])] } as WorkflowNodeData }
+            : n
+        ) as WorkflowNode[],
+        hasUnsavedChanges: true,
+      }));
+    },
+    appendOutputGalleryVideo: (targetId: string, video: string) => {
+      set((state) => ({
+        nodes: state.nodes.map((n) =>
+          n.id === targetId && n.type === "outputGallery"
+            ? { ...n, data: { ...n.data, videos: [video, ...((n.data as OutputGalleryNodeData).videos || [])] } as WorkflowNodeData }
+            : n
+        ) as WorkflowNode[],
+        hasUnsavedChanges: true,
+      }));
+    },
+    materializeSplitGridCells: (nodeId: string) => get().materializeSplitGridCells(nodeId),
+    ...assetRecordingFor(get()._currentRun),
+    get: get as () => unknown,
+  }),
 
   executeWorkflow: async (startFromNodeId?: string) => {
     if (!canStartExecution(get().desktopConnected)) return;
