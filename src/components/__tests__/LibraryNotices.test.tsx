@@ -1,12 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import type { AssetFileLocation, LibraryStatus, RecordAssetResult } from "@/lib/assets/types";
-import {
-  FALLBACK_SHOWN_KEY,
-  FIRST_RUN_SHOWN_KEY,
-  LibraryNotices,
-  shortLibraryPath,
-} from "@/components/LibraryNotices";
+import { FALLBACK_SHOWN_KEY, LibraryNotices } from "@/components/LibraryNotices";
 import { useToast } from "@/components/Toast";
 import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 
@@ -33,9 +28,8 @@ vi.mock("@/lib/assets/client/recorder", () => ({
   },
 }));
 
-const api = vi.hoisted(() => ({ revealLibraryRoot: vi.fn() }));
-vi.mock("@/lib/assets/client/api", () => api);
-
+/** The first-run hint's key, owned by FirstRunHint. */
+const FIRST_RUN_KEY = "node-banana-assets-first-run-shown";
 const ROOT = "/Users/me/Pictures/Node Banana";
 
 const makeStatus = (overrides: Partial<LibraryStatus> = {}): LibraryStatus => ({
@@ -53,7 +47,6 @@ const makeStatus = (overrides: Partial<LibraryStatus> = {}): LibraryStatus => ({
 });
 
 const libraryFile: AssetFileLocation = { root: "library", rel: "Generations/2026-09-27/143200_a_cat_0123abcd.png" };
-const projectFile: AssetFileLocation = { root: "external", path: "/work/summer/generations/a_cat_0123.png" };
 
 const recorded = (file: AssetFileLocation = libraryFile) =>
   ({ asset: { file }, filename: "a.png", legacyId: "a", reusedFile: false }) as unknown as RecordAssetResult;
@@ -85,7 +78,6 @@ describe("LibraryNotices", () => {
       useToast.getState().hide();
       useSettingsDialogStore.setState({ request: null });
     });
-    api.revealLibraryRoot.mockResolvedValue(undefined);
   });
 
   it("renders nothing of its own", () => {
@@ -93,95 +85,15 @@ describe("LibraryNotices", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  describe("first-run hint", () => {
-    it("says where the first asset in an empty library went, once", () => {
-      recorder.current = makeStatus();
-      render(<LibraryNotices />);
-      expect(toast().message).toBeNull();
-
-      emitRecorded();
-      expect(toast().message).toBe("Saved to Pictures › Node Banana");
-      expect(toast().type).toBe("info");
-      expect(toast().actions?.map((action) => action.label)).toEqual(["Show", "Change…"]);
-      expect(localStorage.getItem(FIRST_RUN_SHOWN_KEY)).not.toBeNull();
-
-      act(() => toast().hide());
-      emitRecorded();
-      expect(toast().message).toBeNull();
-    });
-
-    it("never shows again once shown in this browser", () => {
-      localStorage.setItem(FIRST_RUN_SHOWN_KEY, "1");
-      recorder.current = makeStatus();
-      render(<LibraryNotices />);
-      emitRecorded();
-      expect(toast().message).toBeNull();
-    });
-
-    it("waits for the recorder's status", () => {
-      render(<LibraryNotices />);
-      emitStatus(makeStatus());
-      emitRecorded();
-      expect(toast().message).toBe("Saved to Pictures › Node Banana");
-    });
-
-    it("still shows when the library is reported non-empty before the asset is", () => {
-      recorder.current = makeStatus();
-      render(<LibraryNotices />);
-      emitStatus(makeStatus({ empty: false, counts: { assets: 1, trashed: 0, bytes: 10 } }));
-      emitRecorded();
-      expect(toast().message).toBe("Saved to Pictures › Node Banana");
-    });
-
-    it("stays quiet for a library that already had assets", () => {
-      recorder.current = makeStatus({ empty: false, counts: { assets: 40, trashed: 0, bytes: 1000 } });
-      render(<LibraryNotices />);
-      emitRecorded();
-      expect(toast().message).toBeNull();
-      expect(localStorage.getItem(FIRST_RUN_SHOWN_KEY)).toBeNull();
-    });
-
-    it("stays quiet without a status or without a working library", () => {
-      render(<LibraryNotices />);
-      emitRecorded();
-      expect(toast().message).toBeNull();
-
-      emitStatus(makeStatus({ available: false, reason: "Read-only" }));
-      emitRecorded();
-      expect(toast().message).toBeNull();
-    });
-
-    it("waits past assets saved into a project folder for one saved in the library", () => {
-      recorder.current = makeStatus();
-      render(<LibraryNotices />);
-      emitRecorded(recorded(projectFile));
-      expect(toast().message).toBeNull();
-      emitRecorded(recorded(libraryFile));
-      expect(toast().message).toBe("Saved to Pictures › Node Banana");
-    });
-
-    it("shows the folder from Show and opens Library settings from Change…", async () => {
-      recorder.current = makeStatus();
-      render(<LibraryNotices />);
-      emitRecorded();
-      const [show, change] = toast().actions ?? [];
-
-      await act(async () => show?.onClick());
-      expect(api.revealLibraryRoot).toHaveBeenCalledTimes(1);
-
-      act(() => change?.onClick());
-      expect(useSettingsDialogStore.getState().request?.page).toBe("library");
-    });
-
-    it("reports a folder that cannot be shown", async () => {
-      api.revealLibraryRoot.mockRejectedValue(new Error("The folder is gone"));
-      recorder.current = makeStatus();
-      render(<LibraryNotices />);
-      emitRecorded();
-      await act(async () => toast().actions?.[0]?.onClick());
-      expect(toast().message).toBe("The folder is gone");
-      expect(toast().type).toBe("error");
-    });
+  it("leaves the first-run hint to FirstRunHint, and its key unclaimed", () => {
+    recorder.current = makeStatus();
+    render(<LibraryNotices />);
+    emitRecorded();
+    emitStatus(makeStatus({ empty: false, counts: { assets: 1, trashed: 0, bytes: 10 } }));
+    emitRecorded();
+    expect(toast().message).toBeNull();
+    expect(localStorage.getItem(FIRST_RUN_KEY)).toBeNull();
+    expect(recorder.recorded.size).toBe(0);
   });
 
   it("shows the recorder's failures as error toasts", () => {
@@ -225,18 +137,8 @@ describe("LibraryNotices", () => {
   it("stops listening when it unmounts", () => {
     const { unmount } = render(<LibraryNotices />);
     expect(recorder.status.size).toBe(1);
-    expect(recorder.recorded.size).toBe(1);
     expect(recorder.errors.size).toBe(1);
     unmount();
     expect(recorder.status.size + recorder.recorded.size + recorder.errors.size).toBe(0);
-  });
-});
-
-describe("shortLibraryPath", () => {
-  it("keeps the last two folders", () => {
-    expect(shortLibraryPath("/Users/me/Pictures/Node Banana")).toBe("Pictures › Node Banana");
-    expect(shortLibraryPath("C:\\Users\\me\\Node Banana\\")).toBe("me › Node Banana");
-    expect(shortLibraryPath("D:\\Node Banana")).toBe("D: › Node Banana");
-    expect(shortLibraryPath("/Library")).toBe("Library");
   });
 });
