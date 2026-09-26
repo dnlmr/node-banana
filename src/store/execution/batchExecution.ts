@@ -60,7 +60,9 @@ export async function runBatchIfApplicable(
       batchTotal: totalItems,
     });
 
-    // Wrap context so getConnectedInputs returns current batch item as text
+    // Wrap context so getConnectedInputs returns current batch item as text,
+    // and so each item's asset says which item of the batch it was
+    const { recordAsset } = executionCtx;
     const batchCtx: NodeExecutionContext = {
       ...executionCtx,
       getConnectedInputs: (nodeId: string) => {
@@ -71,6 +73,9 @@ export async function runBatchIfApplicable(
           textItems: [],
         };
       },
+      ...(recordAsset
+        ? { recordAsset: (input) => recordAsset({ ...input, producer: { ...input.producer, batchIndex: i } }) }
+        : {}),
     };
 
     switch (node.type) {

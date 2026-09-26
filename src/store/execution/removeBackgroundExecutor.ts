@@ -7,6 +7,7 @@
 import type { RemoveBackgroundNodeData } from "@/types";
 import type { NodeExecutionContext } from "./types";
 import { removeImageBackground } from "@/utils/backgroundRemoval";
+import { assetParameters, assetProducer, recordOutput } from "./assetRecording";
 
 export async function executeRemoveBackground(ctx: NodeExecutionContext): Promise<void> {
   const { node, getConnectedInputs, updateNodeData, signal } = ctx;
@@ -39,6 +40,7 @@ export async function executeRemoveBackground(ctx: NodeExecutionContext): Promis
       throw new DOMException("Aborted", "AbortError");
     }
 
+    const previousOutput = (ctx.getFreshNode(node.id)?.data as RemoveBackgroundNodeData | undefined)?.outputImage;
     updateNodeData(node.id, {
       outputImage,
       outputImageRef: undefined,
@@ -46,6 +48,17 @@ export async function executeRemoveBackground(ctx: NodeExecutionContext): Promis
       error: null,
       progress: 100,
     });
+
+    // A re-run on the same image gives the same cut-out, which is not a new asset
+    if (outputImage !== previousOutput) {
+      recordOutput(ctx, {
+        kind: "image",
+        origin: "edited",
+        media: outputImage,
+        parameters: assetParameters({ model: nodeData.model }),
+        producer: assetProducer(ctx, { operation: "removeBackground" }),
+      });
+    }
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });

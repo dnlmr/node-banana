@@ -11,6 +11,7 @@ import type { SplitGridNodeData } from "@/types";
 import { clampGridDimension, getSplitGridCells } from "@/store/utils/splitGridTemplate";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
+import { assetProducer, recordOutput } from "./assetRecording";
 
 export async function executeSplitGrid(ctx: NodeExecutionContext): Promise<void> {
   const { node, getConnectedInputs, updateNodeData, getFreshNode, materializeSplitGridCells } = ctx;
@@ -57,12 +58,26 @@ export async function executeSplitGrid(ctx: NodeExecutionContext): Promise<void>
         await new Promise<void>((resolve) => {
           const img = new Image();
           img.onload = () => {
+            const row = Math.floor(index / cols) + 1;
+            const col = (index % cols) + 1;
+            const previousImage = (getFreshNode(baseImageNodeId)?.data as { image?: unknown } | undefined)?.image;
             updateNodeData(baseImageNodeId, {
               image: splitImages[index],
               imageRef: undefined,
-              filename: `split-${Math.floor(index / cols) + 1}-${(index % cols) + 1}.png`,
+              filename: `split-${row}-${col}.png`,
               dimensions: { width: img.width, height: img.height },
             });
+            // Each slice is kept, unless this cell already held exactly it
+            if (splitImages[index] !== previousImage) {
+              recordOutput(ctx, {
+                kind: "image",
+                origin: "edited",
+                media: splitImages[index],
+                parameters: { rows, cols, row, col },
+                producer: assetProducer(ctx, { operation: "splitGrid" }),
+                ...(img.width > 0 && img.height > 0 ? { width: img.width, height: img.height } : {}),
+              });
+            }
             resolve();
           };
           img.onerror = () => {
