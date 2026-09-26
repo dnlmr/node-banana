@@ -164,11 +164,6 @@ describe("initAssetLibrary", () => {
     await expect(recorder.initAssetLibrary()).resolves.toMatchObject({ available: false });
     expect(recorder.isRecorderEnabled()).toBe(false);
 
-    // Recording is a no-op rather than a string of failures.
-    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
-    await expect(handle.done).resolves.toBeNull();
-    expect(server.calls).toHaveLength(1);
-
     await vi.advanceTimersByTimeAsync(60_000);
     expect(statusCalls()).toBe(2);
     expect(recorder.isRecorderEnabled()).toBe(false);
@@ -188,6 +183,54 @@ describe("initAssetLibrary", () => {
     // Available: no more polling.
     await vi.advanceTimersByTimeAsync(300_000);
     expect(statusCalls()).toBe(3);
+  });
+
+  it.each(["hosted", "guard"] as const)("does not poll a library that is off for good (%s), but still asks on returning to the page", async (reasonCode) => {
+    vi.useFakeTimers();
+    const server = fakeLibrary({ status: libraryStatus({ available: false, reason: "Not here", reasonCode }) });
+    const statusCalls = () => server.calls.filter((call) => call.url === "/api/assets/library").length;
+    await recorder.initAssetLibrary();
+    expect(recorder.isRecorderEnabled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(statusCalls()).toBe(1);
+
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusCalls()).toBe(2);
+    // Throttled as before
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(statusCalls()).toBe(2);
+  });
+
+  it("asks again 15 s after the library went away, then every minute", async () => {
+    vi.useFakeTimers();
+    let status = libraryStatus();
+    const server = fakeLibrary({ route: (call) => (call.url === "/api/assets/library" ? jsonResponse(status) : undefined) });
+    const statusCalls = () => server.calls.filter((call) => call.url === "/api/assets/library").length;
+    await recorder.initAssetLibrary();
+
+    // A focus re-check right after the machine wakes, before the disk is back
+    status = libraryStatus({ available: false, reason: "The library folder is gone.", reasonCode: "unavailable" });
+    await vi.advanceTimersByTimeAsync(31_000);
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(recorder.isRecorderEnabled()).toBe(false);
+    expect(statusCalls()).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect(statusCalls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(statusCalls()).toBe(3);
+
+    // Still gone: the usual minute
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(statusCalls()).toBe(3);
+    status = libraryStatus();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(statusCalls()).toBe(4);
+    expect(recorder.isRecorderEnabled()).toBe(true);
   });
 
   it("does not poll from a hidden page, and asks on its return", async () => {
@@ -464,6 +507,57 @@ describe("recordAsset", () => {
     expect(checks).toBeLessThanOrEqual(10);
   });
 
+  it("says when a library move holds a recording up, and still records it once the move ends", async () => {
+    vi.useFakeTimers();
+    let refusals = 3;
+    fakeLibrary({
+      route: (call) =>
+        call.url === "/api/assets" && refusals-- > 0
+          ? jsonResponse({ error: "The library is being moved.", code: "paused" }, { status: 503, headers: { "Retry-After": "5" } })
+          : undefined,
+    });
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
+    let held = false;
+    void handle.held.then(() => (held = true));
+    await vi.advanceTimersByTimeAsync(10);
+    // A project run can save to its own folder now rather than wait out the move
+    expect(held).toBe(true);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(handle.done).resolves.not.toBeNull();
+  });
+
+  it("says when the library is gone for now, at once for a recording made while it is known to be", async () => {
+    vi.useFakeTimers();
+    const reason = "The library folder is not reachable.";
+    fakeLibrary({
+      status: libraryStatus({ available: false, reason, reasonCode: "unavailable" }),
+      route: (call) => (call.url === "/api/assets" ? jsonResponse({ error: reason, code: "unavailable" }, { status: 503 }) : undefined),
+    });
+    const first = recorder.recordAsset(input(dataUrlOf("A")), RUN);
+    let firstHeld = false;
+    void first.held.then(() => (firstHeld = true));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(firstHeld).toBe(true);
+
+    const second = recorder.recordAsset(input(dataUrlOf("B")), RUN);
+    let secondHeld = false;
+    void second.held.then(() => (secondHeld = true));
+    await Promise.resolve();
+    expect(secondHeld).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(Promise.all([first.done, second.done])).resolves.toEqual([null, null]);
+  });
+
+  it("does not say a recording that goes straight through was held up", async () => {
+    fakeLibrary();
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
+    let held = false;
+    void handle.held.then(() => (held = true));
+    await expect(handle.done).resolves.not.toBeNull();
+    await settleAll();
+    expect(held).toBe(false);
+  });
+
   it("stops waiting for a move once the status says the library is gone", async () => {
     vi.useFakeTimers();
     const errors: string[] = [];
@@ -496,34 +590,85 @@ describe("recordAsset", () => {
     expect(errors).toEqual(["Couldn't save an asset to the library: Couldn't reach the asset library."]);
   });
 
-  it("re-reads the status when the library is gone, gives up at once and turns recording off", async () => {
+  it("re-reads the status when the library is gone, turns recording off, and gives up only after backing off", async () => {
     vi.useFakeTimers();
     const errors: string[] = [];
     recorder.onRecorderError((message) => errors.push(message));
     const reason = "Node Banana can't write to \"/Volumes/Drive/Node Banana\" (ENOENT).";
     const server = fakeLibrary({
-      status: libraryStatus({ available: false, reason }),
+      status: libraryStatus({ available: false, reason, reasonCode: "unavailable" }),
       route: (call) =>
         call.url === "/api/assets" ? jsonResponse({ error: reason, code: "unavailable" }, { status: 503 }) : undefined,
     });
-    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
-    // No 15 s of backoff: one refusal and one status request.
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), { ...RUN, projectDir: null });
+    let done: unknown = "pending";
+    void handle.done.then((result) => (done = result));
     await vi.advanceTimersByTimeAsync(10);
-    await expect(handle.done).resolves.toBeNull();
+    // One answer turns recording off for later runs, but does not drop these bytes
     expect(server.calls.filter((call) => call.url === "/api/assets")).toHaveLength(1);
     expect(server.calls.filter((call) => call.url === "/api/assets/library")).toHaveLength(1);
     expect(recorder.isRecorderEnabled()).toBe(false);
+    expect(done).toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(done).toBeNull();
+    expect(server.calls.filter((call) => call.url === "/api/assets")).toHaveLength(5);
     expect(errors).toEqual([`Couldn't save an asset to the library: ${reason}`]);
   });
 
-  it("turns recording off after a guard refusal", async () => {
+  it("keeps a recording through a library that is gone for a few seconds, and turns recording back on", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    // A share still remounting after the machine woke: the server holds its failed check for 10 s
+    const backAt = 10_000;
+    const gone = () => Date.now() < backAt;
+    const reason = "The library folder is not reachable.";
     const server = fakeLibrary({
-      status: libraryStatus({ available: false, reason: "The asset library only answers Node Banana's own page on this computer." }),
+      route: (call) => {
+        if (call.url === "/api/assets/library") {
+          return jsonResponse(gone() ? libraryStatus({ available: false, reason, reasonCode: "unavailable" }) : libraryStatus());
+        }
+        if (call.url === "/api/assets" && gone()) return jsonResponse({ error: reason, code: "unavailable" }, { status: 503 });
+        return undefined;
+      },
+    });
+    const errors: string[] = [];
+    recorder.onRecorderError((message) => errors.push(message));
+
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), { ...RUN, projectDir: null });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(recorder.isRecorderEnabled()).toBe(false);
+    // A later output of the same run is not dropped either
+    const later = recorder.recordAsset(input(dataUrlOf("PNG2")), { ...RUN, projectDir: null });
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(handle.done).resolves.not.toBeNull();
+    await expect(later.done).resolves.not.toBeNull();
+    expect(server.uploads).toHaveLength(2);
+    expect(errors).toEqual([]);
+    expect(recorder.isRecorderEnabled()).toBe(true);
+  });
+
+  it("turns recording off after a guard refusal, and gives up at once", async () => {
+    const server = fakeLibrary({
+      status: libraryStatus({
+        available: false,
+        reason: "The asset library only answers Node Banana's own page on this computer.",
+        reasonCode: "guard",
+      }),
       route: (call) => (call.url === "/api/assets" ? jsonResponse({ error: "Refused", code: "forbidden" }, { status: 403 }) : undefined),
     });
     await expect(recorder.recordAsset(input(dataUrlOf("PNG")), RUN).done).resolves.toBeNull();
+    expect(server.calls.filter((call) => call.url === "/api/assets")).toHaveLength(1);
     expect(server.calls.filter((call) => call.url === "/api/assets/library")).toHaveLength(1);
     expect(recorder.isRecorderEnabled()).toBe(false);
+  });
+
+  it("records nothing while the library is off for good", async () => {
+    const server = fakeLibrary();
+    recorder.applyLibraryStatus(libraryStatus({ available: false, reason: "Hosted", reasonCode: "hosted" }));
+    await expect(recorder.recordAsset(input(dataUrlOf("PNG")), RUN).done).resolves.toBeNull();
+    expect(server.calls).toHaveLength(0);
   });
 
   it("keeps retrying an unavailable answer the status does not confirm", async () => {
@@ -542,13 +687,13 @@ describe("recordAsset", () => {
     expect(recorder.isRecorderEnabled()).toBe(true);
   });
 
-  it("drops queued recordings at once when the library turns out to be off", async () => {
+  it("drops queued recordings at once when the library turns out to be off for good", async () => {
     const gates: (() => void)[] = [];
     const server = fakeLibrary({
-      status: libraryStatus({ available: false, reason: "Unplugged" }),
+      status: libraryStatus({ available: false, reason: "Refused", reasonCode: "guard" }),
       route: (call) =>
         call.url === "/api/assets"
-          ? new Promise<Response>((resolve) => gates.push(() => resolve(jsonResponse({ error: "Unplugged", code: "unavailable" }, { status: 503 }))))
+          ? new Promise<Response>((resolve) => gates.push(() => resolve(jsonResponse({ error: "Refused", code: "forbidden" }, { status: 403 }))))
           : undefined,
     });
     const handles = Array.from({ length: 4 }, (_, i) => recorder.recordAsset(input(dataUrlOf(`IMG${i}`)), RUN));
@@ -648,7 +793,8 @@ describe("runs and snapshots", () => {
     await recorder.recordAsset(input(dataUrlOf("B")), RUN).done;
     await settleAll();
 
-    expect(server.entries).toEqual([{ id: RUN.workflowId, body: { name: "Cats", projectPath: RUN.projectDir } }]);
+    // Stamped with the run's start: a rename saved while it ran is newer and wins.
+    expect(server.entries).toEqual([{ id: RUN.workflowId, body: { name: "Cats", projectPath: RUN.projectDir, asOf: RUN.startedAt } }]);
     expect(server.runs).toHaveLength(1);
     const [put] = server.runs;
     expect(put.runId).toBe(RUN.runId);

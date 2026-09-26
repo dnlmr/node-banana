@@ -44,4 +44,21 @@ describe("withRetry", () => {
     await expect(result).resolves.toMatchObject({ code: "paused" });
     expect(task).toHaveBeenCalledTimes(5);
   });
+
+  it("says so before each paused wait, and not for other failures", async () => {
+    vi.useFakeTimers();
+    const failures = [paused(), new AssetApiError("Bad gateway", 502), paused()];
+    const task = vi.fn(async () => {
+      const failure = failures.shift();
+      if (failure) throw failure;
+      return "stored";
+    });
+    const onPaused = vi.fn();
+    const result = withRetry(task, { onPaused });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onPaused).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(result).resolves.toBe("stored");
+    expect(onPaused).toHaveBeenCalledTimes(2);
+  });
 });

@@ -274,7 +274,17 @@ describe("classification", () => {
     store().setWorkflowMetadata("wf-1", "Fox", "/projects/fox");
 
     return vi.waitFor(() => {
-      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox" });
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox", asOf: expect.any(Number) });
+    });
+  });
+
+  it("stamps the entry with when it was filed, so a run that started earlier cannot put its old name back", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(42_000);
+    store().setWorkflowMetadata("wf-1", "Wolf", "/projects/wolf");
+    now.mockRestore();
+
+    return vi.waitFor(() => {
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Wolf", projectPath: "/projects/wolf", asOf: 42_000 });
     });
   });
 
@@ -285,7 +295,7 @@ describe("classification", () => {
     await expect(store().saveToFile()).resolves.toBe(true);
 
     await vi.waitFor(() => {
-      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox" });
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox", asOf: expect.any(Number) });
     });
   });
 
@@ -308,6 +318,7 @@ describe("classification", () => {
         name: "Fox",
         projectPath: "/projects/fox-copy",
         forkedFrom: "wf-old",
+        asOf: expect.any(Number),
       });
     });
   });
@@ -334,6 +345,7 @@ describe("classification", () => {
         name: "Fox",
         projectPath: "/projects/fox-copy",
         forkedFrom: "wf-old",
+        asOf: expect.any(Number),
       });
     });
     expect(api.upsertWorkflowEntry).not.toHaveBeenCalledWith("wf-old", expect.anything());
@@ -357,7 +369,7 @@ describe("classification", () => {
 
     expect(store().workflowId).toBe("wf-1");
     await vi.waitFor(() => {
-      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox-moved" });
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-1", { name: "Fox", projectPath: "/projects/fox-moved", asOf: expect.any(Number) });
     });
   });
 
@@ -367,7 +379,7 @@ describe("classification", () => {
     store().setWorkflowMetadata("wf-new", "Wolf", "/projects/wolf");
 
     return vi.waitFor(() => {
-      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-new", { name: "Wolf", projectPath: "/projects/wolf" });
+      expect(api.upsertWorkflowEntry).toHaveBeenCalledExactlyOnceWith("wf-new", { name: "Wolf", projectPath: "/projects/wolf", asOf: expect.any(Number) });
     });
   });
 

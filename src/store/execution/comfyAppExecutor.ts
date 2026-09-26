@@ -16,7 +16,7 @@ import type { RecordedAssetHandle } from "@/lib/assets/types";
 import { buildComfyHeaders, comfyConfigError, getComfySettings } from "@/lib/comfy/settings";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
-import { assetParameters, assetProducer, recordingResult, recordOutput } from "./assetRecording";
+import { assetParameters, assetProducer, recordOutput, withFolderFallback } from "./assetRecording";
 
 /** Polling cadence — starts responsive, then backs off for long renders. */
 const INITIAL_INTERVAL = 1500;
@@ -364,9 +364,9 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
       }
 
       // A Comfy app's image also belongs in the global history, and — without
-      // the asset library, or when its recording fails — in the project's
-      // generations folder, so it can be browsed and reloaded alongside
-      // everything else.
+      // the asset library, or when its recording fails or is held up — in the
+      // project's generations folder, so it can be browsed and reloaded
+      // alongside everything else.
       if (resolved.outputImage) {
         const timestamp = Date.now();
         const imageId = `${timestamp}`;
@@ -394,12 +394,7 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
               .catch((err) => {
                 console.error("Failed to save ComfyUI generation:", err);
               });
-          trackSaveGeneration(
-            imageId,
-            imageRecording
-              ? recordingResult(imageRecording).then((recorded) => (recorded ? undefined : saveToFolder()))
-              : saveToFolder()
-          );
+          trackSaveGeneration(imageId, imageRecording ? withFolderFallback(imageRecording, saveToFolder) : saveToFolder());
         }
       }
       return;

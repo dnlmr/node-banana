@@ -22,6 +22,19 @@ interface UseGenerationCarouselParams<T extends HistoryItem> {
 }
 
 /**
+ * The entry to go to from `current`. An index outside the list (-1: the node
+ * shows an output that is not in its history, like a generation the library
+ * failed to keep) sits before the newest entry: next goes to the newest,
+ * previous wraps to the oldest.
+ */
+export function carouselTarget(current: number | undefined, count: number, direction: "previous" | "next"): number {
+  const index = Number.isInteger(current) ? (current as number) : 0;
+  if (index < 0 || index >= count) return direction === "next" ? 0 : count - 1;
+  if (direction === "previous") return index === 0 ? count - 1 : index - 1;
+  return (index + 1) % count;
+}
+
+/**
  * Shared prev/next wrap-around carousel navigation for generation history.
  * Manages its own loading flag; returns handlers wired to load an asset by ID
  * and update the node on success.
@@ -41,13 +54,7 @@ export function useGenerationCarousel<T extends HistoryItem>({
       const items = history || [];
       if (items.length === 0 || isLoading) return;
 
-      const current = currentIndex || 0;
-      const newIndex =
-        direction === "previous"
-          ? current === 0
-            ? items.length - 1
-            : current - 1
-          : (current + 1) % items.length;
+      const newIndex = carouselTarget(currentIndex, items.length, direction);
       const item = items[newIndex];
 
       setIsLoading(true);

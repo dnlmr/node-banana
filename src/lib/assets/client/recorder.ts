@@ -6,7 +6,8 @@
  *   Until then (and on hosted/read-only servers, or when the request guard
  *   refuses) `isRecorderEnabled()` is false and callers fall back to today's
  *   project-only save path. The status is asked again: every 30 s while the
- *   request itself fails, every minute while the library is unavailable, on
+ *   request itself fails, every minute while the library is unavailable
+ *   (unless it is off for good: a hosted server, or the request guard), on
  *   returning to the page (at most every 30 s), and at once when a recording
  *   is refused in a way that suggests the library is gone. Settings hands in
  *   the answers it gets with `applyLibraryStatus()`.
@@ -15,9 +16,12 @@
  *   queues the upload (concurrency 2, its own queue: never counted in the
  *   store's pendingMediaSaves, so tabs stay usable), and returns at once.
  *   Failures are retried while the library is temporarily unavailable, then
- *   reported once through `onRecorderError`. Once the library is known to be
- *   off, queued and retrying recordings resolve `done` null at once, so a
- *   project run can still save to its own folder.
+ *   reported once through `onRecorderError`. One answer that the library is
+ *   gone is not enough to drop the bytes (a disk remounting after sleep is
+ *   back within seconds): the write backs off and tries again, and only a
+ *   library that is off for good (hosted, guard) fails it at once. The
+ *   handle's `held` says when the library holds a recording up (a move, an
+ *   outage), so a project run can save to its own folder rather than wait.
  * - `beginRun()` / `endRun()` bracket a run. The start graph is held by
  *   reference and only encoded/uploaded when the run records its first
  *   asset. `endRun(id, graph)` writes the final snapshot if the run recorded
@@ -62,6 +66,12 @@ const CONCURRENCY = 2;
 const STATUS_RETRY_MS = 30_000;
 /** While the library is known to be unavailable: a drive plugged back in, a folder fixed elsewhere. */
 const UNAVAILABLE_POLL_MS = 60_000;
+/**
+ * The first check after the library went away comes sooner: a disk or share
+ * remounting after sleep is back within seconds, and the server holds a
+ * failed check for 10 s.
+ */
+const LOST_RECHECK_MS = 15_000;
 /** Coming back to the page asks again, at most this often. */
 const FOCUS_REFRESH_MS = 30_000;
 /** How long a write paused by a library move waits before checking the library is still there. */
@@ -107,12 +117,29 @@ function scheduleStatusCheck(ms: number): void {
   }, ms);
 }
 
+/**
+ * Off for a reason no later answer changes while the page is open: a hosted
+ * server, or a request guard that refuses this page. Polling would only add
+ * a refusal to the server's log every minute.
+ */
+function offForGood(status: LibraryStatus | null = libraryStatus): boolean {
+  return status !== null && !status.available && (status.reasonCode === "hosted" || status.reasonCode === "guard");
+}
+
 function setStatus(status: LibraryStatus, seq: number): void {
   appliedSeq = seq;
   const changed = JSON.stringify(status) !== JSON.stringify(libraryStatus);
+  const lost = libraryStatus?.available === true && !status.available;
   libraryStatus = status;
-  if (status.available) clearStatusTimer();
-  else scheduleStatusCheck(UNAVAILABLE_POLL_MS);
+  // Returning to the page still asks again (throttled), off for good or not.
+  if (status.available || offForGood(status)) {
+    clearStatusTimer();
+  } else if (lost) {
+    clearStatusTimer();
+    scheduleStatusCheck(LOST_RECHECK_MS);
+  } else {
+    scheduleStatusCheck(UNAVAILABLE_POLL_MS);
+  }
   if (changed) statusListeners.emit(status);
 }
 
@@ -228,34 +255,56 @@ function libraryOff(fallback?: unknown): Error {
   return new Error(reason);
 }
 
+/** Worth another try after a backoff: the library is gone, but may be back in a moment. */
+function libraryGoneForNow(fallback: unknown): AssetApiError {
+  return new AssetApiError(libraryOff(fallback).message, 503, undefined, "unavailable");
+}
+
 /**
  * `withRetry` for the library's writes. It gives up at once when the
- * library is known to be off, and when an answer suggests the library is
- * gone it asks for the status first: if that confirms it, recording turns
- * off (so `isRecorderEnabled()` sends later runs down the fallback path) and
- * this write stops instead of backing off for 15 s.
+ * library is off for good (a hosted server, the request guard). When an
+ * answer suggests the library is gone it asks for the status first: if that
+ * confirms it, recording turns off (so `isRecorderEnabled()` sends later
+ * runs down the fallback path), but this write keeps its bytes and backs
+ * off as for any other outage. One answer is not enough to drop them: a disk
+ * or share remounting after sleep is back within seconds. A write that gets
+ * through meanwhile asks for the status again, which turns recording back on.
  *
  * A library move pauses writes for as long as it copies, which can be far
  * longer than any fixed budget. The bytes are already held, so the write
  * keeps waiting, checking the status every few minutes, and gives up only
  * when the status says the library is no longer available.
+ *
+ * `onHeld` hears whenever the library makes the write wait (a pause, or a
+ * library gone for now), so a caller with a folder of its own can save there
+ * rather than wait with it.
  */
-function retry<T>(task: (attempt: number) => Promise<T>): Promise<T> {
+function retry<T>(task: (attempt: number) => Promise<T>, onHeld?: () => void): Promise<T> {
   return withRetry(
     async (attempt) => {
-      if (knownUnavailable()) throw libraryOff();
+      if (offForGood()) throw libraryOff();
+      if (knownUnavailable()) onHeld?.();
+      let result: T;
       try {
-        return await task(attempt);
+        result = await task(attempt);
       } catch (error) {
         if (mayMeanLibraryGone(error)) {
           const status = await recheckStatus();
-          if (status && !status.available) throw libraryOff(error);
+          if (status && !status.available) {
+            if (offForGood(status)) throw libraryOff(error);
+            onHeld?.();
+            throw libraryGoneForNow(error);
+          }
         }
         throw error;
       }
+      // It is back before the status said so
+      if (knownUnavailable()) void recheckStatus();
+      return result;
     },
     {
       pausedBudgetMs: PAUSED_CHECK_MS,
+      onPaused: onHeld,
       keepWaiting: async () => {
         const status = await recheckStatus();
         // Unreachable is not "gone": the server may be restarting mid-move.
@@ -356,7 +405,7 @@ function resultFromView(asset: AssetView): RecordAssetResult {
   return { asset, filename: asset.filename, legacyId: asset.filename.replace(/\.[^.]+$/, ""), reusedFile: false };
 }
 
-async function upload(meta: RecordAssetMeta, media: TakenMedia): Promise<RecordAssetResult> {
+async function upload(meta: RecordAssetMeta, media: TakenMedia, onHeld: () => void): Promise<RecordAssetResult> {
   const blob = media.kind === "bytes" ? await media.blob : null;
   if (blob && !meta.mime && blob.type) meta.mime = blob.type;
   return retry(async (attempt) => {
@@ -376,7 +425,7 @@ async function upload(meta: RecordAssetMeta, media: TakenMedia): Promise<RecordA
       }
       throw error;
     }
-  });
+  }, onHeld);
 }
 
 /* Queue --------------------------------------------------------------- */
@@ -453,7 +502,10 @@ function startRunSnapshot(state: RunState): void {
   const { run } = state;
   state.startWrite = track("workflow snapshot", async () => {
     try {
-      await retry(() => upsertWorkflowEntry(run.workflowId, { name: run.workflowName, projectPath: run.projectDir }));
+      // The name and folder are the run's, as they were when it started: a
+      // rename or move saved since then is newer, and the library keeps it.
+      const entry = { name: run.workflowName, projectPath: run.projectDir, asOf: run.startedAt };
+      await retry(() => upsertWorkflowEntry(run.workflowId, entry));
     } catch (error) {
       console.warn("Couldn't classify the workflow in the library:", error instanceof Error ? error.message : error);
     }
@@ -512,27 +564,47 @@ export function endRun(runId: string, graph: CapturedGraph | null): void {
 
 /* Recording ----------------------------------------------------------- */
 
-export function recordAsset(input: RecordAssetInput, run: AssetRunContext): RecordedAssetHandle {
+/** What `recordAsset` hands back: the contract's handle, and word of the library holding it up. */
+export interface RecordingHandle extends RecordedAssetHandle {
+  /**
+   * Resolves once the library makes this recording wait: a move pauses its
+   * writes, or the library is gone for now. The recording carries on and
+   * `done` still settles, but a caller with a folder of its own need not wait
+   * with it. Never rejects; stays pending for a recording that goes through.
+   */
+  held: Promise<void>;
+}
+
+/** For a recording that settled at once: nothing will hold it up. */
+const NOT_HELD = new Promise<void>(() => {});
+
+export function recordAsset(input: RecordAssetInput, run: AssetRunContext): RecordingHandle {
   const assetId = newAssetId();
-  if (knownUnavailable()) return { assetId, done: Promise.resolve(null) };
+  // Known to be off for now is not off for good: the write tries, and backs off
+  if (offForGood()) return { assetId, done: Promise.resolve(null), held: NOT_HELD };
 
   let media: TakenMedia;
   try {
     media = takeMedia(input);
   } catch (error) {
     reportError(error);
-    return { assetId, done: Promise.resolve(null) };
+    return { assetId, done: Promise.resolve(null), held: NOT_HELD };
   }
 
   const meta = buildMeta(assetId, input, run, media.mime);
   const state = runs.get(run.runId);
   if (state) state.pending += 1;
 
+  let hold!: () => void;
+  const held = new Promise<void>((resolve) => (hold = resolve));
+  // Queued behind other recordings, it would not hear so until its turn
+  if (knownUnavailable()) hold();
+
   const done = new Promise<RecordAssetResult | null>((resolve) => {
     queue.push(async () => {
       let result: RecordAssetResult | null = null;
       try {
-        result = await upload(meta, media);
+        result = await upload(meta, media, hold);
       } catch (error) {
         reportError(error);
       }
@@ -548,7 +620,7 @@ export function recordAsset(input: RecordAssetInput, run: AssetRunContext): Reco
     });
     pump();
   });
-  return { assetId, done };
+  return { assetId, done, held };
 }
 
 /** Recordings queued or uploading, plus snapshot writes (for beforeunload). */

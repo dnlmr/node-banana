@@ -37,16 +37,22 @@ export async function videoFingerprint(blob: Blob): Promise<string> {
   return `${size}:${blob.type}:${(hash >>> 0).toString(16)}`;
 }
 
+interface RecordedVideo {
+  fingerprint: string;
+  /** True once the library holds it; false if that recording failed. */
+  landed: Promise<boolean>;
+}
+
 /**
  * The video each edit node last recorded, by workflow and node. A re-run that
  * produced it again is not a new asset, and over 20 MB the node's string can
  * never tell: every run gets a fresh object URL.
  */
-const lastRecordedVideo = new Map<string, string>();
+const lastRecordedVideo = new Map<string, RecordedVideo>();
 
-function rememberRecordedVideo(key: string, fingerprint: string): void {
+function rememberRecordedVideo(key: string, video: RecordedVideo): void {
   lastRecordedVideo.delete(key);
-  lastRecordedVideo.set(key, fingerprint);
+  lastRecordedVideo.set(key, video);
   if (lastRecordedVideo.size > MAX_REMEMBERED_VIDEOS) {
     const oldest = lastRecordedVideo.keys().next().value;
     if (oldest !== undefined) lastRecordedVideo.delete(oldest);
@@ -76,34 +82,48 @@ async function recordEditedVideo(
 ): Promise<void> {
   if (outputVideo === previousOutput || !ctx.recordAsset) return;
   const key = `${ctx.assetRun?.workflowId ?? ""}\u0000${ctx.node.id}`;
+
+  const record = (fingerprint: string | null): void => {
+    const handle = recordOutput(ctx, {
+      kind: "video",
+      origin: "edited",
+      media: outputBlob,
+      mime: outputBlob.type || "video/mp4",
+      parameters: assetParameters(parameters),
+      producer: assetProducer(ctx, { operation }),
+      ...(typeof durationSec === "number" && Number.isFinite(durationSec) && durationSec > 0 ? { durationSec } : {}),
+    });
+    if (!handle || !fingerprint) return;
+    const video: RecordedVideo = { fingerprint, landed: recordingResult(handle).then((result) => result !== null) };
+    rememberRecordedVideo(key, video);
+    // A recording that failed kept nothing, so the next run records it again
+    void video.landed.then((landed) => {
+      if (!landed && lastRecordedVideo.get(key) === video) lastRecordedVideo.delete(key);
+    });
+  };
+
   let fingerprint: string | null = null;
   try {
     fingerprint = await videoFingerprint(outputBlob);
-    const previous = lastRecordedVideo.get(key) ?? (await previousVideoFingerprint(previousOutput));
-    if (fingerprint === previous) {
-      rememberRecordedVideo(key, fingerprint);
+    const remembered = lastRecordedVideo.get(key);
+    if (remembered && fingerprint === remembered.fingerprint) {
+      rememberRecordedVideo(key, remembered);
+      // That recording may still be uploading. If it then fails, this run's
+      // copy is the one to keep, unless a later run has recorded since.
+      void remembered.landed.then((landed) => {
+        if (!landed && !lastRecordedVideo.has(key)) record(fingerprint);
+      });
+      return;
+    }
+    if (!remembered && fingerprint === (await previousVideoFingerprint(previousOutput))) {
+      rememberRecordedVideo(key, { fingerprint, landed: Promise.resolve(true) });
       return;
     }
   } catch (error) {
     // Not knowing is no reason to lose the edit
     console.warn("Could not compare the edited video with the previous one:", error);
   }
-  const handle = recordOutput(ctx, {
-    kind: "video",
-    origin: "edited",
-    media: outputBlob,
-    mime: outputBlob.type || "video/mp4",
-    parameters: assetParameters(parameters),
-    producer: assetProducer(ctx, { operation }),
-    ...(typeof durationSec === "number" && Number.isFinite(durationSec) && durationSec > 0 ? { durationSec } : {}),
-  });
-  if (!handle || !fingerprint) return;
-  const recorded = fingerprint;
-  rememberRecordedVideo(key, recorded);
-  // A recording that failed kept nothing, so the next run records it again
-  void recordingResult(handle).then((result) => {
-    if (!result && lastRecordedVideo.get(key) === recorded) lastRecordedVideo.delete(key);
-  });
+  record(fingerprint);
 }
 
 /**

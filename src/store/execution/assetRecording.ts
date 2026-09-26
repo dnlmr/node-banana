@@ -14,6 +14,7 @@ import type {
   RecordAssetResult,
   RecordedAssetHandle,
 } from "@/lib/assets/types";
+import type { RecordingHandle } from "@/lib/assets/client/recorder";
 import type { SelectedModel, WorkflowNodeData } from "@/types";
 import type { NodeExecutionContext } from "./types";
 
@@ -137,12 +138,15 @@ export type CarouselField = "imageHistory" | "videoHistory" | "audioHistory";
  * A project folder names its files by content, and the carousel reloads them
  * by that name. Once the recorder has written the file, the entry for this
  * asset takes that name, as it always has after a save to the folder.
+ * With `fromId`, only an entry still called that is renamed: a folder save
+ * that finished first has named it already.
  */
 export function adoptLegacyId(
   ctx: NodeExecutionContext,
   field: CarouselField,
   assetId: string,
-  recorded: RecordAssetResult | null
+  recorded: RecordAssetResult | null,
+  fromId?: string
 ): void {
   if (!recorded?.legacyId) return;
   const currentNode = ctx.getNodes().find((n) => n.id === ctx.node.id);
@@ -150,6 +154,7 @@ export function adoptLegacyId(
   if (!Array.isArray(history)) return;
   const index = history.findIndex((entry) => (entry as { assetId?: string } | null)?.assetId === assetId);
   if (index === -1 || history[index].id === recorded.legacyId) return;
+  if (fromId !== undefined && history[index].id !== fromId) return;
   const next = [...history];
   next[index] = { ...next[index], id: recorded.legacyId };
   ctx.updateNodeData(ctx.node.id, { [field]: next } as Partial<WorkflowNodeData>);
@@ -185,8 +190,10 @@ function forgetFailedAsset(ctx: NodeExecutionContext, field: CarouselField, asse
   }
   const selectedField = SELECTED_INDEX[field];
   const selected = typeof data?.[selectedField] === "number" ? (data[selectedField] as number) : 0;
-  // The selection stays on its entry; one on the dropped entry moves to the newest
-  const nextSelected = selected > index ? selected - 1 : selected === index ? 0 : selected;
+  // The selection stays on its entry. One on the dropped entry names none
+  // (-1): the node still shows that output, which is no longer in the list,
+  // and pointing at another generation would put the counter at odds with it.
+  const nextSelected = selected > index ? selected - 1 : selected === index ? -1 : selected;
   ctx.updateNodeData(ctx.node.id, {
     [field]: history.filter((_, i) => i !== index),
     [selectedField]: nextSelected,
@@ -202,35 +209,94 @@ export function recordingResult(handle: RecordedAssetHandle): Promise<RecordAsse
 }
 
 /**
+ * How long a project's save waits for the library before it writes to the
+ * project's folder without it. Tabs and workflow saves wait on it, so it
+ * must never be as long as a library move.
+ */
+export const LIBRARY_WAIT_MS = 20_000;
+
+/** A recording as the recorder hands it back, which may also say when the library holds it up. */
+type Recording = RecordedAssetHandle & Partial<Pick<RecordingHandle, "held">>;
+
+/**
+ * A project's recording with its folder save behind it. The promise it
+ * returns is what tabs and a workflow save wait for (`trackSaveGeneration`),
+ * and it settles once the file is in the project one way or the other:
+ * the recording landed; or it failed and the folder save ran; or the library
+ * held it up (a move pauses writes, a disk is remounting) or took longer than
+ * LIBRARY_WAIT_MS, and the folder save ran without it. A held-up recording
+ * carries on in the background, and the library reuses the file the folder
+ * save wrote. `onRecorded` gets its result whenever that comes.
+ */
+export function withFolderFallback(
+  handle: Recording,
+  saveToFolder: () => Promise<unknown>,
+  onRecorded: (recorded: RecordAssetResult | null) => void = () => {}
+): Promise<void> {
+  let folderSave: Promise<void> | null = null;
+  const saveOnce = () =>
+    (folderSave ??= Promise.resolve()
+      .then(saveToFolder)
+      .then(
+        () => undefined,
+        (err) => {
+          console.error("Failed to save generation:", err);
+        }
+      ));
+
+  const recorded = recordingResult(handle)
+    .then(async (result) => {
+      onRecorded(result);
+      if (!result) await saveOnce();
+    })
+    .catch((err) => {
+      console.error("Failed to save generation:", err);
+    });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const heldUp = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, LIBRARY_WAIT_MS);
+    void handle.held?.then(resolve);
+  }).then(saveOnce);
+
+  return Promise.race([recorded, heldUp]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Follow the recording of a generation that has a carousel entry.
  *
  * In a project (`saveToFolder` given) it is tracked, so a workflow save waits
- * for it the way it waits for a save to the generations folder. Once the file
- * is on disk the entry takes the file's name. When the recording fails, the
- * output goes to the generations folder the way a run without the library
- * saves it, so a project's generation always lands in its folder.
+ * for it the way it waits for a save to the generations folder, but never
+ * for longer than the library keeps it waiting (see `withFolderFallback`).
+ * The entry takes the name of the file in the folder from whichever wrote it
+ * first. When the recording fails, the output goes to the generations folder
+ * the way a run without the library saves it, so a project's generation
+ * always lands in its folder.
  *
- * Outside a project nothing holds the tabs; a failed recording only takes its
- * entry back out of the carousel.
+ * Outside a project nothing holds the tabs, and the entry keeps its id: it
+ * loads by its asset id. A failed recording only takes it back out of the
+ * carousel.
  */
 export function followRecording(
   ctx: NodeExecutionContext,
   field: CarouselField,
   key: string,
-  handle: RecordedAssetHandle,
+  handle: Recording,
   saveToFolder: (() => Promise<unknown>) | null
 ): void {
-  const settled = recordingResult(handle)
-    .then(async (recorded) => {
-      if (recorded) {
-        adoptLegacyId(ctx, field, handle.assetId, recorded);
-        return;
-      }
-      forgetFailedAsset(ctx, field, handle.assetId, saveToFolder !== null);
-      if (saveToFolder) await saveToFolder();
-    })
-    .catch((err) => {
-      console.error("Failed to save generation:", err);
-    });
-  if (saveToFolder) ctx.trackSaveGeneration(key, settled);
+  if (!saveToFolder) {
+    void recordingResult(handle)
+      .then((recorded) => {
+        if (!recorded) forgetFailedAsset(ctx, field, handle.assetId, false);
+      })
+      .catch((err) => {
+        console.error("Failed to save generation:", err);
+      });
+    return;
+  }
+  const settled = withFolderFallback(handle, saveToFolder, (recorded) => {
+    if (recorded) adoptLegacyId(ctx, field, handle.assetId, recorded, key);
+    else forgetFailedAsset(ctx, field, handle.assetId, true);
+  });
+  ctx.trackSaveGeneration(key, settled);
 }

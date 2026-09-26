@@ -54,11 +54,13 @@ export interface RetryOptions {
    * it the budget is a hard cap.
    */
   keepWaiting?: () => Promise<boolean>;
+  /** Told before each paused wait, so a caller with somewhere else to put the work need not wait with it. */
+  onPaused?: () => void;
 }
 
 /** `task` gets the attempt number; a paused wait does not use one up. */
 export async function withRetry<T>(task: (attempt: number) => Promise<T>, options: RetryOptions = {}): Promise<T> {
-  const { attempts = 5, baseDelayMs = 1000, maxDelayMs = 30_000, pausedBudgetMs = 10 * 60 * 1000, keepWaiting } = options;
+  const { attempts = 5, baseDelayMs = 1000, maxDelayMs = 30_000, pausedBudgetMs = 10 * 60 * 1000, keepWaiting, onPaused } = options;
   let attempt = 0;
   let pausedFor = 0;
   for (;;) {
@@ -77,6 +79,7 @@ export async function withRetry<T>(task: (attempt: number) => Promise<T>, option
         }
         pausedFor += wait;
         attempt -= 1;
+        onPaused?.();
         await delay(wait);
         continue;
       }

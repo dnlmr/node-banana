@@ -53,6 +53,30 @@ function makeRecorder(result: Partial<RecordAssetResult> | null = {}) {
   return { recordAsset, handles };
 }
 
+/**
+ * One recording the test settles by hand. `hold()` is the recorder saying the
+ * library is keeping it waiting (a move paused it, or the library is gone for now).
+ */
+function heldRecorder() {
+  let settle!: (result: RecordAssetResult | null) => void;
+  let hold!: () => void;
+  const handle = {
+    assetId: "a000000000001",
+    done: new Promise<RecordAssetResult | null>((resolve) => (settle = resolve)),
+    held: new Promise<void>((resolve) => (hold = resolve)),
+  };
+  const recordAsset = vi.fn((_input: RecordAssetInput): RecordedAssetHandle => handle);
+  return { recordAsset, handle, settle: (result: RecordAssetResult | null) => settle(result), hold: () => hold() };
+}
+
+/** Whether a promise has settled yet, without waiting for it. */
+async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void promise.then(() => (settled = true));
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  return settled;
+}
+
 /** A context over a tiny in-memory node map, so later writes can be read back. */
 function makeCtx(node: WorkflowNode, overrides: Partial<NodeExecutionContext> = {}, text: string | null = "a red fox") {
   const nodes = new Map<string, WorkflowNode>([[node.id, node]]);
@@ -327,6 +351,104 @@ describe("nanoBanana", () => {
     expect(entry).not.toHaveProperty("assetId");
   });
 
+  it("in a project, saves to the folder at once rather than hold the tabs while a library move keeps the recording waiting", async () => {
+    const { recordAsset, handle, settle, hold } = heldRecorder();
+    const { ctx, nodes } = makeCtx(imageNode(), { recordAsset, generationsPath: "/proj/generations" });
+    mockFetch
+      .mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }))
+      .mockResolvedValueOnce(okJson({ success: true, imageId: "a_red_fox_1" }));
+
+    await executeNanoBanana(ctx);
+    const track = ctx.trackSaveGeneration as ReturnType<typeof vi.fn>;
+    expect(track).toHaveBeenCalledOnce();
+    const tracked = track.mock.calls[0][1] as Promise<void>;
+    expect(await hasSettled(tracked)).toBe(false);
+
+    hold();
+    await tracked;
+    expect(mockFetch.mock.calls[1][0]).toBe("/api/save-generation");
+    const history = () => (nodes.get("gen-1")!.data as { imageHistory: Record<string, unknown>[] }).imageHistory;
+    // The folder's file names the entry; it keeps its asset id, which the library records later
+    expect(history()).toEqual([expect.objectContaining({ id: "a_red_fox_1", assetId: handle.assetId })]);
+
+    // The move ends and the recording lands: the folder save came first, so its name stays
+    settle({ legacyId: "143200_a_red_fox_aaaaaaaa" } as RecordAssetResult);
+    expect(await hasSettled(handle.done)).toBe(true);
+    expect(history()).toEqual([expect.objectContaining({ id: "a_red_fox_1", assetId: handle.assetId })]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("in a project, gives the library 20 s before saving to the folder without it", async () => {
+    vi.useFakeTimers();
+    try {
+      const { recordAsset, settle } = heldRecorder();
+      const { ctx, nodes } = makeCtx(imageNode(), { recordAsset, generationsPath: "/proj/generations" });
+      mockFetch
+        .mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }))
+        .mockResolvedValueOnce(okJson({ success: true, imageId: "a_red_fox_1" }));
+
+      await executeNanoBanana(ctx);
+      const tracked = (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1] as Promise<void>;
+      await vi.advanceTimersByTimeAsync(19_000);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(await hasSettled(tracked)).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await tracked;
+      expect(mockFetch.mock.calls[1][0]).toBe("/api/save-generation");
+
+      // A recording that fails afterwards does not save a second copy
+      settle(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const [entry] = (nodes.get("gen-1")!.data as { imageHistory: Record<string, unknown>[] }).imageHistory;
+      expect(entry.id).toBe("a_red_fox_1");
+      expect(entry).not.toHaveProperty("assetId");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("in a project, lets a recording that lands before the folder save name the entry", async () => {
+    const { recordAsset, handle, settle, hold } = heldRecorder();
+    const { ctx, nodes } = makeCtx(imageNode(), { recordAsset, generationsPath: "/proj/generations" });
+    let answerSave!: (value: unknown) => void;
+    mockFetch
+      .mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }))
+      .mockReturnValueOnce(new Promise((resolve) => (answerSave = resolve)));
+
+    await executeNanoBanana(ctx);
+    hold();
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    settle({ legacyId: "143200_a_red_fox_aaaaaaaa" } as RecordAssetResult);
+    const history = () => (nodes.get("gen-1")!.data as { imageHistory: Record<string, unknown>[] }).imageHistory;
+    await vi.waitFor(() =>
+      expect(history()).toEqual([expect.objectContaining({ id: "143200_a_red_fox_aaaaaaaa", assetId: handle.assetId })])
+    );
+
+    // The folder save answers after it, and leaves the entry alone
+    answerSave(okJson({ success: true, imageId: "a_red_fox_1" }));
+    await (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(history()).toEqual([expect.objectContaining({ id: "143200_a_red_fox_aaaaaaaa", assetId: handle.assetId })]);
+  });
+
+  it("outside a project, leaves a recorded entry's id alone: it loads by its asset id", async () => {
+    const { recordAsset, handles } = makeRecorder({ legacyId: "143200_a_red_fox_aaaaaaaa" });
+    const { ctx, nodes, updateNodeData } = makeCtx(imageNode(), { recordAsset });
+    mockFetch.mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }));
+
+    await executeNanoBanana(ctx);
+    await handles[0].done;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // One write with the output, and no rename after it (which would be an undo step that changes nothing)
+    expect(updateNodeData.mock.calls.filter((c) => "imageHistory" in (c[1] as Record<string, unknown>))).toHaveLength(1);
+    const [entry] = (nodes.get("gen-1")!.data as { imageHistory: { id: string; assetId?: string }[] }).imageHistory;
+    expect(entry.id).not.toBe("143200_a_red_fox_aaaaaaaa");
+    expect(entry.assetId).toBe(handles[0].assetId);
+  });
+
   it("outside a project, takes a failed recording's entry back out of the carousel", async () => {
     const { recordAsset } = makeRecorder(null);
     const older = { id: "older", assetId: "a-older", timestamp: 1, prompt: "", aspectRatio: "1:1", model: "m" };
@@ -338,9 +460,27 @@ describe("nanoBanana", () => {
     await vi.waitFor(() => {
       expect((nodes.get("gen-1")!.data as { imageHistory: { id: string }[] }).imageHistory).toEqual([older]);
     });
-    expect((nodes.get("gen-1")!.data as { selectedHistoryIndex: number }).selectedHistoryIndex).toBe(0);
+    // The node still shows the new image, so the selection names no entry rather than the older one
+    expect(nodes.get("gen-1")!.data).toMatchObject({ outputImage: "data:image/png;base64,fox", selectedHistoryIndex: -1 });
     expect(ctx.trackSaveGeneration).not.toHaveBeenCalled();
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("outside a project, keeps a selection on another entry on that entry when a failed one goes", async () => {
+    const { recordAsset, settle } = heldRecorder();
+    const entry = (id: string) => ({ id, assetId: `a-${id}`, timestamp: 1, prompt: "", aspectRatio: "1:1", model: "m" });
+    const { ctx, nodes } = makeCtx(imageNode({ imageHistory: [entry("b"), entry("c")], selectedHistoryIndex: 0 }), { recordAsset });
+    mockFetch.mockResolvedValueOnce(okJson({ success: true, image: "data:image/png;base64,fox" }));
+
+    await executeNanoBanana(ctx);
+    // The user steps back to "c" (index 2) before the recording fails
+    ctx.updateNodeData("gen-1", { selectedHistoryIndex: 2 });
+    settle(null);
+
+    await vi.waitFor(() => {
+      expect((nodes.get("gen-1")!.data as { imageHistory: { id: string }[] }).imageHistory.map((e) => e.id)).toEqual(["b", "c"]);
+    });
+    expect((nodes.get("gen-1")!.data as { selectedHistoryIndex: number }).selectedHistoryIndex).toBe(1);
   });
 
   it("tags each batch item's asset with its index", async () => {
@@ -612,6 +752,27 @@ describe("generate3d", () => {
     expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toMatchObject({ model3d: "http://cdn.example/chair.glb", prompt: "a chair" });
     expect(nodes.get("3d-1")!.data).toMatchObject({ savedFilename: "chair.glb", savedFilePath: "/proj/generations/chair.glb" });
   });
+
+  it("in a project, saves the model to the folder at once when the library holds its recording up", async () => {
+    const { recordAsset, settle, hold } = heldRecorder();
+    const { ctx, nodes } = makeCtx(modelNode(), { recordAsset, generationsPath: "/proj/generations" }, "a chair");
+    mockFetch
+      .mockResolvedValueOnce(okJson({ success: true, model3dUrl: "https://cdn.example/chair.glb" }))
+      .mockResolvedValueOnce(okJson({ success: true, filename: "chair.glb", filePath: "/proj/generations/chair.glb" }));
+
+    await executeGenerate3D(ctx);
+    const tracked = (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1] as Promise<void>;
+    expect(await hasSettled(tracked)).toBe(false);
+    hold();
+    await tracked;
+    expect(mockFetch.mock.calls[1][0]).toBe("/api/save-generation");
+    expect(nodes.get("3d-1")!.data).toMatchObject({ savedFilename: "chair.glb", savedFilePath: "/proj/generations/chair.glb" });
+
+    // The recording lands later; the node keeps pointing at the file the folder save wrote
+    settle(saved);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(nodes.get("3d-1")!.data).toMatchObject({ savedFilename: "chair.glb", savedFilePath: "/proj/generations/chair.glb" });
+  });
 });
 
 describe("comfyApp", () => {
@@ -708,6 +869,24 @@ describe("comfyApp", () => {
 
     const save = mockFetch.mock.calls.find((c) => c[0] === "/api/save-generation");
     expect(JSON.parse(save![1].body)).toMatchObject({ directoryPath: "/proj/generations", image: "data:image/png;base64,big" });
+  });
+
+  it("in a project, saves the image to the folder at once when the library holds its recording up", async () => {
+    vi.useFakeTimers();
+    const { recordAsset, hold } = heldRecorder();
+    const ctx = comfyRun(recordAsset);
+
+    const run = executeComfyApp(ctx);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    const tracked = (ctx.trackSaveGeneration as ReturnType<typeof vi.fn>).mock.calls[0][1] as Promise<void>;
+    expect(await hasSettled(tracked)).toBe(false);
+    expect(mockFetch.mock.calls.some((c) => c[0] === "/api/save-generation")).toBe(false);
+
+    hold();
+    await vi.advanceTimersByTimeAsync(0);
+    await tracked;
+    expect(mockFetch.mock.calls.filter((c) => c[0] === "/api/save-generation")).toHaveLength(1);
   });
 
   it("in a project, saves the image to the folder when the recorder throws", async () => {
