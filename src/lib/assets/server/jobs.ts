@@ -12,6 +12,7 @@ import { newAssetId, newRunId } from "../client/ids";
 import type { AssetModelRef, AssetRecord, LibraryJobStatus, LibraryJobType } from "../types";
 import { errnoCode, LibraryError } from "./errors";
 import {
+  atomicWriteFile,
   copyFileVerified,
   foldsCase,
   hashFile,
@@ -25,7 +26,7 @@ import { acquireLock, DATA_DIR, GENERATIONS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
 import type { Thumbnailer } from "./thumbs";
-import { extOf, isMediaExtension, isWorkflowId, mediaTypeForExt, normaliseProjectDir } from "./validate";
+import { extOf, isMediaExtension, isWorkflowId, mediaTypeForExt, normaliseProjectDir, safeFileName } from "./validate";
 
 /* ------------------------------------------------------------------ */
 /* Runner                                                              */
@@ -112,6 +113,29 @@ export class JobRunner {
       if (!oldest) break;
       this.jobs.delete(oldest.status.id);
     }
+    return { ...status };
+  }
+
+  /**
+   * Records a job that ended outside this runner — a move stopped by the
+   * app quitting, found at the next start — so the library status reports
+   * it like any finished job.
+   */
+  note(type: LibraryJobType, outcome: { error: string } | { message: string }): LibraryJobStatus {
+    const now = Date.now();
+    const status: LibraryJobStatus = {
+      id: `j${now.toString(36)}${randomUUID().replace(/-/g, "").slice(0, 10)}`,
+      type,
+      state: "error" in outcome ? "failed" : "done",
+      done: 0,
+      total: 0,
+      bytesDone: 0,
+      bytesTotal: 0,
+      startedAt: now,
+      finishedAt: now,
+      ...outcome,
+    };
+    this.jobs.set(status.id, { status, controller: new AbortController(), promise: Promise.resolve() });
     return { ...status };
   }
 
@@ -285,12 +309,24 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
   let failed = 0;
   for (const { projectDir, files } of plan) {
     const workflow = await readProjectWorkflow(projectDir);
-    const workflowId =
-      workflow?.id ?? `import_${createHash("sha1").update(pathKey(projectDir)).digest("hex").slice(0, 16)}`;
+    const folderId = `import_${createHash("sha1").update(pathKey(projectDir)).digest("hex").slice(0, 16)}`;
+    let workflowId = workflow?.id ?? folderId;
+    let forkedFrom: string | undefined;
+    const claimed = library.getWorkflow(workflowId)?.projectPath;
+    if (workflowId !== folderId && claimed && pathKey(claimed) !== pathKey(projectDir)) {
+      // That id already belongs to another project (a copied folder, a shared community workflow):
+      // file these under this folder's own id rather than moving the other project's assets here.
+      forkedFrom = workflowId;
+      workflowId = folderId;
+    }
     const workflowName = workflow?.name ?? path.basename(projectDir);
     // Importing is an explicit "these files belong to this folder"; a name set in the app since is kept.
     const existing = library.getWorkflow(workflowId);
-    await library.upsertWorkflow(workflowId, { name: existing?.name ?? workflowName, projectPath: projectDir });
+    await library.upsertWorkflow(workflowId, {
+      name: existing?.name ?? workflowName,
+      projectPath: projectDir,
+      ...(forkedFrom ? { forkedFrom } : {}),
+    });
     const runId = newRunId();
     for (const { file, size, mtime } of files) {
       ctx.checkCancelled();
@@ -391,10 +427,15 @@ function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+/** A snapshot with no asset is kept this long: a run still recording writes it a moment before its asset lands. */
+export const ORPHAN_RUN_GRACE_MS = 60 * 60 * 1000;
+
 /**
- * `unusedMedia`: delete snapshot media no stored run references, posters of
- * assets that no longer exist, stale partial files, and trim the thumbnail
- * cache. `thumbnails`: empty the thumbnail cache.
+ * `unusedMedia`: delete the snapshots of runs no asset belongs to any more,
+ * then snapshot media no remaining run references (none at all when a
+ * snapshot can't be read right now), posters of assets that no longer
+ * exist, stale partial files, and trim the thumbnail cache. `thumbnails`:
+ * empty the thumbnail cache.
  */
 export async function runCleanup(
   ctx: JobContext,
@@ -405,6 +446,7 @@ export async function runCleanup(
   await library.ready();
   let files = 0;
   let bytes = 0;
+  let keptForUnreadable = false;
   const remove = async (file: string) => {
     try {
       const stat = await fs.stat(file);
@@ -417,8 +459,14 @@ export async function runCleanup(
   };
 
   if (request.unusedMedia) {
-    const referenced = await library.runs.referencedHashes();
-    const media = await library.runs.mediaEntries();
+    const runsInUse = new Set(library.allRecords().map((record) => record.runId));
+    const orphans = await library.runs.removeOrphans(runsInUse, Date.now() - ORPHAN_RUN_GRACE_MS);
+    files += orphans.files;
+    bytes += orphans.bytes;
+    ctx.checkCancelled();
+    const { hashes: referenced, incomplete } = await library.runs.referencedHashes();
+    keptForUnreadable = incomplete;
+    const media = incomplete ? [] : await library.runs.mediaEntries();
     let posterNames: string[] = [];
     try {
       posterNames = await fs.readdir(library.layout.posters);
@@ -449,20 +497,28 @@ export async function runCleanup(
     ctx.checkCancelled();
     files += await thumbs.clear();
   }
-  return files ? `Removed ${files} ${files === 1 ? "file" : "files"}${bytes ? ` (${formatBytes(bytes)})` : ""}.` : "Nothing to clean up.";
+  const summary = files
+    ? `Removed ${files} ${files === 1 ? "file" : "files"}${bytes ? ` (${formatBytes(bytes)})` : ""}.`
+    : "Nothing to clean up.";
+  return keptForUnreadable
+    ? `${summary} Some workflow snapshots couldn't be read, so their media was kept. Try again later.`
+    : summary;
 }
 
 /* ------------------------------------------------------------------ */
 /* Export                                                              */
 /* ------------------------------------------------------------------ */
 
-/** `name.ext`, then `name (2).ext`, … — whichever does not exist yet (created exclusively). */
+/** `name.ext`, then `name (2).ext`, … — whichever does not exist yet (created exclusively), always directly in `dir`. */
 async function copyToUniqueName(source: string, dir: string, filename: string): Promise<string> {
   const dot = filename.lastIndexOf(".");
   const base = dot > 0 ? filename.slice(0, dot) : filename;
   const ext = dot > 0 ? filename.slice(dot) : "";
   for (let n = 1; n < 10_000; n++) {
     const target = path.join(dir, n === 1 ? filename : `${base} (${n})${ext}`);
+    if (path.dirname(target) !== path.resolve(dir)) {
+      throw new LibraryError(`Can't export a file named ${filename}`, 400, "bad_request");
+    }
     try {
       await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
       return target;
@@ -486,6 +542,20 @@ export async function prepareExportDest(value: unknown, library: AssetLibrary): 
   return dest;
 }
 
+async function isDirectory(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Copies each asset's file into `dest` under its own name (reduced to a
+ * bare file name: a sidecar is user-editable and never picks the folder).
+ * Only a source that is not there marks an asset missing; when the
+ * destination goes away (an unplugged drive), the job stops with that.
+ */
 export async function runExport(ctx: JobContext, library: AssetLibrary, ids: string[], dest: string): Promise<string> {
   const records = ids
     .map((id) => library.get(id))
@@ -493,22 +563,43 @@ export async function runExport(ctx: JobContext, library: AssetLibrary, ids: str
   ctx.update({ total: records.length, bytesTotal: records.reduce((sum, record) => sum + record.bytes, 0) });
   let copied = 0;
   let missing = 0;
+  let failed = 0;
   for (const record of records) {
     ctx.checkCancelled();
     const file = library.filePath(record);
-    try {
-      if (!file) throw new Error("no file");
-      await copyToUniqueName(file, dest, record.filename);
-      copied++;
-    } catch (error) {
-      if (errnoCode(error) === "ENOENT") library.setMissing(record.id, true);
+    let found = false;
+    if (file) {
+      try {
+        found = (await fs.stat(file)).isFile();
+      } catch (error) {
+        library.noteFileError(record.id, error);
+      }
+    }
+    if (!found) {
       missing++;
+    } else {
+      const name = safeFileName(record.filename) ?? safeFileName(file) ?? `${record.id}.${record.ext}`;
+      try {
+        await copyToUniqueName(file!, dest, name);
+        copied++;
+      } catch (error) {
+        if (!(await isDirectory(dest))) {
+          throw new LibraryError(
+            `The export folder is no longer available (${dest}). ${copied} ${copied === 1 ? "file was" : "files were"} copied before it went.`,
+            409,
+            "gone",
+          );
+        }
+        console.warn("[assets] could not export", file, error);
+        failed++;
+      }
     }
     ctx.addBytes(record.bytes);
     ctx.step();
   }
   const parts = [`Exported ${copied} ${copied === 1 ? "file" : "files"}.`];
   if (missing) parts.push(`${missing} could not be found.`);
+  if (failed) parts.push(`${failed} could not be copied.`);
   return parts.join(" ");
 }
 
@@ -578,14 +669,35 @@ interface ManifestEntry {
   rel: string;
   source: string;
   size: number;
+  mtimeMs: number;
 }
 
-/** Library-owned files only: Generations/ and .nodebanana/ (never projects, caches, locks or temp files). */
-async function buildManifest(root: string): Promise<ManifestEntry[]> {
+/** In the source's data folder while a move runs: `{ toRoot, startedAt, pid, state }`. */
+export const MOVE_MARKER = "move.json";
+/** In the source's data folder: each rel path the move is about to copy, one per line. */
+export const MOVE_LOG = "move-copied.ndjson";
+/** In the target's data folder while a move copies into it: `{ fromRoot, startedAt }`. */
+export const MOVE_SOURCE_MARKER = "move-source.json";
+
+const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Library-owned files only: the day folders of Generations/ and
+ * .nodebanana/ — never projects (not even a project file that ended up
+ * under Generations/), caches, locks, move markers or temp files.
+ */
+async function buildManifest(root: string, library?: AssetLibrary): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
-  const skipDirs = new Set([path.join(root, DATA_DIR, "cache")]);
-  const skipFiles = new Set([path.join(root, DATA_DIR, "lock"), path.join(root, DATA_DIR, "config.json")]);
-  const walk = async (dir: string) => {
+  const data = path.join(root, DATA_DIR);
+  const skipDirs = new Set([path.join(data, "cache")]);
+  const skipFiles = new Set([
+    path.join(data, "lock"),
+    path.join(data, "config.json"),
+    path.join(data, MOVE_MARKER),
+    path.join(data, MOVE_LOG),
+    path.join(data, MOVE_SOURCE_MARKER),
+  ]);
+  const walk = async (dir: string, accept: (dirent: import("fs").Dirent) => boolean = () => true) => {
     let names: import("fs").Dirent[];
     try {
       names = await fs.readdir(dir, { withFileTypes: true });
@@ -593,19 +705,21 @@ async function buildManifest(root: string): Promise<ManifestEntry[]> {
       return;
     }
     for (const dirent of names) {
+      if (!accept(dirent)) continue;
       const full = path.join(dir, dirent.name);
       if (dirent.isDirectory()) {
         if (!skipDirs.has(full)) await walk(full);
       } else if (dirent.isFile()) {
         if (skipFiles.has(full) || dirent.name.endsWith(PARTIAL_SUFFIX) || dirent.name.endsWith(".tmp")) continue;
         if (dirent.name.startsWith(".probe-")) continue;
+        if (library?.recordsAtPath(full).some((record) => record.file.root === "external")) continue;
         const stat = await fs.stat(full);
-        entries.push({ rel: path.relative(root, full), source: full, size: stat.size });
+        entries.push({ rel: path.relative(root, full), source: full, size: stat.size, mtimeMs: stat.mtimeMs });
       }
     }
   };
-  await walk(path.join(root, GENERATIONS_DIR));
-  await walk(path.join(root, DATA_DIR));
+  await walk(path.join(root, GENERATIONS_DIR), (dirent) => dirent.isDirectory() && DAY_FOLDER.test(dirent.name));
+  await walk(data);
   return entries;
 }
 
@@ -632,67 +746,248 @@ export interface MoveDeps {
   setPaused(paused: boolean): void;
   /** Persists the new root and swaps the server over to it. */
   switchRoot(toRoot: string): Promise<void>;
+  /**
+   * How long the lock is kept after the switch: long enough for another
+   * process, refused meanwhile, to have re-read library.json by the time it
+   * may write again (so it never writes into the old root).
+   */
+  settleMs?: number;
+}
+
+interface MoveMarker {
+  v: 1;
+  toRoot: string;
+  startedAt: number;
+  pid: number;
+  /** `copying` until the switch starts; only a move stopped while copying left a partial copy to remove. */
+  state: "copying" | "switching";
+}
+
+/** Re-scans before the switch for writes that were in flight elsewhere when the lock was taken. */
+const MOVE_RESCAN_PASSES = 3;
+
+function relKey(rel: string): string {
+  return rel.split(path.sep).join("/");
+}
+
+/** A target path the move may have written: inside the target's Generations or data folder. */
+function movedPath(toRoot: string, rel: string): string | null {
+  const dest = path.join(toRoot, ...rel.split("/"));
+  const inside =
+    isInsideRoot(path.join(toRoot, GENERATIONS_DIR), dest) || isInsideRoot(path.join(toRoot, DATA_DIR), dest);
+  return inside ? dest : null;
+}
+
+async function readJson<T>(file: string): Promise<T | null> {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8")) as T;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Copies the library-owned files to the new root from a manifest, verifying
- * size and hash per file, with recording (and every other write) paused;
- * switches the root only once everything verified; then deletes exactly the
- * files it copied from the old root. A failure or cancel before the switch
- * removes the copies and leaves the old library untouched.
+ * size and hash per file, with recording (and every other write) paused —
+ * in this process by the pause, in the other build by the "move" lock —
+ * then re-scans for anything that changed while it copied. Switches the
+ * root only once everything verified; then deletes exactly the files it
+ * copied from the old root. A failure or cancel before the switch removes
+ * the copies and leaves the old library untouched.
+ *
+ * `move.json` and `move-copied.ndjson` in the source's data folder (and
+ * `move-source.json` in the target's) record the move while it runs, so one
+ * stopped by the app quitting or crashing is found and undone at the next
+ * start ({@link recoverInterruptedMove}), and the same target can be used
+ * again.
  */
 export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> {
   const from = deps.library;
   const fromRoot = from.root;
   const toRoot = deps.toRoot;
+  const markerFile = path.join(from.layout.data, MOVE_MARKER);
+  const logFile = path.join(from.layout.data, MOVE_LOG);
+  const targetMarker = path.join(toRoot, DATA_DIR, MOVE_SOURCE_MARKER);
   deps.setPaused(true);
-  const copied: { source: string; dest: string }[] = [];
+  const copied = new Map<string, { source: string; dest: string; size: number; mtimeMs: number }>();
   let lock: Awaited<ReturnType<typeof acquireLock>> = null;
   let switched = false;
+  let switchedAt = 0;
   try {
     if (!(await deps.waitForWrites(60_000))) {
       throw new LibraryError("Recordings are still being saved. Try again in a moment.", 409, "busy");
     }
-    lock = await acquireLock(from.layout.lock, { heartbeat: true });
+    lock = await acquireLock(from.layout.lock, { heartbeat: true, purpose: "move" });
     if (!lock) throw new LibraryError("The library is busy in another window. Try again in a moment.", 409, "busy");
     await from.drain();
 
-    const manifest = await buildManifest(fromRoot);
-    ctx.update({ total: manifest.length, bytesTotal: manifest.reduce((sum, entry) => sum + entry.size, 0) });
-    await fs.mkdir(toRoot, { recursive: true });
-    for (const entry of manifest) {
-      ctx.checkCancelled();
-      const dest = path.join(toRoot, entry.rel);
-      await fs.mkdir(path.dirname(dest), { recursive: true });
-      await copyFileVerified(entry.source, dest, { signal: ctx.signal, onBytes: (bytes) => ctx.addBytes(bytes) });
-      copied.push({ source: entry.source, dest });
-      ctx.step();
+    const marker: MoveMarker = { v: 1, toRoot, startedAt: Date.now(), pid: process.pid, state: "copying" };
+    await atomicWriteFile(markerFile, JSON.stringify(marker), { fsync: true });
+    await fs.writeFile(logFile, "");
+    await fs.mkdir(path.join(toRoot, DATA_DIR), { recursive: true });
+    await atomicWriteFile(targetMarker, JSON.stringify({ fromRoot, startedAt: marker.startedAt }), { fsync: true });
+
+    let total = 0;
+    let bytesTotal = 0;
+    const copyAll = async (entries: ManifestEntry[]) => {
+      total += entries.length;
+      bytesTotal += entries.reduce((sum, entry) => sum + entry.size, 0);
+      ctx.update({ total, bytesTotal });
+      for (const entry of entries) {
+        ctx.checkCancelled();
+        const rel = relKey(entry.rel);
+        const dest = movedPath(toRoot, rel);
+        if (!dest) continue;
+        // Logged before the copy, so a stop part-way still knows every file it may have left.
+        await fs.appendFile(logFile, `${JSON.stringify(rel)}\n`);
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await copyFileVerified(entry.source, dest, { signal: ctx.signal, onBytes: (bytes) => ctx.addBytes(bytes) });
+        copied.set(rel, { source: entry.source, dest, size: entry.size, mtimeMs: entry.mtimeMs });
+        ctx.step();
+      }
+    };
+    await copyAll(await buildManifest(fromRoot, from));
+    for (let pass = 0; pass < MOVE_RESCAN_PASSES; pass++) {
+      const now = await buildManifest(fromRoot, from);
+      const present = new Set(now.map((entry) => relKey(entry.rel)));
+      for (const [rel, { dest }] of copied) {
+        if (present.has(rel)) continue;
+        // Deleted (or trashed for good) since it was copied.
+        await unlinkWithRetry(dest).catch(() => {});
+        copied.delete(rel);
+      }
+      const changed = now.filter((entry) => {
+        const done = copied.get(relKey(entry.rel));
+        return !done || done.size !== entry.size || done.mtimeMs !== entry.mtimeMs;
+      });
+      if (!changed.length) break;
+      await copyAll(changed);
     }
     ctx.checkCancelled();
+    await atomicWriteFile(markerFile, JSON.stringify({ ...marker, state: "switching" }), { fsync: true });
     await deps.switchRoot(toRoot);
     switched = true;
+    switchedAt = Date.now();
+    // The target is the library now, not a partial copy.
+    await unlinkWithRetry(targetMarker).catch(() => {});
+    deps.setPaused(false);
   } catch (error) {
     if (!switched) {
-      for (const { dest } of copied) await unlinkWithRetry(dest).catch(() => {});
-      await removeEmptyDirs(copied.map(({ dest }) => path.dirname(dest)), toRoot);
+      for (const { dest } of copied.values()) await unlinkWithRetry(dest).catch(() => {});
+      await unlinkWithRetry(targetMarker).catch(() => {});
+      await removeEmptyDirs([...[...copied.values()].map(({ dest }) => path.dirname(dest)), path.join(toRoot, DATA_DIR)], toRoot);
+      await unlinkWithRetry(markerFile).catch(() => {});
+      await unlinkWithRetry(logFile).catch(() => {});
     }
-    throw error;
-  } finally {
     await lock?.release();
     deps.setPaused(false);
+    throw error;
   }
 
+  // Still holding the lock: the other build's writes are refused until it has followed the switch.
   let leftovers = 0;
-  for (const { source } of copied) {
-    try {
-      await unlinkWithRetry(source);
-    } catch {
-      leftovers++;
+  try {
+    for (const { source } of copied.values()) {
+      try {
+        await unlinkWithRetry(source);
+      } catch {
+        leftovers++;
+      }
     }
+    const settle = switchedAt + (deps.settleMs ?? 0) - Date.now();
+    if (settle > 0) await new Promise((resolve) => setTimeout(resolve, settle));
+  } finally {
+    await lock?.release();
+    await unlinkWithRetry(markerFile).catch(() => {});
+    await unlinkWithRetry(logFile).catch(() => {});
   }
-  await removeEmptyDirs(copied.map(({ source }) => path.dirname(source)), fromRoot);
-  const moved = `Moved ${copied.length} ${copied.length === 1 ? "file" : "files"}.`;
+  await removeEmptyDirs([...[...copied.values()].map(({ source }) => path.dirname(source)), from.layout.data], fromRoot);
+  const moved = `Moved ${copied.size} ${copied.size === 1 ? "file" : "files"}.`;
   return leftovers
     ? `${moved} ${leftovers} could not be removed from the old folder (${fromRoot}); they are safe to delete.`
     : moved;
+}
+
+/**
+ * Finds a move of this library that stopped part-way — the app quit, was
+ * restarted or crashed while copying — and removes what it had copied into
+ * the target (exactly the files its log names, and their partial files), so
+ * the library stays here, whole, and the same target can be chosen again.
+ * Returns the target it cleaned, or null when there was nothing to recover
+ * (or a move is still running in some process).
+ */
+export async function recoverInterruptedMove(library: AssetLibrary): Promise<{ toRoot: string } | null> {
+  const data = library.layout.data;
+  const markerFile = path.join(data, MOVE_MARKER);
+  const logFile = path.join(data, MOVE_LOG);
+  const ownMarker = path.join(data, MOVE_SOURCE_MARKER);
+  // This root is the live library: whatever move copied into it finished its switch.
+  if (await exists(ownMarker)) await unlinkWithRetry(ownMarker).catch(() => {});
+  if (!(await exists(markerFile))) return null;
+  // Held while recovering, so no move starts (and writes new markers) halfway; a live holder means
+  // the move is still running somewhere, and a dead one's lock is taken over.
+  const lock = await acquireLock(library.layout.lock, { purpose: "move" });
+  if (!lock) return null;
+  try {
+    return await recoverMoveLocked(library.root, markerFile, logFile);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function recoverMoveLocked(root: string, markerFile: string, logFile: string): Promise<{ toRoot: string } | null> {
+  const marker = await readJson<Partial<MoveMarker>>(markerFile);
+  const toRoot = typeof marker?.toRoot === "string" && path.isAbsolute(marker.toRoot) ? path.resolve(marker.toRoot) : null;
+  let recovered: { toRoot: string } | null = null;
+  if (toRoot) {
+    // The target still carries this move's marker only while it has never been the live library
+    // (starting a library removes it), so what it holds is only this move's copy.
+    const target = await readJson<{ fromRoot?: unknown }>(path.join(toRoot, DATA_DIR, MOVE_SOURCE_MARKER));
+    if (typeof target?.fromRoot === "string" && pathKey(target.fromRoot) === pathKey(root)) {
+      let rels: string[] = [];
+      try {
+        rels = (await fs.readFile(logFile, "utf8"))
+          .split("\n")
+          .flatMap((line) => {
+            try {
+              const rel = JSON.parse(line) as unknown;
+              return typeof rel === "string" ? [rel] : [];
+            } catch {
+              return [];
+            }
+          });
+      } catch {
+        rels = [];
+      }
+      const dirs = new Set<string>();
+      for (const rel of rels) {
+        const dest = movedPath(toRoot, rel);
+        if (!dest) continue;
+        dirs.add(path.dirname(dest));
+        await unlinkWithRetry(dest).catch(() => {});
+      }
+      // The file that was being copied when it stopped.
+      for (const dir of dirs) await sweepStaleTemps(dir, 0);
+      await unlinkWithRetry(path.join(toRoot, DATA_DIR, MOVE_SOURCE_MARKER)).catch(() => {});
+      await removeEmptyDirs([...dirs, path.join(toRoot, DATA_DIR)], toRoot);
+      recovered = { toRoot };
+    }
+  }
+  await unlinkWithRetry(markerFile).catch(() => {});
+  await unlinkWithRetry(logFile).catch(() => {});
+  return recovered;
+}
+
+async function exists(file: string): Promise<boolean> {
+  try {
+    await fs.stat(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A folder a move into it stopped part-way, still marked as that move's target. */
+export async function isUnfinishedMoveTarget(root: string): Promise<boolean> {
+  return exists(path.join(root, DATA_DIR, MOVE_SOURCE_MARKER));
 }

@@ -110,6 +110,26 @@ describe("streamToPartial", () => {
   });
 });
 
+describe("streamToPartial on a stalled web stream", () => {
+  it("cancels the stream and gives up on the idle timeout, instead of waiting for the read", async () => {
+    let cancelled = false;
+    const stalled = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      pull: () => new Promise<void>(() => {}),
+      cancel: () => {
+        cancelled = true;
+      },
+    });
+    const started = Date.now();
+    await expect(streamToPartial(stalled, dir, { maxBytes: 100, idleTimeoutMs: 30 })).rejects.toMatchObject({ code: "timeout" });
+    expect(Date.now() - started).toBeLessThan(900);
+    expect(cancelled).toBe(true);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  }, 5000);
+});
+
 describe("sweepStaleTemps", () => {
   it("removes only old partial and tmp files", async () => {
     const old = path.join(dir, "a.partial");

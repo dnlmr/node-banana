@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopServerBridge } from "../../types";
-import { openFolder, revealFile, trashFile, type ExecRunner } from "../desktop";
+import { openFolder, revealFile, trashFile, trashFiles, type ExecRunner } from "../desktop";
 import { tempDir } from "./helpers";
 
 let dir: string;
@@ -31,8 +31,9 @@ describe("revealFile", () => {
   it("selects the file in Explorer with one verbatim argument", async () => {
     const { calls, exec } = recorder();
     await revealFile(file, { platform: "win32", exec, bridge: null });
+    // Never hidden: Explorer would hand SW_HIDE on to the window it opens.
     expect(calls).toEqual([
-      { command: "explorer.exe", args: [`/select,"${file}"`], options: { windowsVerbatimArguments: true } },
+      { command: "explorer.exe", args: [`/select,"${file}"`], options: { windowsVerbatimArguments: true, windowsHide: false } },
     ]);
   });
 
@@ -63,7 +64,7 @@ describe("revealFile", () => {
   it("opens a folder", async () => {
     const { calls, exec } = recorder();
     await openFolder("D:\\Lib", { platform: "win32", exec, bridge: null });
-    expect(calls[0]).toMatchObject({ command: "explorer.exe", args: ["D:\\Lib"] });
+    expect(calls[0]).toMatchObject({ command: "explorer.exe", args: ["D:\\Lib"], options: { windowsHide: false } });
   });
 });
 
@@ -75,7 +76,64 @@ describe("trashFile", () => {
     expect(await trashFile(file, { platform: "win32", exec, bridge: null })).toBe("os");
     expect(calls[0].command).toBe("powershell.exe");
     expect(calls[0].args.join(" ")).not.toContain(file);
-    expect((calls[0].options.env as Record<string, string>).NB_TRASH_PATH).toBe(file);
+    expect((calls[0].options.env as Record<string, string>).NB_TRASH_PATHS).toBe(file);
+  });
+
+  describe("many files", () => {
+    function files(count: number): string[] {
+      return Array.from({ length: count }, (_, i) => {
+        const file = path.join(dir, `f${i}.png`);
+        fs.writeFileSync(file, "x");
+        return file;
+      });
+    }
+    const removeAll = (list: string[]) => () => list.forEach((file) => fs.rmSync(file, { force: true }));
+
+    it("sends them to the Recycle Bin in one PowerShell run", async () => {
+      const list = files(3);
+      const { calls, exec } = recorder(removeAll(list));
+      const results = await trashFiles(list, { platform: "win32", exec, bridge: null });
+      expect(calls).toHaveLength(1);
+      expect((calls[0].options.env as Record<string, string>).NB_TRASH_PATHS.split("\n")).toEqual(list);
+      expect([...results.values()]).toEqual(["os", "os", "os"]);
+    });
+
+    it("passes them all to one /usr/bin/trash, or one Finder delete", async () => {
+      const list = files(3);
+      const trash = recorder(removeAll(list));
+      await trashFiles(list, { platform: "darwin", exec: trash.exec, bridge: null });
+      expect(trash.calls).toEqual([expect.objectContaining({ command: "/usr/bin/trash", args: list })]);
+
+      const older = files(3);
+      const finder = recorder((command) => {
+        if (command === "/usr/bin/trash") throw Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+        removeAll(older)();
+      });
+      await trashFiles(older, { platform: "darwin", exec: finder.exec, bridge: null });
+      expect(finder.calls.map((call) => call.command)).toEqual(["/usr/bin/trash", "osascript"]);
+      expect(finder.calls[1].args.slice(-3)).toEqual(older);
+    });
+
+    it("passes them all to one gio call", async () => {
+      const list = files(3);
+      const { calls, exec } = recorder(removeAll(list));
+      await trashFiles(list, { platform: "linux", exec, bridge: null });
+      expect(calls).toEqual([expect.objectContaining({ command: "gio", args: ["trash", ...list] })]);
+    });
+
+    it("retries a failed batch file by file, then unlinks only what is left", async () => {
+      const list = files(3);
+      const { calls, exec } = recorder((_command, args) => {
+        if (args.length > 2) throw Object.assign(new Error("one bad path"), { code: 1 });
+        if (args[1] !== list[1]) fs.rmSync(args[1]);
+      });
+      const results = await trashFiles(list, { platform: "linux", exec, bridge: null });
+      expect(calls).toHaveLength(4);
+      expect(results.get(list[0])).toBe("os");
+      expect(results.get(list[1])).toBe("unlink");
+      expect(results.get(list[2])).toBe("os");
+      expect(list.some((file) => fs.existsSync(file))).toBe(false);
+    });
   });
 
   it("passes the path to osascript as an argument when /usr/bin/trash is missing", async () => {

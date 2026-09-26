@@ -88,6 +88,14 @@ export const MEDIA_TYPES: readonly MediaType[] = [
   { ext: "gif", mime: "image/gif", kind: "image" },
   { ext: "webp", mime: "image/webp", kind: "image" },
   { ext: "svg", mime: "image/svg+xml", kind: "image", aliases: ["image/svg"] },
+  { ext: "avif", mime: "image/avif", kind: "image" },
+  {
+    ext: "heic",
+    mime: "image/heic",
+    kind: "image",
+    aliases: ["image/heif", "image/heic-sequence", "image/heif-sequence"],
+    extAliases: ["heif"],
+  },
   { ext: "mp4", mime: "video/mp4", kind: "video", aliases: ["video/x-m4v", "video/m4v"], extAliases: ["m4v"] },
   { ext: "webm", mime: "video/webm", kind: "video" },
   { ext: "mov", mime: "video/quicktime", kind: "video", aliases: ["video/mov"] },
@@ -150,6 +158,18 @@ export function isMediaExtension(ext: string): boolean {
 export function extOf(filename: string): string {
   const dot = filename.lastIndexOf(".");
   return dot <= 0 ? "" : filename.slice(dot + 1).toLowerCase();
+}
+
+/**
+ * A file name read from a sidecar, made safe to join into a folder: its
+ * last path segment, which must carry a media extension and hold no NUL or
+ * `:` (a Windows stream separator). Null when nothing usable is left.
+ */
+export function safeFileName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.split(/[\\/]/).pop() ?? "";
+  if (!name || name === "." || name === ".." || name.length > 255 || /[\0:]/.test(name)) return null;
+  return isMediaExtension(extOf(name)) ? name : null;
 }
 
 /** Extension of an URL's path, when it is a known media extension. */

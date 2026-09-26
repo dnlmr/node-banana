@@ -122,9 +122,11 @@ describe("recording into the library", () => {
 
     const sidecar = JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "assets", `${m.id}.json`), "utf8"));
     expect(sidecar).toMatchObject({ v: 1, id: m.id, sha256: sha, prompt: "Neon koi, rainy street" });
-    const journal = fs.readFileSync(path.join(root, ".nodebanana", "journal.ndjson"), "utf8").trim().split("\n");
-    expect(journal).toHaveLength(1);
-    expect(JSON.parse(journal[0])).toMatchObject({ op: "put", id: m.id, pid: process.pid });
+    const journal = fs.readFileSync(path.join(root, ".nodebanana", "journal.ndjson"), "utf8").split("\n").filter(Boolean);
+    // The generation marker, then one line for the record.
+    expect(journal).toHaveLength(2);
+    expect(typeof JSON.parse(journal[0]).gen).toBe("string");
+    expect(JSON.parse(journal[1])).toMatchObject({ op: "put", id: m.id, pid: process.pid });
   });
 
   it("measures video and audio", async () => {
@@ -190,6 +192,19 @@ describe("recording into a project", () => {
     const result = await record(makePng(), { projectDir: path.join(base, "gone") });
     expect(result.asset.file.root).toBe("library");
     expect(fs.existsSync(path.join(base, "gone"))).toBe(false);
+  });
+
+  it("records into the library when the 'project folder' is the library itself", async () => {
+    await getLibraryStatus();
+    let seed = 40;
+    for (const projectDir of [root, path.join(root, "Generations"), path.join(root, "Generations", "2026-09-27"), path.join(root, ".nodebanana")]) {
+      fs.mkdirSync(projectDir, { recursive: true });
+      const result = await record(makePng(4, 4, seed++), { projectDir });
+      expect(result.asset.file.root).toBe("library");
+    }
+    // No project-style `generations` folder was made inside the library.
+    expect(listFiles(root)).not.toContain("generations");
+    expect(listFiles(path.join(root, "Generations", "2026-09-27"))).not.toContain("generations");
   });
 });
 

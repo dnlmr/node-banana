@@ -16,6 +16,24 @@ function ascii(buf: Buffer, start: number, end: number): string {
   return buf.length >= end ? buf.toString("latin1", start, end) : "";
 }
 
+const AVIF_BRANDS = new Set(["avif", "avis"]);
+const HEIC_BRANDS = new Set(["heic", "heix", "heim", "heis", "hevc", "hevx"]);
+/** Brands any HEIF still or sequence may lead with; the compatible brands then say AVIF or HEIC. */
+const HEIF_BRANDS = new Set(["mif1", "msf1"]);
+
+/** An ISO-BMFF file that is an AVIF or HEIC image (by its ftyp brands), else null. */
+function heifImage(head: Buffer): "avif" | "heic" | null {
+  const major = ascii(head, 8, 12);
+  if (AVIF_BRANDS.has(major)) return "avif";
+  if (HEIC_BRANDS.has(major)) return "heic";
+  if (!HEIF_BRANDS.has(major)) return null;
+  const end = Math.min(head.readUInt32BE(0), head.length, 512);
+  for (let offset = 16; offset + 4 <= end; offset += 4) {
+    if (AVIF_BRANDS.has(ascii(head, offset, offset + 4))) return "avif";
+  }
+  return "heic";
+}
+
 /**
  * The format families a file's first bytes prove, most specific first. A
  * family lists every allowlisted type the container can be (an ISO-BMFF file
@@ -37,6 +55,9 @@ export function sniffFamily(head: Buffer): string[] | null {
     const brand = ascii(head, 8, 12);
     if (brand === "qt  ") return ["mov"];
     if (brand === "M4A " || brand === "M4B " || brand === "M4P ") return ["m4a", "mp4"];
+    // AVIF and HEIC stills are ISO-BMFF too; they are images, not mp4 video.
+    const image = heifImage(head);
+    if (image) return [image];
     return ["mp4", "m4a"];
   }
   if (head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return ["webm"];

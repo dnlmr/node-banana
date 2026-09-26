@@ -89,18 +89,55 @@ export function parseRegistryPictures(output: string): string | null {
 
 const REGISTRY_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders";
 
-let registryPictures: Promise<string | null> | null = null;
+/** Runs a console tool and resolves with its stdout (rejects when it fails). */
+export type CommandRunner = (command: string, args: string[]) => Promise<string>;
 
-function queryRegistryPictures(): Promise<string | null> {
-  registryPictures ??= new Promise((resolve) => {
-    execFile(
-      "reg",
-      ["query", REGISTRY_KEY, "/v", "My Pictures"],
-      { windowsHide: true, timeout: 5000 },
-      (error, stdout) => resolve(error ? null : parseRegistryPictures(String(stdout))),
+const runCommand: CommandRunner = (command, args) =>
+  new Promise((resolve, reject) => {
+    execFile(command, args, { windowsHide: true, timeout: 5000, encoding: "utf8" }, (error, stdout) =>
+      error ? reject(error) : resolve(String(stdout)),
     );
   });
-  return registryPictures;
+
+/** Asks for UTF-8 output: PowerShell otherwise writes the console code page, like reg.exe does. */
+const PICTURES_SCRIPT =
+  "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Environment]::GetFolderPath('MyPictures')";
+
+/** The first line of a tool's answer, or null when it is empty or was mangled in decoding (U+FFFD). */
+function folderFromOutput(output: string | null | undefined): string | null {
+  const line = output
+    ?.replace(/^﻿/, "")
+    .split(/\r?\n/)
+    .map((part) => part.trim())
+    .find(Boolean);
+  return line && !line.includes("�") ? line : null;
+}
+
+/**
+ * The Pictures folder as Windows resolves it, from PowerShell with UTF-8
+ * output. `reg query` is only the fallback when PowerShell can't run: it
+ * writes the OEM code page, so a non-ASCII path from it is mangled — and
+ * then dropped, rather than persisted as the library root.
+ */
+export async function queryWindowsPictures(run: CommandRunner = runCommand): Promise<string | null> {
+  try {
+    const folder = folderFromOutput(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", PICTURES_SCRIPT]));
+    if (folder) return folder;
+  } catch {
+    // No PowerShell (or it failed): try the registry.
+  }
+  try {
+    return folderFromOutput(parseRegistryPictures(await run("reg", ["query", REGISTRY_KEY, "/v", "My Pictures"])));
+  } catch {
+    return null;
+  }
+}
+
+let windowsPictures: Promise<string | null> | null = null;
+
+function cachedWindowsPictures(): Promise<string | null> {
+  windowsPictures ??= queryWindowsPictures();
+  return windowsPictures;
 }
 
 /** Parses `XDG_PICTURES_DIR` from a user-dirs.dirs file, as `xdg-user-dir PICTURES` does. */
@@ -133,9 +170,11 @@ async function linuxPicturesDir(ctx: PathContext): Promise<string> {
 export async function platformPicturesDir(ctx: PathContext): Promise<string> {
   const api = pathApi(ctx.platform);
   if (ctx.platform === "win32") {
-    const raw = ctx.winPicturesDir !== undefined ? ctx.winPicturesDir : await queryRegistryPictures();
+    const raw = ctx.winPicturesDir !== undefined ? ctx.winPicturesDir : await cachedWindowsPictures();
     const expanded = raw ? expandWindowsEnv(raw, ctx) : null;
-    if (expanded && api.isAbsolute(expanded) && !expanded.includes("%")) return api.resolve(expanded);
+    if (expanded && api.isAbsolute(expanded) && !expanded.includes("%") && !expanded.includes("�")) {
+      return api.resolve(expanded);
+    }
     return api.join(userProfile(ctx), "Pictures");
   }
   if (ctx.platform === "darwin") return api.join(ctx.homedir, "Pictures");
@@ -426,7 +465,7 @@ export async function initLibraryLocation(ctx: PathContext): Promise<LocationRes
   return { ok: true, location: next };
 }
 
-/** Test hook: forget the cached registry answer. */
+/** Test hook: forget the cached Pictures answer. */
 export function resetPathCachesForTests(): void {
-  registryPictures = null;
+  windowsPictures = null;
 }

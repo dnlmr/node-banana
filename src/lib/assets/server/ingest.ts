@@ -28,7 +28,8 @@ import { LibraryError } from "./errors";
 import {
   commitPartial,
   discardPartial,
-  KeyedMutex,
+  isInsideRoot,
+  pathKey,
   streamToPartial,
   sweepStaleTemps,
   unlinkWithRetry,
@@ -80,6 +81,16 @@ function stem(filename: string): string {
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
 
+/** The library root itself, or a folder inside its Generations or data folder. */
+function isLibraryFolder(library: AssetLibrary, dir: string): boolean {
+  const options = { platform: library.platform, allowEqual: true };
+  return (
+    pathKey(dir, library.platform) === pathKey(library.root, library.platform) ||
+    isInsideRoot(library.layout.generations, dir, options) ||
+    isInsideRoot(library.layout.data, dir, options)
+  );
+}
+
 function withoutUndefined<T extends object>(value: T): T {
   for (const key of Object.keys(value) as (keyof T)[]) {
     if (value[key] === undefined) delete value[key];
@@ -89,7 +100,6 @@ function withoutUndefined<T extends object>(value: T): T {
 
 export class Ingestor {
   private readonly tickets = new Map<string, Ticket>();
-  private readonly shaLocks = new KeyedMutex();
   private readonly sweptDirs = new Set<string>();
   private active = 0;
   private idleWaiters: (() => void)[] = [];
@@ -219,12 +229,16 @@ export class Ingestor {
   /**
    * `<project>/generations` when the project folder exists (created if
    * needed), else the library's day folder — an asset is never lost because
-   * its project folder moved or was never created.
+   * its project folder moved or was never created. A "project" that is the
+   * library root, or inside its Generations or data folder, is the library:
+   * its `generations` folder would be the library's own (case-insensitive
+   * disks), and a library move would carry the files away from the project.
    */
   private async resolveDestination(library: AssetLibrary, meta: RecordAssetMeta): Promise<Destination> {
     if (meta.projectDir) {
       try {
         const projectDir = normaliseProjectDir(meta.projectDir);
+        if (isLibraryFolder(library, projectDir)) throw new Error("the library is not a project");
         const stat = await fs.stat(projectDir);
         if (stat.isDirectory()) {
           const dir = path.join(projectDir, "generations");
@@ -271,7 +285,8 @@ export class Ingestor {
     }
     const type = decideMediaType({ head: streamed.head, kind: meta.kind, hintMime: hints.mime, hintExt: hints.ext });
 
-    return this.shaLocks.run(streamed.sha256, async () => {
+    // The library's lock, which a permanent delete takes too before it releases a file with these bytes.
+    return library.shaLocks.run(streamed.sha256, async () => {
       const existing = await library.find(meta.id);
       if (existing) {
         await discardPartial(streamed);
@@ -361,8 +376,9 @@ export class Ingestor {
       try {
         saved = await library.addRecord(record);
       } catch (error) {
-        // A new file with no sidecar would be an orphan; a reused one belongs to another record.
-        if (!reusable) await unlinkWithRetry(absolute).catch(() => {});
+        // A new file with no sidecar would be an orphan; a reused one belongs to another record, and
+        // once the sidecar is on disk the file is this record's (a retry answers with it).
+        if (!reusable && !(await library.hasSidecar(meta.id))) await unlinkWithRetry(absolute).catch(() => {});
         throw error;
       }
       this.deps.thumbs()?.enqueue(saved, absolute);

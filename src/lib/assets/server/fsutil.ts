@@ -177,18 +177,37 @@ export interface StreamOptions {
 
 type ByteSource = AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>;
 
+/**
+ * A web stream is read through its reader even though it is also async
+ * iterable: the reader's `cancel()` settles a read that is still waiting,
+ * whereas the iterator's `return()` waits for that read — so a stalled
+ * upload could never be let go of.
+ */
 function iterate(source: ByteSource): AsyncIterator<Uint8Array> {
-  if (typeof (source as AsyncIterable<Uint8Array>)[Symbol.asyncIterator] === "function") {
-    return (source as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+  if (typeof (source as ReadableStream<Uint8Array>).getReader === "function") {
+    const reader = (source as ReadableStream<Uint8Array>).getReader();
+    return {
+      next: () => reader.read() as Promise<IteratorResult<Uint8Array>>,
+      return: async () => {
+        await reader.cancel().catch(() => {});
+        return { done: true, value: undefined };
+      },
+    };
   }
-  const reader = (source as ReadableStream<Uint8Array>).getReader();
-  return {
-    next: () => reader.read() as Promise<IteratorResult<Uint8Array>>,
-    return: async () => {
-      await reader.cancel().catch(() => {});
-      return { done: true, value: undefined };
-    },
-  };
+  return (source as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+}
+
+/** Waits for `promise`, but no longer than `ms` (a source that won't close must not hold us). */
+async function settleWithin(promise: Promise<unknown> | undefined, ms: number): Promise<void> {
+  if (!promise) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    promise.catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
+  ]);
+  clearTimeout(timer);
 }
 
 async function nextWithTimeout(
@@ -255,7 +274,7 @@ export async function streamToPartial(source: ByteSource, dir: string, options: 
     finished = true;
   } catch (error) {
     options.onAbort?.();
-    await iterator.return?.().catch(() => undefined);
+    await settleWithin(iterator.return?.(), 1000);
     throw error;
   } finally {
     await handle.close().catch(() => {});
@@ -336,12 +355,13 @@ export async function hashFile(file: string, signal?: AbortSignal): Promise<File
 /**
  * Copies a file through a `.partial` next to the destination, hashing the
  * source as it is read, then re-reads the copy and checks size and hash
- * before renaming it into place. Returns the verified digest.
+ * (and `expectSha256`, when given) before renaming it into place. Returns
+ * the verified digest.
  */
 export async function copyFileVerified(
   source: string,
   destination: string,
-  options: { signal?: AbortSignal; onBytes?: (bytes: number) => void } = {},
+  options: { signal?: AbortSignal; onBytes?: (bytes: number) => void; expectSha256?: string } = {},
 ): Promise<FileDigest> {
   const stream = createReadStream(source, { highWaterMark: 1024 * 1024 });
   const counted = (async function* () {
@@ -362,7 +382,11 @@ export async function copyFileVerified(
   }
   try {
     const check = await hashFile(written.partialPath, options.signal);
-    if (check.bytes !== written.bytes || check.sha256 !== written.sha256) {
+    if (
+      check.bytes !== written.bytes ||
+      check.sha256 !== written.sha256 ||
+      (options.expectSha256 !== undefined && check.sha256 !== options.expectSha256)
+    ) {
       throw new LibraryError(`The copy of ${path.basename(source)} did not verify.`, 500, "hash_mismatch");
     }
     await commitPartial(written.partialPath, destination);
@@ -411,6 +435,13 @@ export class KeyedMutex {
       if (this.tails.get(key) === tail) this.tails.delete(key);
     });
     return result;
+  }
+
+  /** Waits for `key` and holds it until the returned function is called (for holding several keys at once). */
+  acquire(key: string): Promise<() => void> {
+    return new Promise((acquired) => {
+      void this.run(key, () => new Promise<void>((release) => acquired(release)));
+    });
   }
 
   get size(): number {

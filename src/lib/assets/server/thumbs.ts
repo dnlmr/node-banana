@@ -123,8 +123,8 @@ export class Thumbnailer {
       if (!file) continue;
       try {
         return await fs.readFile(file);
-      } catch {
-        library.setMissing(record.id, true);
+      } catch (error) {
+        library.noteFileError(record.id, error);
       }
     }
     return null;

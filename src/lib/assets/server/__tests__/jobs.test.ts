@@ -1,7 +1,7 @@
 // @vitest-environment node
 import fs from "fs";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LibraryJobStatus, RecordAssetMeta, RecordAssetResult } from "../../types";
 import {
   __assetLibraryForTests,
@@ -22,9 +22,10 @@ import {
   startCleanup,
   startExport,
   startImport,
+  upsertWorkflowEntry,
 } from "../index";
 import { Ingestor } from "../ingest";
-import { JobRunner, runMove, validateMoveTarget, type JobContext } from "../jobs";
+import { JobRunner, runExport, runMove, validateMoveTarget, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
 import { installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
@@ -56,6 +57,10 @@ async function record(overrides: Partial<RecordAssetMeta> = {}, buffer: Buffer =
   const started = await beginRecord({ meta: meta(overrides), source: { type: "upload" } });
   if ("result" in started) return started.result;
   return completeUpload(started.ticket.uploadId, streamOf(buffer), null);
+}
+
+function jobContext(): JobContext {
+  return { signal: new AbortController().signal, update: () => {}, addBytes: () => {}, step: () => {}, checkCancelled: () => {} };
 }
 
 async function finished(job: LibraryJobStatus): Promise<LibraryJobStatus> {
@@ -167,6 +172,184 @@ describe("move", () => {
     });
   });
 
+  it("marks a running move in both folders, and leaves no marker once it is done", async () => {
+    const root = path.join(base, "Marked");
+    const library = new AssetLibrary(root);
+    await library.ready();
+    const day = path.join(root, "Generations", "2026-09-27");
+    fs.mkdirSync(day, { recursive: true });
+    fs.writeFileSync(path.join(day, "a.png"), makePng(2, 2, 1));
+    fs.writeFileSync(path.join(day, "b.png"), makePng(2, 2, 2));
+    const target = path.join(base, "MarkedTarget");
+    let atSwitch: { marker: unknown; target: unknown; log: string[] } | null = null;
+    await runMove(jobContext(), {
+      library,
+      waitForWrites: async () => true,
+      toRoot: target,
+      setPaused: () => {},
+      switchRoot: async () => {
+        atSwitch = {
+          marker: JSON.parse(fs.readFileSync(path.join(root, ".nodebanana", "move.json"), "utf8")),
+          target: JSON.parse(fs.readFileSync(path.join(target, ".nodebanana", "move-source.json"), "utf8")),
+          log: fs.readFileSync(path.join(root, ".nodebanana", "move-copied.ndjson"), "utf8").trim().split("\n").map((line) => JSON.parse(line)),
+        };
+      },
+    });
+    expect(atSwitch).toMatchObject({
+      marker: { toRoot: target, pid: process.pid, state: "switching" },
+      target: { fromRoot: root },
+    });
+    expect(atSwitch!.log).toEqual(expect.arrayContaining(["Generations/2026-09-27/a.png", "Generations/2026-09-27/b.png"]));
+    expect(fs.existsSync(path.join(target, ".nodebanana", "move-source.json"))).toBe(false);
+    expect(walk(path.join(root, ".nodebanana"))).toEqual([]);
+    expect(walk(path.join(target, "Generations"))).toEqual(["2026-09-27/a.png", "2026-09-27/b.png"]);
+    await library.drain();
+  });
+
+  it("copies what changed while it was copying (another process's write already in flight)", async () => {
+    const root = path.join(base, "Busy");
+    const library = new AssetLibrary(root);
+    await library.ready();
+    const day = path.join(root, "Generations", "2026-09-27");
+    fs.mkdirSync(day, { recursive: true });
+    fs.writeFileSync(path.join(day, "a.png"), makePng(2, 2, 1));
+    fs.writeFileSync(path.join(day, "b.png"), makePng(2, 2, 2));
+    const target = path.join(base, "BusyTarget");
+    let steps = 0;
+    const ctx = jobContext();
+    ctx.step = () => {
+      if (++steps !== 1) return;
+      fs.writeFileSync(path.join(day, "late.png"), makePng(2, 2, 3));
+      fs.rmSync(path.join(day, walk(day).find((name) => fs.existsSync(path.join(target, "Generations", "2026-09-27", name)))!));
+    };
+    await runMove(ctx, { library, waitForWrites: async () => true, toRoot: target, setPaused: () => {}, switchRoot: async () => {} });
+    const moved = walk(path.join(target, "Generations"));
+    expect(moved).toContain("2026-09-27/late.png");
+    // The one deleted after it was copied is not resurrected in the new root.
+    expect(moved).toHaveLength(2);
+    await library.drain();
+  });
+
+  it("undoes a move that stopped part-way at the next start, and moves to that folder again", async () => {
+    await getLibraryStatus();
+    const oldRoot = path.join(home, "Pictures", "Node Banana");
+    const kept = await record({ prompt: "still here" });
+    const keptRel = kept.asset.file.root === "library" ? kept.asset.file.rel : "";
+    const target = path.join(base, "Half Copied");
+    await __drainAssetLibraryForTests();
+    // What quitting mid-copy leaves: part of a copy, both markers, the log, and the dead process's lock.
+    const dead = 999_999;
+    fs.mkdirSync(path.join(target, path.dirname(keptRel)), { recursive: true });
+    fs.copyFileSync(kept.asset.displayPath, path.join(target, keptRel));
+    fs.writeFileSync(path.join(target, path.dirname(keptRel), "0000.partial"), "half a file");
+    fs.mkdirSync(path.join(target, ".nodebanana", "assets"), { recursive: true });
+    const sidecarRel = `.nodebanana/assets/${kept.asset.id}.json`;
+    fs.copyFileSync(path.join(oldRoot, sidecarRel), path.join(target, sidecarRel));
+    fs.writeFileSync(path.join(target, ".nodebanana", "move-source.json"), JSON.stringify({ fromRoot: oldRoot, startedAt: Date.now() }));
+    fs.writeFileSync(path.join(target, "notes.txt"), "the user's own file");
+    fs.writeFileSync(
+      path.join(oldRoot, ".nodebanana", "move.json"),
+      JSON.stringify({ v: 1, toRoot: target, startedAt: Date.now(), pid: dead, state: "copying" }),
+    );
+    fs.writeFileSync(path.join(oldRoot, ".nodebanana", "move-copied.ndjson"), `${JSON.stringify(keptRel)}\n${JSON.stringify(sidecarRel)}\n`);
+    fs.writeFileSync(path.join(oldRoot, ".nodebanana", "lock"), JSON.stringify({ pid: dead, at: Date.now(), purpose: "move" }));
+
+    // The next start.
+    await __resetAssetLibraryForTests({
+      pathContext: { platform: process.platform, env: {}, homedir: home, winPicturesDir: path.join(home, "Pictures") },
+    });
+    await getLibraryStatus();
+    await __drainAssetLibraryForTests();
+    const status = await getLibraryStatus();
+    expect(status.root).toBe(oldRoot);
+    expect(status.job).toMatchObject({ type: "move", state: "failed", error: expect.stringContaining("interrupted") });
+    expect(walk(target)).toEqual(["notes.txt"]);
+    expect(fs.existsSync(path.join(oldRoot, ".nodebanana", "move.json"))).toBe(false);
+    expect((await listAssets({})).assets.map((asset) => asset.id)).toEqual([kept.asset.id]);
+
+    // The same folder is accepted again, and this time the move completes.
+    const retried = await finished((await setLibraryRoot({ root: target, mode: "move" })).job!);
+    expect(retried.state).toBe("done");
+    expect((await getLibraryStatus()).root).toBe(target);
+    expect((await listAssets({})).assets[0].displayPath.startsWith(target)).toBe(true);
+  });
+
+  it("won't switch to a folder a move stopped copying into", async () => {
+    await getLibraryStatus();
+    const target = path.join(base, "Unfinished");
+    fs.mkdirSync(path.join(target, ".nodebanana"), { recursive: true });
+    fs.writeFileSync(path.join(target, ".nodebanana", "move-source.json"), JSON.stringify({ fromRoot: "/somewhere", startedAt: 1 }));
+    await expect(setLibraryRoot({ root: target, mode: "switch" })).rejects.toMatchObject({ status: 409, code: "conflict" });
+  });
+
+  it("answers writes with 503 while the other build is moving the library", async () => {
+    const r = await record();
+    const library = await __assetLibraryForTests();
+    const started = await beginRecord({ meta: meta(), source: { type: "upload" } });
+    if (!("ticket" in started)) throw new Error("expected a ticket");
+    // The other build's move holds the lock: a live process, a fresh heartbeat.
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
+    const paused = { status: 503, code: "paused", retryAfter: expect.any(Number) };
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await expect(beginRecord({ meta: meta(), source: { type: "upload" } })).rejects.toMatchObject(paused);
+    await expect(patchAsset(r.asset.id, { favorite: true })).rejects.toMatchObject(paused);
+    await expect(completeUpload(started.ticket.uploadId, streamOf(makePng(2, 2, 77)), "image/png")).rejects.toMatchObject(paused);
+    expect((await listAssets({})).total).toBe(1);
+
+    // A lock left by a process that is gone pauses nothing — and the upload's ticket is still good.
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: 999_999, at: Date.now(), purpose: "move" }));
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect((await completeUpload(started.ticket.uploadId, streamOf(makePng(2, 2, 77)), "image/png")).asset.id).toBeTruthy();
+    fs.rmSync(library.layout.lock);
+  });
+
+  it("moves only the library's own day folders, never a project's files that sit under Generations", async () => {
+    const root = path.join(base, "Owned");
+    const library = new AssetLibrary(root);
+    await library.ready();
+    const day = path.join(root, "Generations", "2026-09-27");
+    fs.mkdirSync(path.join(day, "generations"), { recursive: true });
+    fs.writeFileSync(path.join(day, "own.png"), makePng(2, 2, 1));
+    // From before projects inside the library were refused: a project at <day>, its files in <day>/generations.
+    const projectFile = path.join(day, "generations", "p.png");
+    const png = makePng(2, 2, 2);
+    fs.writeFileSync(projectFile, png);
+    await library.addRecord({
+      v: 1,
+      id: "a" + "p".repeat(13),
+      kind: "image",
+      origin: "generated",
+      mime: "image/png",
+      ext: "png",
+      bytes: png.length,
+      sha256: sha256(png),
+      md5: md5(png),
+      file: { root: "external", path: projectFile },
+      filename: "p.png",
+      createdAt: Date.now(),
+      producer: { nodeId: "n", nodeType: "nanoBanana" },
+      workflowId: "wf_p",
+      workflowName: null,
+      runId: "r" + "p".repeat(13),
+      tags: [],
+      favorite: false,
+    });
+    fs.writeFileSync(path.join(root, "Generations", "loose.png"), makePng(2, 2, 3));
+
+    const target = path.join(base, "OwnedTarget");
+    await runMove(jobContext(), {
+      library,
+      waitForWrites: async () => true,
+      toRoot: target,
+      setPaused: () => {},
+      switchRoot: async () => {},
+    });
+    expect(walk(path.join(target, "Generations"))).toEqual(["2026-09-27/own.png"]);
+    expect(fs.existsSync(projectFile)).toBe(true);
+    expect(fs.existsSync(path.join(root, "Generations", "loose.png"))).toBe(true);
+    await library.drain();
+  });
+
   it("pauses writes while copying, switches while paused, and cleans up after a cancel", async () => {
     const root = path.join(base, "Direct");
     const library = new AssetLibrary(root);
@@ -243,8 +426,10 @@ describe("move", () => {
       }),
     ).rejects.toThrow(/Cancelled/);
     expect(switched).toBe(false);
-    expect(walk(cancelledTarget).filter((file) => file.startsWith("Generations"))).toEqual([]);
+    expect(walk(cancelledTarget)).toEqual([]);
     expect(fs.readdirSync(dir)).toHaveLength(4);
+    // A move that ended (even badly) leaves no marker to recover from.
+    expect(walk(path.join(source, ".nodebanana")).filter((file) => file.startsWith("move"))).toEqual([]);
   });
 });
 
@@ -328,6 +513,23 @@ describe("import", () => {
     expect(again.message).toBe("Imported 0 files.");
   });
 
+  it("files a folder under its own id when its workflow id already belongs to another project", async () => {
+    const first = path.join(base, "A");
+    const second = path.join(base, "B");
+    fs.mkdirSync(path.join(second, "generations"), { recursive: true });
+    fs.writeFileSync(path.join(second, "generations", "x.png"), makePng(2, 2, 5));
+    fs.writeFileSync(path.join(second, "flow.json"), JSON.stringify({ version: 1, id: "wf_shared", name: "Shared", nodes: [], edges: [] }));
+    await upsertWorkflowEntry("wf_shared", { name: "Shared", projectPath: first });
+
+    await finished(await startImport({ projectDirs: [second] }));
+    const [asset] = (await listAssets({})).assets;
+    expect(asset.workflowId).toMatch(/^import_/);
+    expect(asset.workflow).toMatchObject({ projectPath: second, name: "Shared" });
+    const library = await __assetLibraryForTests();
+    expect(library.getWorkflow("wf_shared")?.projectPath).toBe(first);
+    expect(library.getWorkflow(asset.workflowId)?.forkedFrom).toBe("wf_shared");
+  });
+
   it("refuses a bad folder list and a second job while one runs", async () => {
     await expect(startImport({ projectDirs: [] })).rejects.toMatchObject({ status: 400 });
     await expect(startImport({ projectDirs: ["relative"] })).rejects.toMatchObject({ status: 400 });
@@ -372,6 +574,58 @@ describe("cleanup", () => {
     expect(fs.readdirSync(posters)).toEqual([`${r.asset.sha256}.webp`]);
     await expect(startCleanup({})).rejects.toMatchObject({ status: 400 });
   });
+
+  it("removes old snapshots no asset belongs to, then the media only they referenced", async () => {
+    const only = makePng(2, 2, 13);
+    await putMedia(sha256(only), streamOf(only), "image/png");
+    const r = await record();
+    const orphanRun = `r${"0".repeat(12)}orphan`;
+    await putRun(orphanRun, {
+      meta: { id: orphanRun, workflowId: r.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "final",
+      workflow: { version: 1, name: "x", nodes: [], edges: [], edgeStyle: "curved" },
+      mediaHashes: [sha256(only)],
+    });
+    const library = await __assetLibraryForTests();
+    const orphanFile = path.join(library.layout.runs, `${orphanRun}.json.gz`);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(orphanFile, old, old);
+
+    const job = await finished(await startCleanup({ unusedMedia: true }));
+    expect(job.state).toBe("done");
+    expect(fs.existsSync(orphanFile)).toBe(false);
+    expect(fs.readdirSync(library.layout.runs)).toEqual([]);
+    expect(fs.readdirSync(library.layout.media)).toEqual([]);
+  });
+
+  it("deletes no snapshot media while a snapshot can't be read", async () => {
+    const needed = makePng(2, 2, 14);
+    await putMedia(sha256(needed), streamOf(needed), "image/png");
+    const r = await record();
+    await putRun(r.asset.runId, {
+      meta: { id: r.asset.runId, workflowId: r.asset.workflowId, workflowName: null, projectPath: null, startedAt: 1 },
+      phase: "start",
+      workflow: { version: 1, name: "x", nodes: [], edges: [], edgeStyle: "curved" },
+      mediaHashes: [sha256(needed)],
+    });
+    const library = await __assetLibraryForTests();
+    const file = path.join(library.layout.runs, `${r.asset.runId}.json.gz`);
+    // Changed since it was last read (say, by a sync client), and unreadable right now.
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(file, later, later);
+    const readFile = fs.promises.readFile;
+    const spy = vi.spyOn(fs.promises, "readFile").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) =>
+      String(target) === file
+        ? Promise.reject(Object.assign(new Error("EIO: i/o error, read"), { code: "EIO" }))
+        : (readFile as (...args: unknown[]) => Promise<unknown>)(target, ...rest)) as typeof readFile);
+    try {
+      const job = await finished(await startCleanup({ unusedMedia: true }));
+      expect(job.message).toMatch(/couldn't be read/);
+      expect(fs.readdirSync(library.layout.media)).toEqual([`${sha256(needed)}.png`]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("export", () => {
@@ -395,6 +649,40 @@ describe("export", () => {
       status: 400,
     });
     await expect(startExport({ selection: { mode: "ids", ids: [] }, dest })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("never writes outside the chosen folder, whatever a sidecar's file name says", async () => {
+    const r = await record();
+    const library = await __assetLibraryForTests();
+    const sidecar = path.join(library.layout.assets, `${r.asset.id}.json`);
+    const raw = JSON.parse(fs.readFileSync(sidecar, "utf8"));
+    // A synced library folder: someone else's machine wrote this sidecar.
+    fs.writeFileSync(sidecar, JSON.stringify({ ...raw, filename: "../../escape.png" }));
+    const other = new AssetLibrary(library.root);
+    await other.ready();
+    // Reduced to its last segment when read.
+    expect(other.get(r.asset.id)?.filename).toBe("escape.png");
+    // And a name that never went through a sidecar check still can't leave the folder.
+    await other.addRecord({ ...raw, id: "a" + "q".repeat(13), filename: "../../also-escape.png" });
+
+    const dest = path.join(base, "Out", "Inner");
+    fs.mkdirSync(dest, { recursive: true });
+    const message = await runExport(jobContext(), other, [r.asset.id, "a" + "q".repeat(13)], dest);
+    expect(message).toBe("Exported 2 files.");
+    expect(fs.existsSync(path.join(base, "escape.png"))).toBe(false);
+    expect(fs.existsSync(path.join(base, "also-escape.png"))).toBe(false);
+    expect(fs.readdirSync(dest).sort()).toEqual(["also-escape.png", "escape.png"]);
+    await other.drain();
+  });
+
+  it("stops when the export folder goes away, and marks nothing missing", async () => {
+    const one = await record();
+    const two = await record();
+    const library = await __assetLibraryForTests();
+    const dest = path.join(base, "Unplugged");
+    await expect(runExport(jobContext(), library, [one.asset.id, two.asset.id], dest)).rejects.toThrow(/no longer available/);
+    expect(library.isMissing(one.asset.id)).toBe(false);
+    expect(library.isMissing(two.asset.id)).toBe(false);
   });
 
   it("exports a query selection", async () => {

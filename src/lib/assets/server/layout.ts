@@ -46,34 +46,69 @@ export function libraryLayout(root: string): LibraryLayout {
 export const LOCK_STALE_MS = 60_000;
 const LOCK_HEARTBEAT_MS = 20_000;
 
+/** Why the lock is held: a move pauses writes in every process; compaction pauses nothing. */
+export type LockPurpose = "compact" | "move";
+
 export interface HeldLock {
   release(): Promise<void>;
 }
 
-async function readLockAge(file: string, now: number): Promise<number> {
+export interface LockInfo {
+  pid: number;
+  at: number;
+  purpose: LockPurpose | null;
+}
+
+/** Whether a process with this id is running (a process we may not signal still counts). */
+export function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (pid === process.pid) return true;
   try {
-    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { at?: unknown };
-    return typeof parsed.at === "number" ? now - parsed.at : Infinity;
-  } catch {
-    return Infinity;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errnoCode(error) === "EPERM";
   }
 }
 
+/** The lock's contents, or null when there is no readable lock. */
+export async function readLock(file: string): Promise<LockInfo | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { pid?: unknown; at?: unknown; purpose?: unknown };
+    return {
+      pid: typeof parsed.pid === "number" ? parsed.pid : 0,
+      at: typeof parsed.at === "number" ? parsed.at : 0,
+      purpose: parsed.purpose === "move" || parsed.purpose === "compact" ? parsed.purpose : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** A lock whose holder refreshed it recently and is still running. */
+export function isLiveLock(lock: LockInfo | null, now: number = Date.now()): lock is LockInfo {
+  return Boolean(lock && now - lock.at < LOCK_STALE_MS && processAlive(lock.pid));
+}
+
 /**
- * Takes `.nodebanana/lock` ({pid, at}), or returns null when a live holder
- * has it. A lock older than {@link LOCK_STALE_MS} is taken over. Long holders
- * (a library move) pass `heartbeat` so their lock never looks stale.
+ * Takes `.nodebanana/lock` ({pid, at, purpose}), or returns null when a live
+ * holder has it. A lock older than {@link LOCK_STALE_MS}, or whose process is
+ * gone, is taken over. Long holders (a library move) pass `heartbeat` so
+ * their lock never looks stale.
  */
-export async function acquireLock(file: string, options: { heartbeat?: boolean } = {}): Promise<HeldLock | null> {
-  const write = () => fs.writeFile(file, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" });
+export async function acquireLock(
+  file: string,
+  options: { heartbeat?: boolean; purpose?: LockPurpose } = {},
+): Promise<HeldLock | null> {
+  const body = () => JSON.stringify({ pid: process.pid, at: Date.now(), ...(options.purpose ? { purpose: options.purpose } : {}) });
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await fs.mkdir(path.dirname(file), { recursive: true });
-      await write();
+      await fs.writeFile(file, body(), { flag: "wx" });
       let timer: ReturnType<typeof setInterval> | undefined;
       if (options.heartbeat) {
         timer = setInterval(() => {
-          fs.writeFile(file, JSON.stringify({ pid: process.pid, at: Date.now() })).catch(() => {});
+          fs.writeFile(file, body()).catch(() => {});
         }, LOCK_HEARTBEAT_MS);
         timer.unref?.();
       }
@@ -85,7 +120,7 @@ export async function acquireLock(file: string, options: { heartbeat?: boolean }
       };
     } catch (error) {
       if (errnoCode(error) !== "EEXIST") return null;
-      if ((await readLockAge(file, Date.now())) < LOCK_STALE_MS) return null;
+      if (isLiveLock(await readLock(file))) return null;
       await fs.rm(file, { force: true }).catch(() => {});
     }
   }

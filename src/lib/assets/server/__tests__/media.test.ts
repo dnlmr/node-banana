@@ -63,6 +63,27 @@ describe("decideMediaType", () => {
     expect(decideMediaType({ head: text, kind: "3d" })).toMatchObject({ ext: "glb" });
   });
 
+  it("stores AVIF and HEIC stills as images, not mp4 video", () => {
+    const withCompatible = (major: string, ...compatible: string[]) => {
+      const box = Buffer.alloc(16 + compatible.length * 4);
+      box.writeUInt32BE(box.length, 0);
+      box.write("ftyp", 4, "latin1");
+      box.write(major, 8, "latin1");
+      compatible.forEach((brand, index) => box.write(brand, 16 + index * 4, "latin1"));
+      return box;
+    };
+    expect(decideMediaType({ head: ftyp("avif"), kind: "image" })).toMatchObject({ ext: "avif", mime: "image/avif", kind: "image" });
+    expect(decideMediaType({ head: ftyp("heic"), kind: "image" })).toMatchObject({ ext: "heic", mime: "image/heic", kind: "image" });
+    expect(sniffFamily(ftyp("avis"))).toEqual(["avif"]);
+    expect(sniffFamily(ftyp("heix"))).toEqual(["heic"]);
+    expect(sniffFamily(withCompatible("mif1", "mif1", "miaf", "avif"))).toEqual(["avif"]);
+    expect(sniffFamily(withCompatible("msf1", "msf1", "heic"))).toEqual(["heic"]);
+    // Even a video node's result: the bytes say image.
+    expect(decideMediaType({ head: ftyp("avif"), kind: "video" })).toMatchObject({ ext: "avif", kind: "image" });
+    expect(sniffFamily(withCompatible("isom", "isom", "avc1"))).toEqual(["mp4", "m4a"]);
+    expect(decideMediaType({ head: Buffer.alloc(0), kind: "image", hintMime: "image/heif" })).toMatchObject({ ext: "heic" });
+  });
+
   it("treats a zip as usdz only for 3D", () => {
     const zip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0]);
     expect(decideMediaType({ head: zip, kind: "3d" })).toMatchObject({ ext: "usdz" });

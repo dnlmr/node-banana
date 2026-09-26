@@ -8,7 +8,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { deflateSync } from "zlib";
-import type { DesktopServerBridge, RecordAssetMeta } from "../../types";
+import type { AssetRecord, DesktopServerBridge, RecordAssetMeta } from "../../types";
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -145,6 +145,33 @@ export function meta(overrides: Partial<RecordAssetMeta> = {}): RecordAssetMeta 
     workflowId: "wf_test_1",
     workflowName: "Test flow",
     runId: runId(),
+    ...overrides,
+  };
+}
+
+/** A record written straight into an index (its file need not exist). */
+export function fakeRecord(overrides: Partial<AssetRecord> = {}): AssetRecord {
+  const id = overrides.id ?? assetId();
+  const seedBytes = Buffer.from(id);
+  return {
+    v: 1,
+    id,
+    kind: "image",
+    origin: "generated",
+    mime: "image/png",
+    ext: "png",
+    bytes: seedBytes.length,
+    sha256: sha256(seedBytes),
+    md5: md5(seedBytes),
+    file: { root: "library", rel: `Generations/2026-09-27/${id}.png` },
+    filename: `${id}.png`,
+    createdAt: Date.now(),
+    producer: { nodeId: "n1", nodeType: "nanoBanana" },
+    workflowId: "wf_test_1",
+    workflowName: "Test flow",
+    runId: runId(),
+    tags: [],
+    favorite: false,
     ...overrides,
   };
 }

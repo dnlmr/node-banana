@@ -45,9 +45,11 @@ import { LibraryError } from "./errors";
 import { hideOnWindows, isInsideRoot, sweepStaleTemps } from "./fsutil";
 import { Ingestor, PAUSED_RETRY_AFTER, STALE_PARTIAL_MS } from "./ingest";
 import {
+  isUnfinishedMoveTarget,
   JobRunner,
   normaliseImportDirs,
   prepareExportDest,
+  recoverInterruptedMove,
   runCleanup,
   runExport,
   runImport,
@@ -98,6 +100,8 @@ const RECHECK_OK_MS = 60_000;
 const RECHECK_FAILED_MS = 10_000;
 /** How often library.json is stat'ed for a switch made by the other build. */
 const CONFIG_STAMP_MS = 2_000;
+/** A move keeps its lock this long after switching, so the other build has re-read library.json before it writes again. */
+const MOVE_SETTLE_MS = CONFIG_STAMP_MS + 500;
 
 interface ResolvedState {
   key: string;
@@ -252,8 +256,9 @@ function libraryFor(rt: Runtime, location: ResolvedLocation): AssetLibrary {
 
 /**
  * Once per root and process: the library marker, hidden data folder on
- * Windows, a sweep of stale partial files, the index scan, then auto-empty
- * of Trash items older than 30 days and a thumbnail cache trim.
+ * Windows, recovery of a move that stopped part-way, a sweep of stale
+ * partial files, the index scan, then auto-empty of Trash items older than
+ * 30 days and a thumbnail cache trim.
  */
 async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void> {
   const layout = library.layout;
@@ -264,6 +269,7 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
   } catch {
     // Already marked.
   }
+  await noteInterruptedMove(rt, library);
   await library.ensureLoaded();
   const dirs = [layout.data, layout.assets, layout.runs, layout.media, layout.posters];
   try {
@@ -272,8 +278,19 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
     // No generations yet.
   }
   for (const dir of dirs) await sweepStaleTemps(dir, STALE_PARTIAL_MS);
-  if (!rt.paused) await counted(rt, () => library.emptyExpiredTrash());
+  if (!rt.paused && !(await library.movingElsewhere())) await counted(rt, () => library.emptyExpiredTrash());
   await rt.thumbs?.trim();
+}
+
+/** Undoes a move of this library that stopped part-way, and says so in the library status. */
+async function noteInterruptedMove(rt: Runtime, library: AssetLibrary): Promise<void> {
+  const recovered = await recoverInterruptedMove(library);
+  if (!recovered) return;
+  rt.jobs.note("move", {
+    error:
+      `Moving the library to "${recovered.toRoot}" was interrupted before it finished. ` +
+      "Your library is still here, and the partial copy there was removed. You can move it again.",
+  });
 }
 
 async function availableLibrary(rt: Runtime): Promise<{ library: AssetLibrary; location: ResolvedLocation }> {
@@ -289,11 +306,18 @@ async function readyLibrary(): Promise<AssetLibrary> {
   return library;
 }
 
+function pausedError(): LibraryError {
+  return new LibraryError("The library is being moved. Try again in a moment.", 503, "paused", PAUSED_RETRY_AFTER);
+}
+
 /** Writes wait while a move copies the library (they would be lost from the copy). */
 function assertWritable(rt: Runtime): void {
-  if (rt.paused) {
-    throw new LibraryError("The library is being moved. Try again in a moment.", 503, "paused", PAUSED_RETRY_AFTER);
-  }
+  if (rt.paused) throw pausedError();
+}
+
+/** Writes also wait while the other build moves this library (its lock says so). */
+async function assertNoMoveElsewhere(library: AssetLibrary): Promise<void> {
+  if (await library.movingElsewhere()) throw pausedError();
 }
 
 /**
@@ -304,6 +328,7 @@ async function write<T>(fn: (library: AssetLibrary) => Promise<T>): Promise<T> {
   const rt = runtime();
   assertWritable(rt);
   const library = await readyLibrary();
+  await assertNoMoveElsewhere(library);
   return counted(rt, () => fn(library));
 }
 
@@ -444,6 +469,13 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
   if (request.mode === "switch") {
     const root = api.resolve(request.root);
     if (location && root === location.root) return getLibraryStatus();
+    if (await isUnfinishedMoveTarget(root)) {
+      throw new LibraryError(
+        "That folder holds a library move that didn't finish, so it isn't a whole library. Move the library there again, or choose another folder.",
+        409,
+        "conflict",
+      );
+    }
     const failure = await probeWritable(root);
     if (failure) {
       throw new LibraryError(`Node Banana can't write to "${root}" (${failure.code}).`, 400, "bad_request");
@@ -455,6 +487,8 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
   if (!result.ok || !location) throw new LibraryError(result.ok ? "Unavailable" : result.reason, 503, "unavailable");
   const library = libraryFor(rt, location);
   await library.ready();
+  // A retry after a move that stopped part-way: its partial copy goes first, so the same folder is accepted.
+  await noteInterruptedMove(rt, library);
   const toRoot = await validateMoveTarget(location.root, request.root, ctx.platform);
   const failure = await probeWritable(toRoot);
   if (failure) throw new LibraryError(`Node Banana can't write to "${toRoot}" (${failure.code}).`, 400, "bad_request");
@@ -468,6 +502,7 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
         rt.paused = paused;
       },
       switchRoot: switchTo,
+      settleMs: MOVE_SETTLE_MS,
     }),
   );
   return getLibraryStatus();
@@ -526,7 +561,7 @@ export async function beginRecord(
 ): Promise<{ ticket: UploadTicket } | { result: RecordAssetResult }> {
   const rt = runtime();
   assertWritable(rt);
-  await readyLibrary();
+  await assertNoMoveElsewhere(await readyLibrary());
   return rt.ingest.begin(request);
 }
 
@@ -537,7 +572,8 @@ export async function completeUpload(
   contentType: string | null,
 ): Promise<RecordAssetResult> {
   const rt = runtime();
-  await readyLibrary();
+  // Refused before the ticket is used, so the client can resend it after Retry-After.
+  await assertNoMoveElsewhere(await readyLibrary());
   return rt.ingest.complete(uploadId, body, contentType);
 }
 
@@ -557,8 +593,9 @@ async function verifiedFile(library: AssetLibrary, record: AssetRecord): Promise
     }
     library.setMissing(record.id, false);
     return { file, bytes: stat.size };
-  } catch {
-    library.setMissing(record.id, true);
+  } catch (error) {
+    // Only "no such file" marks it missing; a permission or I/O error can't tell.
+    library.noteFileError(record.id, error);
     return null;
   }
 }
@@ -680,6 +717,7 @@ export async function startImport(request: ImportProjectsRequest): Promise<Libra
   const dirs = normaliseImportDirs(request?.projectDirs);
   assertWritable(rt);
   const library = await readyLibrary();
+  await assertNoMoveElsewhere(library);
   return rt.jobs.start("import", (job) => runImport(job, { library, thumbs: rt.thumbs }, dirs));
 }
 
@@ -690,6 +728,7 @@ export async function startCleanup(request: CleanupRequest): Promise<LibraryJobS
   if (!unusedMedia && !thumbnails) throw new LibraryError("Choose what to clean up", 400, "bad_request");
   assertWritable(rt);
   const library = await readyLibrary();
+  await assertNoMoveElsewhere(library);
   return rt.jobs.start("cleanup", (job) => runCleanup(job, { library, thumbs: rt.thumbs }, { unusedMedia, thumbnails }));
 }
 
