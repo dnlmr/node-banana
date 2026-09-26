@@ -23,6 +23,8 @@ export interface LibraryLayout {
   journal: string;
   lock: string;
   libraryFile: string;
+  /** One file per process with writes in flight here, so a move in another process waits for them. */
+  writers: string;
 }
 
 export function libraryLayout(root: string): LibraryLayout {
@@ -39,12 +41,13 @@ export function libraryLayout(root: string): LibraryLayout {
     journal: path.join(data, "journal.ndjson"),
     lock: path.join(data, "lock"),
     libraryFile: path.join(data, "library.json"),
+    writers: path.join(data, "writers"),
   };
 }
 
 /** A lock is abandoned when its holder has not refreshed it for this long. */
 export const LOCK_STALE_MS = 60_000;
-const LOCK_HEARTBEAT_MS = 20_000;
+export const LOCK_HEARTBEAT_MS = 20_000;
 
 /** Why the lock is held: a move pauses writes in every process; compaction pauses nothing. */
 export type LockPurpose = "compact" | "move";

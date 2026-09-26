@@ -35,6 +35,14 @@ export class LibraryError extends Error {
   }
 }
 
+/** Seconds a write refused while the library is being moved should wait before it is retried. */
+export const PAUSED_RETRY_AFTER = 5;
+
+/** A write refused because the library is being moved; the client retries after `Retry-After`. */
+export function pausedError(message = "The library is being moved. Try again in a moment."): LibraryError {
+  return new LibraryError(message, 503, "paused", PAUSED_RETRY_AFTER);
+}
+
 export function isLibraryError(error: unknown): error is LibraryError {
   return error instanceof LibraryError;
 }

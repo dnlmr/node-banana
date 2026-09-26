@@ -34,7 +34,7 @@ import {
   type AssetView,
   type LibraryWorkflowEntry,
 } from "../types";
-import { errnoCode, LibraryError } from "./errors";
+import { errnoCode, LibraryError, pausedError } from "./errors";
 import {
   atomicWriteFile,
   foldsCase,
@@ -45,7 +45,7 @@ import {
   unlinkWithRetry,
   withFsRetry,
 } from "./fsutil";
-import { acquireLock, DATA_DIR, isLiveLock, libraryLayout, readLock, type LibraryLayout } from "./layout";
+import { acquireLock, DATA_DIR, isLiveLock, libraryLayout, LOCK_HEARTBEAT_MS, readLock, type LibraryLayout } from "./layout";
 import { RunStore } from "./runs";
 import {
   compareNewest,
@@ -86,6 +86,8 @@ export const MISSING_TTL_MS = 30_000;
 export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** How long a look at the lock for another process's move is trusted. */
 const MOVE_CHECK_MS = 1000;
+/** How often a move looks again for another process's writes to finish. */
+const WRITERS_POLL_MS = 100;
 
 export type TrashHook = (files: string[]) => Promise<unknown>;
 
@@ -317,6 +319,11 @@ export class AssetLibrary {
   private mutationWaiters: (() => void)[] = [];
   /** Set while a full scan runs; mutations wait for it so none lands in maps the scan is replacing. */
   private scanGate: Promise<void> | null = null;
+  /** Writes through {@link writing} in flight, published in `.nodebanana/writers/` while there are any. */
+  private writesInFlight = 0;
+  /** Serialises writing, refreshing and removing this index's writer file. */
+  private writerQueue: Promise<void> = Promise.resolve();
+  private writerHeartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(root: string, options: AssetLibraryOptions = {}) {
     this.layout = libraryLayout(root);
@@ -379,16 +386,103 @@ export class AssetLibrary {
 
   /**
    * Another process (the other build) holds this library's lock for a move:
-   * writes here would miss its copy. Read from disk at most once a second;
-   * the move re-scans before it switches, which covers that second.
+   * writes here would miss its copy. Read from disk at most once a second
+   * unless `fresh`; {@link writing} always looks again.
    */
-  async movingElsewhere(): Promise<boolean> {
+  async movingElsewhere(options: { fresh?: boolean } = {}): Promise<boolean> {
     const now = Date.now();
-    if (this.moveCheck && now - this.moveCheck.at < MOVE_CHECK_MS) return this.moveCheck.moving;
+    if (!options.fresh && this.moveCheck && now - this.moveCheck.at < MOVE_CHECK_MS) return this.moveCheck.moving;
     const lock = await readLock(this.layout.lock);
     const moving = Boolean(lock && lock.purpose === "move" && lock.pid !== process.pid && isLiveLock(lock, now));
     this.moveCheck = { at: now, moving };
     return moving;
+  }
+
+  /* Writes other processes can see ---------------------------------- */
+
+  private get writerFile(): string {
+    return path.join(this.layout.writers, `${process.pid}-${this.instance}.json`);
+  }
+
+  private async writeWriterFile(): Promise<void> {
+    if (this.writesInFlight === 0) return;
+    try {
+      await fs.mkdir(this.layout.writers, { recursive: true });
+      await atomicWriteFile(this.writerFile, JSON.stringify({ pid: process.pid, at: Date.now() }), { fsync: false });
+    } catch (error) {
+      console.warn("[assets] could not publish a write in progress", error);
+    }
+  }
+
+  private queueWriterFile(task: () => Promise<void>): Promise<void> {
+    this.writerQueue = this.writerQueue.then(task).catch(() => {});
+    return this.writerQueue;
+  }
+
+  /**
+   * Runs a write to this root where a move in the other build can see it.
+   * While any is in flight, a file in `.nodebanana/writers/` names this
+   * process (refreshed while the writes last), and a move waits for it to go
+   * before it lists what to copy. The file is on disk before this looks at
+   * the lock, and a move takes the lock before it looks for writers, so one
+   * always sees the other: the write is refused (paused, as a move in this
+   * process would) or the move waits for it to land.
+   */
+  async writing<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.writesInFlight++ === 0) {
+      void this.queueWriterFile(() => this.writeWriterFile());
+      this.writerHeartbeat ??= setInterval(() => void this.queueWriterFile(() => this.writeWriterFile()), LOCK_HEARTBEAT_MS);
+      this.writerHeartbeat.unref?.();
+    }
+    try {
+      await this.writerQueue;
+      if (await this.movingElsewhere({ fresh: true })) throw pausedError();
+      return await fn();
+    } finally {
+      if (--this.writesInFlight === 0) {
+        if (this.writerHeartbeat) clearInterval(this.writerHeartbeat);
+        this.writerHeartbeat = null;
+        void this.queueWriterFile(async () => {
+          if (this.writesInFlight === 0) await fs.rm(this.writerFile, { force: true }).catch(() => {});
+        });
+      }
+    }
+  }
+
+  /**
+   * Waits until no other process — nor another index in this one — has a
+   * write in flight here, as their files in `.nodebanana/writers/` say. A
+   * file whose process is gone, or that was not refreshed for a minute,
+   * doesn't count and is removed. False when writes are still going on
+   * after `timeoutMs`.
+   */
+  async waitForOtherWriters(timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if ((await this.otherWriters()) === 0) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, WRITERS_POLL_MS));
+    }
+  }
+
+  private async otherWriters(): Promise<number> {
+    let names: string[];
+    try {
+      names = await fs.readdir(this.layout.writers);
+    } catch {
+      return 0;
+    }
+    const own = path.basename(this.writerFile);
+    let live = 0;
+    for (const name of names) {
+      if (name === own || !name.endsWith(".json")) continue;
+      const file = path.join(this.layout.writers, name);
+      const writer = await readLock(file);
+      if (!writer) continue;
+      if (isLiveLock(writer)) live++;
+      else await fs.rm(file, { force: true }).catch(() => {});
+    }
+    return live;
   }
 
   /** Waits for background work (file checks, compaction). Tests and shutdown. */

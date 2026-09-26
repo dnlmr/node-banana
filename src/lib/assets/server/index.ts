@@ -42,9 +42,9 @@ import type {
   WorkflowEntryUpdate,
 } from "../types";
 import { openFolder, revealFile } from "./desktop";
-import { LibraryError } from "./errors";
+import { LibraryError, pausedError } from "./errors";
 import { hideOnWindows, isInsideRoot, sweepStaleTemps } from "./fsutil";
-import { Ingestor, PAUSED_RETRY_AFTER, STALE_PARTIAL_MS } from "./ingest";
+import { Ingestor, STALE_PARTIAL_MS } from "./ingest";
 import {
   isUnfinishedMoveTarget,
   JobRunner,
@@ -279,7 +279,9 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
     // No generations yet.
   }
   for (const dir of dirs) await sweepStaleTemps(dir, STALE_PARTIAL_MS);
-  if (!rt.paused && !(await library.movingElsewhere())) await counted(rt, () => library.emptyExpiredTrash());
+  if (!rt.paused && !(await library.movingElsewhere())) {
+    await counted(rt, () => library.writing(() => library.emptyExpiredTrash()));
+  }
   await rt.thumbs?.trim();
 }
 
@@ -307,10 +309,6 @@ async function readyLibrary(): Promise<AssetLibrary> {
   return library;
 }
 
-function pausedError(): LibraryError {
-  return new LibraryError("The library is being moved. Try again in a moment.", 503, "paused", PAUSED_RETRY_AFTER);
-}
-
 /** Writes wait while a move copies the library (they would be lost from the copy). */
 function assertWritable(rt: Runtime): void {
   if (rt.paused) throw pausedError();
@@ -322,15 +320,16 @@ async function assertNoMoveElsewhere(library: AssetLibrary): Promise<void> {
 }
 
 /**
- * Runs a write against the ready library, counted so a move can wait for it.
- * The pause check and the count happen with no await between them.
+ * Runs a write against the ready library, counted so a move here can wait
+ * for it, and published so a move in the other build can too. The pause
+ * check and the count happen with no await between them.
  */
 async function write<T>(fn: (library: AssetLibrary) => Promise<T>): Promise<T> {
   const rt = runtime();
   assertWritable(rt);
   const library = await readyLibrary();
   await assertNoMoveElsewhere(library);
-  return counted(rt, () => fn(library));
+  return counted(rt, () => library.writing(() => fn(library)));
 }
 
 /** Counts `fn` as an in-flight write (after checking the pause, synchronously). */

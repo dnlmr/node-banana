@@ -266,6 +266,61 @@ interface ImportDeps {
   thumbs: Thumbnailer | null;
 }
 
+/** A project file's record: hashed, measured, with what the project's workflow JSON knows about it. */
+async function importedRecord(
+  file: string,
+  mtime: number,
+  source: { workflow: ProjectWorkflow | null; workflowId: string; workflowName: string; runId: string },
+  signal: AbortSignal,
+): Promise<AssetRecord> {
+  const digest = await hashFile(file, signal);
+  const ext = extOf(file);
+  const hinted = mediaTypeForExt(ext);
+  if (!hinted) throw new Error("unsupported type");
+  const head = await readHead(file, 64 * 1024);
+  const type = decideMediaType({ head, kind: hinted.kind, hintExt: ext });
+  const filename = path.basename(file);
+  const match = source.workflow?.carousel.get(filename.slice(0, filename.length - ext.length - 1));
+  let dims: { width?: number; height?: number; durationSec?: number } = {};
+  if (type.kind === "image") dims = (await imageDimensionsFromFile(file, ext, head)) ?? {};
+  else if (type.kind === "video" || type.kind === "audio") dims = await probeAudioVideo({ path: file }, type.kind);
+
+  const generation = match?.item.generation as { parameters?: unknown; cost?: unknown } | undefined;
+  const cost = generation?.cost as { amount?: unknown; estimated?: unknown } | undefined;
+  return {
+    v: 1,
+    id: newAssetId(),
+    kind: type.kind,
+    origin: "generated",
+    mime: type.mime,
+    ext,
+    bytes: digest.bytes,
+    sha256: digest.sha256,
+    md5: digest.md5,
+    file: { root: "external", path: file },
+    filename,
+    ...(dims.width && dims.height ? { width: dims.width, height: dims.height } : {}),
+    ...(dims.durationSec ? { durationSec: dims.durationSec } : {}),
+    createdAt: Math.floor(mtime),
+    ...(typeof match?.item.prompt === "string" && match.item.prompt ? { prompt: match.item.prompt } : {}),
+    ...(match && carouselModel(match) ? { model: carouselModel(match) } : {}),
+    ...(generation?.parameters && typeof generation.parameters === "object"
+      ? { parameters: generation.parameters as Record<string, unknown> }
+      : {}),
+    ...(typeof match?.item.aspectRatio === "string" ? { aspectRatio: match.item.aspectRatio } : {}),
+    ...(cost && typeof cost.amount === "number"
+      ? { cost: { amount: cost.amount, currency: "USD" as const, estimated: cost.estimated === true } }
+      : {}),
+    producer: { nodeId: match?.nodeId ?? "", nodeType: match?.nodeType ?? "import" },
+    workflowId: source.workflowId,
+    workflowName: source.workflowName,
+    runId: source.runId,
+    tags: [],
+    favorite: false,
+    imported: true,
+  };
+}
+
 /**
  * Indexes the files in each project's `generations/` folder in place:
  * hashes, measures, and attaches what the newest workflow JSON knows about
@@ -331,57 +386,13 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
     for (const { file, size, mtime } of files) {
       ctx.checkCancelled();
       try {
-        const digest = await hashFile(file, ctx.signal);
-        const ext = extOf(file);
-        const hinted = mediaTypeForExt(ext);
-        if (!hinted) throw new Error("unsupported type");
-        const head = await readHead(file, 64 * 1024);
-        const type = decideMediaType({ head, kind: hinted.kind, hintExt: ext });
-        const filename = path.basename(file);
-        const match = workflow?.carousel.get(filename.slice(0, filename.length - ext.length - 1));
-        let dims: { width?: number; height?: number; durationSec?: number } = {};
-        if (type.kind === "image") dims = (await imageDimensionsFromFile(file, ext, head)) ?? {};
-        else if (type.kind === "video" || type.kind === "audio") dims = await probeAudioVideo({ path: file }, type.kind);
-
-        const generation = match?.item.generation as { parameters?: unknown; cost?: unknown } | undefined;
-        const cost = generation?.cost as { amount?: unknown; estimated?: unknown } | undefined;
-        const record: AssetRecord = {
-          v: 1,
-          id: newAssetId(),
-          kind: type.kind,
-          origin: "generated",
-          mime: type.mime,
-          ext,
-          bytes: digest.bytes,
-          sha256: digest.sha256,
-          md5: digest.md5,
-          file: { root: "external", path: file },
-          filename,
-          ...(dims.width && dims.height ? { width: dims.width, height: dims.height } : {}),
-          ...(dims.durationSec ? { durationSec: dims.durationSec } : {}),
-          createdAt: Math.floor(mtime),
-          ...(typeof match?.item.prompt === "string" && match.item.prompt ? { prompt: match.item.prompt } : {}),
-          ...(match && carouselModel(match) ? { model: carouselModel(match) } : {}),
-          ...(generation?.parameters && typeof generation.parameters === "object"
-            ? { parameters: generation.parameters as Record<string, unknown> }
-            : {}),
-          ...(typeof match?.item.aspectRatio === "string" ? { aspectRatio: match.item.aspectRatio } : {}),
-          ...(cost && typeof cost.amount === "number"
-            ? { cost: { amount: cost.amount, currency: "USD" as const, estimated: cost.estimated === true } }
-            : {}),
-          producer: { nodeId: match?.nodeId ?? "", nodeType: match?.nodeType ?? "import" },
-          workflowId,
-          workflowName,
-          runId,
-          tags: [],
-          favorite: false,
-          imported: true,
-        };
-        const saved = await library.addRecord(record);
+        const record = await importedRecord(file, mtime, { workflow, workflowId, workflowName, runId }, ctx.signal);
+        // Published, so a move in the other build waits for this record and refuses the next one.
+        const saved = await library.writing(() => library.addRecord(record));
         deps.thumbs?.enqueue(saved, file);
         imported++;
       } catch (error) {
-        if (error instanceof LibraryError && error.code === "cancelled") throw error;
+        if (error instanceof LibraryError && (error.code === "cancelled" || error.code === "paused")) throw error;
         failed++;
       }
       ctx.addBytes(size);
@@ -689,7 +700,7 @@ const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 async function buildManifest(root: string, library?: AssetLibrary): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
   const data = path.join(root, DATA_DIR);
-  const skipDirs = new Set([path.join(data, "cache")]);
+  const skipDirs = new Set([path.join(data, "cache"), path.join(data, "writers")]);
   const skipFiles = new Set([
     path.join(data, "lock"),
     path.join(data, "config.json"),
@@ -752,6 +763,8 @@ export interface MoveDeps {
    * may write again (so it never writes into the old root).
    */
   settleMs?: number;
+  /** How long to wait for writes another process began before the lock (default a minute). */
+  otherWritersTimeoutMs?: number;
 }
 
 interface MoveMarker {
@@ -789,8 +802,9 @@ async function readJson<T>(file: string): Promise<T | null> {
 /**
  * Copies the library-owned files to the new root from a manifest, verifying
  * size and hash per file, with recording (and every other write) paused —
- * in this process by the pause, in the other build by the "move" lock —
- * then re-scans for anything that changed while it copied. Switches the
+ * in this process by the pause, in the other build by the "move" lock,
+ * once the writes that build began before the lock have landed — then
+ * re-scans for anything that changed while it copied. Switches the
  * root only once everything verified; then deletes exactly the files it
  * copied from the old root. A failure or cancel before the switch removes
  * the copies and leaves the old library untouched.
@@ -825,6 +839,11 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     // Markers left while we hold the lock are a move whose process died part-way: undo it
     // first, rather than write over the record of what it copied.
     if (await exists(markerFile)) await recoverMoveLocked(fromRoot, markerFile, logFile);
+    // Writes the other build began before the lock (a recording still uploading, an edit)
+    // land in this root: wait for them, so the copy has them. Later ones are refused.
+    if (!(await from.waitForOtherWriters(deps.otherWritersTimeoutMs ?? 60_000))) {
+      throw new LibraryError("Recordings are still being saved in another window. Try again in a moment.", 409, "busy");
+    }
 
     const marker: MoveMarker = { v: 1, toRoot, startedAt: Date.now(), pid: process.pid, state: "copying" };
     await atomicWriteFile(markerFile, JSON.stringify(marker), { fsync: true });

@@ -25,7 +25,7 @@ import {
   upsertWorkflowEntry,
 } from "../index";
 import { Ingestor } from "../ingest";
-import { JobRunner, runExport, runMove, validateMoveTarget, type JobContext } from "../jobs";
+import { JobRunner, runExport, runImport, runMove, validateMoveTarget, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
 import { installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
@@ -308,6 +308,48 @@ describe("move", () => {
     await library.drain();
   });
 
+  it("waits for a recording the other build began before the move, so the copy has it", async () => {
+    await record();
+    // This runtime plays the other build: it starts an upload that is still arriving.
+    const root = (await __assetLibraryForTests()).root;
+    const started = await beginRecord({ meta: meta(), source: { type: "upload" } });
+    if (!("ticket" in started)) throw new Error("expected a ticket");
+    const png = makePng(64, 64, 2);
+    const slow = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new Uint8Array(png.subarray(0, 100)));
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        controller.enqueue(new Uint8Array(png.subarray(100)));
+        controller.close();
+      },
+    });
+    const uploading = completeUpload(started.ticket.uploadId, slow, null);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Meanwhile this build, with its own index, moves the same library.
+    const mover = new AssetLibrary(root, { trash: async () => {} });
+    await mover.ready();
+    const target = path.join(base, "Moved");
+    await runMove(jobContext(), { library: mover, waitForWrites: async () => true, toRoot: target, setPaused: () => {}, switchRoot: async () => {} });
+    const saved = await uploading;
+    const sidecar = path.join(".nodebanana", "assets", `${saved.asset.id}.json`);
+    expect(fs.existsSync(path.join(target, sidecar))).toBe(true);
+    expect(fs.existsSync(path.join(root, sidecar))).toBe(false);
+    expect(fs.existsSync(path.join(target, ".nodebanana", "writers"))).toBe(false);
+    await mover.drain();
+  });
+
+  it("refuses a write as soon as the other build's move holds the lock", async () => {
+    const r = await record();
+    const library = await __assetLibraryForTests();
+    // Just looked at the lock, and found no move.
+    await patchAsset(r.asset.id, { favorite: true });
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
+    await expect(patchAsset(r.asset.id, { favorite: false })).rejects.toMatchObject({ status: 503, code: "paused" });
+    expect((await listAssets({})).assets[0].favorite).toBe(true);
+    fs.rmSync(library.layout.lock);
+  });
+
   it("won't switch to a folder a move stopped copying into", async () => {
     await getLibraryStatus();
     const target = path.join(base, "Unfinished");
@@ -562,6 +604,18 @@ describe("import", () => {
     const library = await __assetLibraryForTests();
     expect(library.getWorkflow("wf_shared")?.projectPath).toBe(first);
     expect(library.getWorkflow(asset.workflowId)?.forkedFrom).toBe("wf_shared");
+  });
+
+  it("stops, adding nothing more, once the other build's move holds the lock", async () => {
+    const project = path.join(base, "Moving Project");
+    fs.mkdirSync(path.join(project, "generations"), { recursive: true });
+    fs.writeFileSync(path.join(project, "generations", "a.png"), makePng(2, 2, 11));
+    fs.writeFileSync(path.join(project, "generations", "b.png"), makePng(2, 2, 12));
+    const library = await __assetLibraryForTests();
+    fs.writeFileSync(library.layout.lock, JSON.stringify({ pid: process.ppid, at: Date.now(), purpose: "move" }));
+    await expect(runImport(jobContext(), { library, thumbs: null }, [project])).rejects.toMatchObject({ code: "paused" });
+    expect(library.allRecords()).toHaveLength(0);
+    fs.rmSync(library.layout.lock);
   });
 
   it("refuses a bad folder list and a second job while one runs", async () => {
