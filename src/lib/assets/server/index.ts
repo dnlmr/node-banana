@@ -272,7 +272,7 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
     // No generations yet.
   }
   for (const dir of dirs) await sweepStaleTemps(dir, STALE_PARTIAL_MS);
-  if (!rt.paused) await library.emptyExpiredTrash();
+  if (!rt.paused) await counted(rt, () => library.emptyExpiredTrash());
   await rt.thumbs?.trim();
 }
 
@@ -304,10 +304,15 @@ async function write<T>(fn: (library: AssetLibrary) => Promise<T>): Promise<T> {
   const rt = runtime();
   assertWritable(rt);
   const library = await readyLibrary();
+  return counted(rt, () => fn(library));
+}
+
+/** Counts `fn` as an in-flight write (after checking the pause, synchronously). */
+async function counted<T>(rt: Runtime, fn: () => Promise<T>): Promise<T> {
   assertWritable(rt);
   rt.writes++;
   try {
-    return await fn(library);
+    return await fn();
   } finally {
     rt.writes--;
     if (rt.writes === 0) {
