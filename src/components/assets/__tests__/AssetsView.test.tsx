@@ -492,6 +492,52 @@ describe("AssetsView", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Imported 4 files");
   });
 
+  describe("fullscreen detail", () => {
+    let fullscreenElement: Element | null = null;
+    const enterFullscreen = () =>
+      act(() => {
+        fullscreenElement = document.querySelector("[data-asset-detail]");
+        document.dispatchEvent(new Event("fullscreenchange"));
+      });
+
+    beforeEach(() => {
+      Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fullscreenElement });
+      Object.defineProperty(document, "exitFullscreen", {
+        configurable: true,
+        value: vi.fn(async () => {
+          fullscreenElement = null;
+          document.dispatchEvent(new Event("fullscreenchange"));
+        }),
+      });
+    });
+    afterEach(() => {
+      fullscreenElement = null;
+      delete (document as { fullscreenElement?: unknown }).fullscreenElement;
+      delete (document as { exitFullscreen?: unknown }).exitFullscreen;
+    });
+
+    it("shows the notice inside the detail, where fullscreen can paint it", async () => {
+      await renderView();
+      fireEvent.click(tile("a2"));
+      enterFullscreen();
+      const detail = document.querySelector<HTMLElement>("[data-asset-detail]")!;
+      api.bulkAssets.mockResolvedValueOnce({ affected: 1, ids: ["a2"], errors: [] });
+      fireEvent.keyDown(window, { key: "Delete" });
+      await waitFor(() => expect(within(detail).getByRole("status")).toHaveTextContent("Trashed 1 asset"));
+      expect(screen.getAllByRole("status")).toHaveLength(1);
+    });
+
+    it("leaves fullscreen before asking to delete for good, so the question can be seen", async () => {
+      useAssetStore.setState({ filters: { ...initial.filters, view: "trash" } });
+      await renderView([asset("t1", { trashedAt: 1 }), asset("t2", { trashedAt: 1 })]);
+      fireEvent.click(tile("t1"));
+      enterFullscreen();
+      fireEvent.keyDown(window, { key: "Delete" });
+      expect(document.exitFullscreen).toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Delete 1 asset permanently?" })).toBeInTheDocument();
+    });
+  });
+
   it("goes back to the canvas when a workflow opens or the tab changes, however that was asked for", async () => {
     await renderView();
     act(() => useWorkflowStore.setState({ canvasGeneration: useWorkflowStore.getState().canvasGeneration + 1 }));

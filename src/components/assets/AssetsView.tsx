@@ -1,10 +1,7 @@
 "use client";
 
-import { CircleAlert, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/shallow";
-import { cn } from "@/components/nodes/ui/cn";
-import { CHROME_SURFACE } from "@/components/chromeStyles";
 import { clearGenerationToasts } from "@/components/GenerationToast";
 import { onPosterReady } from "@/lib/assets/client/poster";
 import { getRecorderLibraryStatus, onAssetRecorded, onLibraryStatus } from "@/lib/assets/client/recorder";
@@ -12,8 +9,9 @@ import { sameQuery } from "@/lib/assets/query";
 import { ARRIVALS_POLL_MS, buildAssetQuery, selectionCount, useAssetStore } from "@/store/assetStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { AssetContextMenu } from "./AssetContextMenu";
-import { AssetDetail, toggleDetailFullscreen } from "./AssetDetail";
+import { AssetDetail, toggleDetailFullscreen, useDetailFullscreen } from "./AssetDetail";
 import { AssetGrid, gridNavigation } from "./AssetGrid";
+import { AssetNotice } from "./AssetNotice";
 import { AssetsHeader } from "./AssetsHeader";
 import { AssetsRail } from "./AssetsRail";
 import { BulkBar } from "./BulkBar";
@@ -159,66 +157,6 @@ function handleAssetsKey(event: KeyboardEvent) {
   }
 }
 
-/** The last asset action's result, with Undo, bottom-centre; errors stay a little longer. */
-function Notice() {
-  const notice = useAssetStore((state) => state.notice);
-  const dismiss = useAssetStore((state) => state.dismissNotice);
-  const undo = useAssetStore((state) => state.undo);
-  const canUndo = useAssetStore((state) => state.undoStack.length > 0);
-
-  useEffect(() => {
-    if (!notice || notice.sticky) return;
-    const timer = setTimeout(() => {
-      if (useAssetStore.getState().notice?.id === notice.id) dismiss();
-    }, notice.undo || notice.tone === "error" ? 8000 : 4000);
-    return () => clearTimeout(timer);
-  }, [notice, dismiss]);
-
-  if (!notice) return null;
-  return (
-    <div
-      key={notice.id}
-      role={notice.tone === "error" ? "alert" : "status"}
-      className={cn(CHROME_SURFACE, "animate-drop-in motion-reduce:animate-none pointer-events-auto flex min-h-10 max-w-[520px] items-center gap-2 rounded-xl py-1.5 pl-3 pr-1.5 text-xs text-neutral-200")}
-    >
-      {notice.tone === "error" && <CircleAlert size={14} strokeWidth={1.75} className="shrink-0 text-red-400" />}
-      <span className="min-w-0 flex-1">{notice.message}</span>
-      {notice.undo && canUndo && (
-        <button
-          type="button"
-          onClick={() => {
-            dismiss();
-            void undo();
-          }}
-          className="h-7 shrink-0 rounded-md px-2 font-medium text-neutral-100 transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
-        >
-          Undo
-        </button>
-      )}
-      {notice.action && (
-        <button
-          type="button"
-          onClick={() => {
-            dismiss();
-            notice.action!.run();
-          }}
-          className="h-7 shrink-0 rounded-md px-2 font-medium text-neutral-100 transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
-        >
-          {notice.action.label}
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={dismiss}
-        aria-label="Dismiss"
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-white/[0.08] hover:text-neutral-100"
-      >
-        <X size={14} strokeWidth={1.75} />
-      </button>
-    </div>
-  );
-}
-
 function Popovers() {
   const popover = useAssetStore((state) => state.popover);
   // Re-read records when they change, so the tag editor's states follow each click
@@ -304,6 +242,8 @@ export function AssetsView() {
     };
   }, []);
 
+  // A fullscreen detail paints only itself: it shows the notice then
+  const detailFullscreen = useDetailFullscreen();
   const showGrid = itemCount > 0;
 
   return (
@@ -339,7 +279,7 @@ export function AssetsView() {
         className="pointer-events-none absolute bottom-5 z-40 flex flex-col items-center gap-2"
         style={detailOpen ? { left: 0, right: PANEL_WIDTH } : { left: RAIL_WIDTH, right: 0 }}
       >
-        <Notice />
+        {!detailFullscreen && <AssetNotice />}
         {!detailOpen && <BulkBar />}
       </div>
 

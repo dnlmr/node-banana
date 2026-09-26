@@ -194,6 +194,14 @@ export function removeSelection(selection: AssetSelection) {
 }
 
 /**
+ * A confirm is a dialog on document.body, which a fullscreen detail would
+ * hide (while it held the keyboard): leave fullscreen first.
+ */
+function leaveFullscreen() {
+  if (typeof document !== "undefined" && document.fullscreenElement) void document.exitFullscreen?.().catch(() => {});
+}
+
+/**
  * What of `selection` a permanent delete may reach from this view (only
  * trashed assets in the Trash, only missing ones otherwise), and how many
  * that is; null, said in a notice, when nothing.
@@ -212,6 +220,7 @@ function deletable(selection: AssetSelection, count: number): { selection: Asset
 export function requestRemoveFromLibrary(selection: AssetSelection, count: number) {
   const target = deletable(selection, count);
   if (!target) return;
+  leaveFullscreen();
   useAssetStore.getState().requestConfirm({ kind: "remove", selection: target.selection, count: target.count, projectCount: 0 });
 }
 
@@ -223,6 +232,7 @@ export function requestPermanentDelete(selection: AssetSelection, count: number)
   const records = recordsOf(target.selection);
   const inProjects = records.filter((asset) => asset.file.root === "external").length;
   const projectCount = records.length >= target.count ? inProjects : null;
+  leaveFullscreen();
   useAssetStore.getState().requestConfirm({ kind: "delete", selection: target.selection, count: target.count, projectCount });
 }
 
