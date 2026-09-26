@@ -81,6 +81,7 @@ let open: OpenModule;
 
 beforeEach(async () => {
   vi.resetModules();
+  localStorage.clear();
   tabCounter = 0;
   store.replace(freshState());
   open = await import("../openWorkflow");
@@ -241,6 +242,33 @@ describe("openAssetWorkflow: snapshot", () => {
     // Already showing: nothing to switch.
     const third = await open.openAssetWorkflow(asset(), "snapshot");
     expect(third).toMatchObject({ ok: true, tabId: "tab-new-1" });
+  });
+
+  it("still finds the copy after a restart restored the tabs", async () => {
+    const server = await fakeServer();
+    const first = await open.openAssetWorkflow(asset(), "snapshot");
+    expect(first).toMatchObject({ ok: true, tabId: "tab-new-1" });
+    store.getState().switchTab("tab-1");
+
+    // The desktop app restarts and restores its tabs; this module starts afresh.
+    vi.resetModules();
+    open = await import("../openWorkflow");
+    const again = await open.openAssetWorkflow(asset(), "snapshot");
+    expect(again).toEqual({ ok: true, tabId: "tab-new-1", nodeId: "nanoBanana-1" });
+    expect(store.getState().openWorkflowInNewTab).toHaveBeenCalledTimes(1);
+    expect(server.calls.filter((call) => call.url.endsWith("/workflow"))).toHaveLength(1);
+  });
+
+  it("opens a fresh copy once the earlier one was saved to a folder", async () => {
+    await fakeServer();
+    await open.openAssetWorkflow(asset(), "snapshot");
+    // Saved as a project: it keeps its id but is the user's own workflow now.
+    store.setState({ saveDirectoryPath: "/Users/test/Projects/Cats v2" });
+    store.getState().switchTab("tab-1");
+
+    const again = await open.openAssetWorkflow(asset(), "snapshot");
+    expect(again).toMatchObject({ ok: true, tabId: "tab-new-2" });
+    expect(store.getState().openWorkflowInNewTab).toHaveBeenCalledTimes(2);
   });
 
   it("opens a new copy once the earlier one was closed", async () => {

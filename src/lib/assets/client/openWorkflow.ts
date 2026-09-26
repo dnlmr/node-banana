@@ -3,7 +3,8 @@
  *
  * - `snapshot`: fetch the run snapshot for the asset, hydrate it, prepare it
  *   (fresh id, never bound to a folder), then `openWorkflowInNewTab`. If a
- *   tab opened earlier from the same run is still open, switch to it
+ *   tab opened earlier from the same run is still open (restored desktop
+ *   sessions included) and not since saved to a folder, switch to it
  *   instead. Centres on the producing node when it exists.
  * - `project`: load the project folder's workflow file
  *   (GET /api/workflow?path=…&load=true) and open it bound to the folder,
@@ -26,10 +27,56 @@ export type OpenWorkflowResult =
   | { ok: true; tabId: string; nodeId: string | null }
   | { ok: false; reason: string };
 
-/** runId → id of the copy opened from its snapshot, so a second open goes back to that tab. */
-const openedCopies = new Map<string, string>();
+/**
+ * runId → id of the copy opened from its snapshot, so a second open goes
+ * back to that tab. Kept in localStorage too: the desktop app restores its
+ * tabs after a restart, and the copy tab should still be found then. An
+ * entry only ever points at a tab that is open, so a stale one is harmless.
+ */
+export const OPENED_COPIES_KEY = "node-banana-assets-opened-copies";
+const OPENED_COPIES_LIMIT = 50;
+let openedCopies: Map<string, string> | null = null;
 /** One open per run or project at a time; a second click waits for the first. */
 const inflight = new Map<string, Promise<OpenWorkflowResult>>();
+
+function copies(): Map<string, string> {
+  if (openedCopies) return openedCopies;
+  openedCopies = new Map();
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(OPENED_COPIES_KEY) ?? "[]");
+    if (Array.isArray(stored)) {
+      for (const entry of stored) {
+        if (Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string") openedCopies.set(entry[0], entry[1]);
+      }
+    }
+  } catch {
+    // No storage (a private window, blocked site data): this page's copies are still remembered.
+  }
+  return openedCopies;
+}
+
+function saveCopies(): void {
+  try {
+    localStorage.setItem(OPENED_COPIES_KEY, JSON.stringify([...copies()]));
+  } catch {
+    // As above: remembered for this page only.
+  }
+}
+
+function rememberCopy(runId: string, workflowId: string): void {
+  const map = copies();
+  map.delete(runId);
+  map.set(runId, workflowId);
+  for (const oldest of map.keys()) {
+    if (map.size <= OPENED_COPIES_LIMIT) break;
+    map.delete(oldest);
+  }
+  saveCopies();
+}
+
+function forgetCopy(runId: string): void {
+  if (copies().delete(runId)) saveCopies();
+}
 
 function fail(reason: string): OpenWorkflowResult {
   return { ok: false, reason };
@@ -221,12 +268,13 @@ async function openSnapshot(asset: AssetView): Promise<OpenWorkflowResult> {
   const blocked = openWorkflowBlockedReason(asset, "snapshot");
   if (blocked) return fail(blocked);
 
-  const copyId = openedCopies.get(asset.runId);
+  const copyId = copies().get(asset.runId);
   if (copyId) {
-    const focused = focusTab((tab) => tab.workflowId === copyId);
+    // A copy since saved to a folder is the user's own workflow now, not the run as it was.
+    const focused = focusTab((tab) => tab.workflowId === copyId && !tab.saveDirectoryPath);
     if (focused?.ok) return { ok: true, tabId: focused.tabId, nodeId: centreOn(asset.producer.nodeId) };
     if (focused) return focused;
-    openedCopies.delete(asset.runId);
+    forgetCopy(asset.runId);
   }
 
   const result = await fetchAssetWorkflow(asset.id);
@@ -246,7 +294,7 @@ async function openSnapshot(asset: AssetView): Promise<OpenWorkflowResult> {
 
   const opened = await openCopy(prepared);
   if (!opened.ok) return opened;
-  openedCopies.set(asset.runId, prepared.id!);
+  rememberCopy(asset.runId, prepared.id!);
   return { ok: true, tabId: opened.tabId, nodeId: centreOn(asset.producer.nodeId) };
 }
 
