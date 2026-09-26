@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 
 /** The media /api/load-generation can serve, so the two routes agree on what counts. */
@@ -11,8 +12,11 @@ const SUPPORTED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif", "mp4"
  * name without the extension. A node's carousel keeps only the entries this
  * lists. A folder that does not exist lists nothing, since nothing in it can
  * be loaded; any other failure is reported so the caller keeps its history.
+ * Only Node Banana's own page may ask (see guard.ts).
  */
 export async function GET(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const directoryPath = request.nextUrl.searchParams.get("path");
   if (!directoryPath) {
     return NextResponse.json({ success: false, error: "Path parameter required" }, { status: 400 });

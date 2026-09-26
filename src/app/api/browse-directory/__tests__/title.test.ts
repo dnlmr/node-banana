@@ -8,10 +8,13 @@ const { exec, writeFile } = vi.hoisted(() => ({
 
 vi.mock("child_process", () => ({ exec }));
 vi.mock("fs/promises", () => ({ writeFile, unlink: vi.fn().mockResolvedValue(undefined) }));
+// The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
 
 import { GET } from "../route";
 
 const LIBRARY_TITLE = "Choose where Node Banana saves your media";
+const EXPORT_TITLE = "Choose a folder to export to";
 const DEFAULT_TITLE = "Select a folder to save workflows";
 
 const realPlatform = process.platform;
@@ -36,6 +39,15 @@ afterEach(() => {
 });
 
 describe("GET /api/browse-directory picker title", () => {
+  it("asks for an export folder when ?purpose=export (Export, Save a copy…)", async () => {
+    onPlatform("darwin");
+    await pick("?purpose=export");
+    expect(exec.mock.calls[0][0]).toContain(`choose folder with prompt "${EXPORT_TITLE}"`);
+    onPlatform("win32");
+    await pick("?purpose=export");
+    expect(writeFile.mock.calls[0][1]).toContain(`[FolderPicker]::Show("${EXPORT_TITLE}")`);
+  });
+
   it("asks where to save media when ?purpose=library (macOS)", async () => {
     onPlatform("darwin");
     const response = await pick("?purpose=library");

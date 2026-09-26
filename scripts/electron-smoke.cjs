@@ -259,12 +259,14 @@ async function main() {
     assert.equal(folder.success, true);
     const libraryFolder = await page.evaluate(async () => (await fetch('/api/browse-directory?purpose=library')).json());
     assert.equal(libraryFolder.path, directory);
-    assert.deepEqual(await desktop.evaluate(() => global.__smokePickerTitles), ['Select a folder to save workflows', 'Choose where Node Banana saves your media']);
+    const exportFolder = await page.evaluate(async () => (await fetch('/api/browse-directory?purpose=export')).json());
+    assert.equal(exportFolder.path, directory);
+    assert.deepEqual(await desktop.evaluate(() => global.__smokePickerTitles), ['Select a folder to save workflows', 'Choose where Node Banana saves your media', 'Choose a folder to export to']);
     await desktop.evaluate(({ dialog }) => {
       dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
     });
     assert.equal(await page.evaluate(async () => (await (await fetch('/api/browse-directory')).json()).cancelled), true);
-    console.log('PASS: native folder picker bridge handles selection, cancellation and the library title');
+    console.log('PASS: native folder picker bridge handles selection, cancellation and the library and export titles');
 
     const workflow = {
       version: 1,

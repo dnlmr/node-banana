@@ -147,6 +147,31 @@ describe("guardAssetRequest: refuses with a 403", () => {
     expect(logger.warn).toHaveBeenCalledTimes(refusals.length);
     expect(vi.mocked(logger.warn).mock.calls[0][2]).toMatchObject({ path: "/api/assets/bulk", reason: expect.any(String) });
   });
+
+  it("names the library's own allowlist, never the agent's, in the message and the log", async () => {
+    const lan = request({ host: "192.168.4.22:3000", origin: "http://192.168.4.22:3000" }, { url: "http://192.168.4.22:3000/api/assets/library", method: "GET" });
+    const { error } = await body(guardAssetRequest(lan));
+    expect(error).toContain(LIBRARY_ALLOWED_HOSTS_ENV);
+    expect(error).not.toContain(AGENT_ALLOWED_HOSTS_ENV);
+
+    const refusals = [
+      lan,
+      // Claims localhost but came from another machine (no stamp).
+      request({ host: "localhost:3000", origin: "http://localhost:3000" }),
+      pagePost("localhost:3000", { "sec-fetch-site": "cross-site" }),
+      request({ host: "localhost:3000", ...STAMP }),
+    ];
+    vi.mocked(logger.warn).mockClear();
+    for (const req of refusals) guardAssetRequest(req);
+    const reasons = vi.mocked(logger.warn).mock.calls.map((call) => (call[2] as { reason: string }).reason);
+    expect(reasons).toHaveLength(refusals.length);
+    for (const reason of reasons) {
+      expect(reason).not.toMatch(/agent/i);
+      expect(reason).not.toContain(AGENT_ALLOWED_HOSTS_ENV);
+    }
+    expect(reasons[0]).toContain(`add 192.168.4.22 to ${LIBRARY_ALLOWED_HOSTS_ENV}`);
+    expect(reasons[1]).toContain(LIBRARY_ALLOWED_HOSTS_ENV);
+  });
 });
 
 describe("checkAssetRequest on a server that does not vouch (plain next dev / next start)", () => {

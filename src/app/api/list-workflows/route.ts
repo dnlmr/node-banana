@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 
 const MAX_DEPTH = 3;
@@ -100,7 +101,10 @@ async function probeWorkflow(
   return null;
 }
 
+// Answers only Node Banana's own page (see guard.ts).
 export async function GET(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const parentPath = request.nextUrl.searchParams.get("path");
 
   if (!parentPath) {

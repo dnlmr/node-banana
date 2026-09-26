@@ -3,6 +3,8 @@ import type { NextRequest } from "next/server";
 
 const { mockReaddir } = vi.hoisted(() => ({ mockReaddir: vi.fn() }));
 vi.mock("fs/promises", () => ({ readdir: mockReaddir }));
+// The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
 
 import { GET } from "../route";
 

@@ -5,15 +5,21 @@
 // (DesktopServerBridge in src/lib/assets/types.ts); lib/bridge-main.cjs answers.
 const BRIDGE_REQUESTS = new Set(['reveal', 'trash', 'choose-directory']);
 const LIBRARY_PICKER_TITLE = 'Choose where Node Banana saves your media';
+const EXPORT_PICKER_TITLE = 'Choose a folder to export to';
 const REQUEST_TIMEOUT_MS = 30_000;
 // A folder picker waits on the user, not on main; this only bounds a lost reply
 // (it matches the server's own request timeout).
 const PICKER_TIMEOUT_MS = 600_000;
 
-// GET /api/browse-directory?purpose=library picks the library folder; any other
+// The same titles as PICKER_TITLES in src/app/api/browse-directory/route.ts.
+const PICKER_TITLES = { library: LIBRARY_PICKER_TITLE, export: EXPORT_PICKER_TITLE };
+
+// GET /api/browse-directory?purpose=library picks the library folder,
+// ?purpose=export an export destination (Export, "Save a copy…"); any other
 // purpose keeps main's default title.
 function browseDirectoryTitle(searchParams) {
-  return searchParams.get('purpose') === 'library' ? LIBRARY_PICKER_TITLE : undefined;
+  const purpose = searchParams.get('purpose');
+  return Object.hasOwn(PICKER_TITLES, purpose ?? '') ? PICKER_TITLES[purpose] : undefined;
 }
 
 // Only the fields the contract names, as plain strings, cross the process
@@ -84,4 +90,4 @@ function createBridgeClient({ post, timeoutMs = REQUEST_TIMEOUT_MS, pickerTimeou
   return { request, pickDirectory, receive, pending: () => pending.size };
 }
 
-module.exports = { BRIDGE_REQUESTS, LIBRARY_PICKER_TITLE, browseDirectoryTitle, createBridgeClient };
+module.exports = { BRIDGE_REQUESTS, EXPORT_PICKER_TITLE, LIBRARY_PICKER_TITLE, browseDirectoryTitle, createBridgeClient };

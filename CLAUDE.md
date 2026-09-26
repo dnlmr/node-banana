@@ -384,7 +384,12 @@ lives in its hidden `.nodebanana/` folder. Project workflows still write into
   fall back to `/api/save-generation`.
 - `/api/assets/*` answer only Node Banana's own page on this computer
   (`src/lib/assets/server/guard.ts`, same stamp as the agent routes);
-  `NB_LIBRARY_ALLOWED_HOSTS` opts other hosts in.
+  `NB_LIBRARY_ALLOWED_HOSTS` opts other hosts in. The older routes that
+  read, write, list or reveal files by path (`/api/workflow`,
+  `/api/workflow-images`, `/api/list-workflows`, `/api/save-generation`,
+  `/api/load-generation`, `/api/list-generations`, `/api/open-file`,
+  `/api/open-directory`, `/api/browse-directory`) sit behind the same guard,
+  so a new route that takes a path should too.
 - `NODE_BANANA_ASSET_LIBRARY` pins the library root (tests must set it, or use
   the server test hooks; scripted Electron runs get one under their temp
   profile automatically).
