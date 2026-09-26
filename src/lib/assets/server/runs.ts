@@ -3,9 +3,9 @@
  *
  * One gzip file per run (`runs/<runId>.json.gz`) holds the graph at the
  * start and, when the run finished on the same canvas, at the end. Media in
- * those graphs are `{ $nbMedia: sha256 }` refs, resolved from `media/` first
- * — a file of the bytes, or a `<sha256>.ref` pointing at a project's own file
- * that still holds them — and then from any asset file with the same bytes.
+ * those graphs are `{ $nbMedia: sha256 }` refs, resolved from a file in
+ * `media/`, then any asset file with the same bytes, then a
+ * `media/<sha256>.ref` pointing at a project's own file that still holds them.
  *
  * Next to each snapshot, `runs/<runId>.hashes.json` repeats its mediaHashes
  * with the snapshot's mtime:size, so a reference scan reads a few KB per run
@@ -446,8 +446,9 @@ export class RunStore {
     const missing: string[] = [];
     for (const hash of [...new Set(hashes.filter(isSha256))].slice(0, MAX_MEDIA_HASHES)) {
       if (await this.mediaFile(hash)) continue;
-      if (await this.referencedFile(hash)) continue;
+      // An asset file is a stat away; a reference may need hashing first.
       if (await this.lookup.assetFileFor(hash)) continue;
+      if (await this.referencedFile(hash)) continue;
       missing.push(hash);
     }
     return missing;
@@ -483,7 +484,7 @@ export class RunStore {
     return { sha256, bytes: written.bytes };
   }
 
-  /** Where to read snapshot media from: media/ first (a file, then a reference), then an asset file with the same bytes. */
+  /** Where to read snapshot media from: a file in media/, an asset file with the same bytes, then a reference in media/. */
   async openMedia(sha256: string): Promise<MediaSource | null> {
     if (!isSha256(sha256)) return null;
     const file = await this.mediaFile(sha256);
@@ -497,7 +498,7 @@ export class RunStore {
         // Fall through to a reference, then asset files.
       }
     }
-    return (await this.referencedFile(sha256)) ?? this.lookup.assetFileFor(sha256);
+    return (await this.lookup.assetFileFor(sha256)) ?? this.referencedFile(sha256);
   }
 
   /**
