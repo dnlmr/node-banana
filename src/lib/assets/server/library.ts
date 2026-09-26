@@ -89,7 +89,8 @@ const MOVE_CHECK_MS = 1000;
 /** How often a move looks again for another process's writes to finish. */
 const WRITERS_POLL_MS = 100;
 
-export type TrashHook = (files: string[]) => Promise<unknown>;
+/** `interactive: false` — nobody asked for this just now, so no route that may prompt (Finder's Automation request). */
+export type TrashHook = (files: string[], options?: { interactive?: boolean }) => Promise<unknown>;
 
 export interface AssetLibraryOptions {
   platform?: NodeJS.Platform;
@@ -328,7 +329,7 @@ export class AssetLibrary {
   constructor(root: string, options: AssetLibraryOptions = {}) {
     this.layout = libraryLayout(root);
     this.platform = options.platform ?? process.platform;
-    this.trash = options.trash ?? (async (files) => (await import("./desktop")).trashFiles(files));
+    this.trash = options.trash ?? (async (files, trashOptions) => (await import("./desktop")).trashFiles(files, trashOptions));
     this.now = options.now ?? Date.now;
     this.workflowTable = new WorkflowTable(this.layout.workflowsFile, this.platform);
     this.runs = new RunStore(this.layout, { assetFileFor: (sha256) => this.assetFileFor(sha256) });
@@ -1305,8 +1306,9 @@ export class AssetLibrary {
    * Bytes a surviving run's snapshot still references move into
    * `.nodebanana/media` instead of the OS Trash, so "open original workflow"
    * keeps working; for a kept project file, a reference to it goes there.
-   * `purge` (the automatic 30-day empty) unlinks instead of using the OS
-   * Trash, so nothing asks for permissions at startup.
+   * `purge` (the automatic 30-day empty) uses the OS Trash too, but never
+   * a route that asks for permissions at startup: where only that one is
+   * left (macOS 14 or earlier in web mode), the files are unlinked.
    */
   async deleteRecords(
     ids: string[],
@@ -1425,11 +1427,10 @@ export class AssetLibrary {
         }
       }
       if (!toTrash.length) return;
-      if (options.purge) {
-        for (const file of toTrash) await unlinkWithRetry(file).catch((error) => console.warn("[assets] could not remove", file, error));
-      } else {
-        await this.trash(toTrash).catch((error) => console.warn("[assets] could not remove", toTrash, error));
-      }
+      // The unprompted purge goes to the OS Trash too, by any route that can't put up a prompt.
+      await this.trash(toTrash, { interactive: !options.purge }).catch((error) =>
+        console.warn("[assets] could not remove", toTrash, error),
+      );
     } finally {
       releases.forEach((release) => release());
     }
@@ -1437,8 +1438,10 @@ export class AssetLibrary {
 
   /**
    * Permanently deletes records that have been in the Trash longer than the
-   * retention period. It runs unprompted at startup, so it unlinks rather
-   * than use the OS Trash (whose Finder route asks for Automation rights).
+   * retention period, by the rules of a manual delete. It runs unprompted
+   * at startup, so the files skip the one OS Trash route that asks for
+   * rights (Finder's Automation prompt), and are unlinked only where no
+   * other route exists.
    */
   async emptyExpiredTrash(retentionMs: number = TRASH_RETENTION_MS): Promise<number> {
     await this.ready();

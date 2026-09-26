@@ -478,10 +478,34 @@ describe("permanent delete", () => {
       [old.asset.id]: "gone",
       [recent.asset.id]: "present",
     });
-    // Unprompted at startup: unlinked, never through the OS Trash (whose Finder route asks for permissions).
-    expect(trashedPaths()).toEqual([]);
+    // To the OS Trash, as a manual delete would (here the desktop app's bridge).
+    expect(trashedPaths()).toEqual([old.asset.displayPath]);
     expect(fs.existsSync(old.asset.displayPath)).toBe(false);
     expect(fs.existsSync(recent.asset.displayPath)).toBe(true);
+  });
+
+  it("asks the OS Trash for no route that could prompt when it empties the Trash unprompted", async () => {
+    const calls: { files: string[]; options?: { interactive?: boolean } }[] = [];
+    const library = new AssetLibrary(root, {
+      trash: async (files, options) => {
+        calls.push({ files, options });
+        files.forEach((file) => fs.rmSync(file));
+      },
+    });
+    await library.ready();
+    const expired = await library.addRecord(fakeRecord({ trashedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 }));
+    const byHand = await library.addRecord(fakeRecord({ trashedAt: Date.now() }));
+    for (const made of [expired, byHand]) {
+      fs.mkdirSync(path.dirname(library.filePath(made)!), { recursive: true });
+      fs.writeFileSync(library.filePath(made)!, Buffer.from(made.id));
+    }
+    expect(await library.emptyExpiredTrash()).toBe(1);
+    await library.deleteRecords([byHand.id]);
+    expect(calls).toEqual([
+      { files: [library.filePath(expired)], options: { interactive: false } },
+      { files: [library.filePath(byHand)], options: { interactive: true } },
+    ]);
+    await library.drain();
   });
 
   it("sends a whole batch to the OS Trash in one call", async () => {

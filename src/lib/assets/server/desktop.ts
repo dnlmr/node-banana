@@ -157,14 +157,17 @@ function batches(files: string[]): string[][] {
   return out;
 }
 
-/** The OS routes for a batch, in order of preference. */
-function trashRoutes(platform: NodeJS.Platform, exec: ExecRunner): ((files: string[]) => Promise<void>)[] {
+/**
+ * The OS routes for a batch, in order of preference. Not `interactive`, the
+ * ones that may ask the user something (Finder's Automation prompt) are left
+ * out.
+ */
+function trashRoutes(platform: NodeJS.Platform, exec: ExecRunner, interactive: boolean): ((files: string[]) => Promise<void>)[] {
   if (platform === "darwin") {
     // macOS 15+ ships /usr/bin/trash; Finder via AppleScript covers older systems.
-    return [
-      (files) => exec("/usr/bin/trash", files, {}),
-      (files) => exec("osascript", [...MAC_FINDER_DELETE, ...files], {}),
-    ];
+    const routes = [(files: string[]) => exec("/usr/bin/trash", files, {})];
+    if (interactive) routes.push((files) => exec("osascript", [...MAC_FINDER_DELETE, ...files], {}));
+    return routes;
   }
   if (platform === "win32") {
     return [
@@ -177,6 +180,31 @@ function trashRoutes(platform: NodeJS.Platform, exec: ExecRunner): ((files: stri
   return [(files) => exec("gio", ["trash", ...files], {})];
 }
 
+/** Finder can't be asked at all: not allowed to send it Apple Events (-1743), timed out (-1712), not running (-600). */
+const APPLE_EVENTS_REFUSED = /\((?:-1743|-1712|-600)\)|not (?:authori[sz]ed|permitted) to send apple events/i;
+
+/**
+ * The route failed as a whole, not over one of the files: the tool is
+ * missing, it was stopped (the exec timeout — a prompt nobody answered), or
+ * macOS refused it the Apple Events it needs. Retrying file by file would
+ * only fail the same way, once per file.
+ */
+function routeUnavailable(error: unknown): boolean {
+  if (errnoCode(error) === "ENOENT") return true;
+  const failure = (error ?? {}) as { killed?: unknown; signal?: unknown; message?: unknown; stderr?: unknown };
+  if (failure.killed === true || (typeof failure.signal === "string" && failure.signal !== "")) return true;
+  return APPLE_EVENTS_REFUSED.test(`${String(failure.message ?? "")}\n${String(failure.stderr ?? "")}`);
+}
+
+export interface TrashOptions extends DesktopDeps {
+  /**
+   * False for work nobody asked for just now (the 30-day purge at startup):
+   * routes that may put up a prompt are skipped, and what the others can't
+   * take is unlinked.
+   */
+  interactive?: boolean;
+}
+
 /**
  * Sends files to the OS Trash/Recycle Bin, so a permanent delete in the app
  * stays recoverable from the system. One tool process takes a whole batch
@@ -184,8 +212,8 @@ function trashRoutes(platform: NodeJS.Platform, exec: ExecRunner): ((files: stri
  * trash route failed to move it (no Finder, no gio). Returns how each file
  * went; a file missing from the result could not be removed at all.
  */
-export async function trashFiles(files: readonly string[], deps: DesktopDeps = {}): Promise<Map<string, TrashMethod>> {
-  const { platform, exec, bridge } = resolveDeps(deps);
+export async function trashFiles(files: readonly string[], options: TrashOptions = {}): Promise<Map<string, TrashMethod>> {
+  const { platform, exec, bridge } = resolveDeps(options);
   const results = new Map<string, TrashMethod>();
   let pending = [...new Set(files)];
   if (bridge) {
@@ -204,16 +232,22 @@ export async function trashFiles(files: readonly string[], deps: DesktopDeps = {
     }
     pending = left;
   }
-  for (const route of trashRoutes(platform, exec)) {
+  for (const route of trashRoutes(platform, exec, options.interactive !== false)) {
     if (!pending.length) break;
+    let down = false;
     for (const batch of batches(pending)) {
+      if (down) break;
       try {
         await route(batch);
       } catch (error) {
-        // One bad path can fail a whole batch; retry its files one by one, unless the tool itself is missing.
-        if (batch.length > 1 && errnoCode(error) !== "ENOENT") {
-          for (const file of batch) {
-            if (await exists(file)) await route([file]).catch(() => {});
+        down = routeUnavailable(error);
+        // One bad path can fail a whole batch; retry its files one by one, while the route itself works.
+        for (const file of down || batch.length === 1 ? [] : batch) {
+          if (!(await exists(file))) continue;
+          try {
+            await route([file]);
+          } catch (single) {
+            if ((down = routeUnavailable(single))) break;
           }
         }
       }
@@ -238,8 +272,8 @@ export async function trashFiles(files: readonly string[], deps: DesktopDeps = {
 }
 
 /** {@link trashFiles} for one file; throws when it could not be removed. */
-export async function trashFile(file: string, deps: DesktopDeps = {}): Promise<TrashMethod> {
-  const method = (await trashFiles([file], deps)).get(file);
+export async function trashFile(file: string, options: TrashOptions = {}): Promise<TrashMethod> {
+  const method = (await trashFiles([file], options)).get(file);
   if (!method) throw new LibraryError(`Could not remove ${path.basename(file)}`, 500, "trash_failed");
   return method;
 }
