@@ -25,6 +25,7 @@ import {
 import { acquireLock, DATA_DIR, GENERATIONS_DIR, WRITERS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
+import { isUnreadableFile } from "./readable";
 import type { Thumbnailer } from "./thumbs";
 import { extOf, isMediaExtension, isWorkflowId, mediaTypeForExt, normaliseProjectDir, safeFileName } from "./validate";
 
@@ -266,13 +267,17 @@ interface ImportDeps {
   thumbs: Thumbnailer | null;
 }
 
-/** A project file's record: hashed, measured, with what the project's workflow JSON knows about it. */
+/**
+ * A project file's record: hashed, measured, with what the project's
+ * workflow JSON knows about it. Null when the file's bytes are unreadable
+ * (readable.ts): it is left where it is and not indexed.
+ */
 async function importedRecord(
   file: string,
   mtime: number,
   source: { workflow: ProjectWorkflow | null; workflowId: string; workflowName: string; runId: string },
   signal: AbortSignal,
-): Promise<AssetRecord> {
+): Promise<AssetRecord | null> {
   const digest = await hashFile(file, signal);
   const ext = extOf(file);
   const hinted = mediaTypeForExt(ext);
@@ -284,6 +289,7 @@ async function importedRecord(
   let dims: { width?: number; height?: number; durationSec?: number } = {};
   if (type.kind === "image") dims = (await imageDimensionsFromFile(file, ext, head)) ?? {};
   else if (type.kind === "video" || type.kind === "audio") dims = await probeAudioVideo({ path: file }, type.kind);
+  if (await isUnreadableFile(file, type, dims)) return null;
 
   const generation = match?.item.generation as { parameters?: unknown; cost?: unknown } | undefined;
   const cost = generation?.cost as { amount?: unknown; estimated?: unknown } | undefined;
@@ -324,7 +330,8 @@ async function importedRecord(
 /**
  * Indexes the files in each project's `generations/` folder in place:
  * hashes, measures, and attaches what the newest workflow JSON knows about
- * each file (its carousel entry: prompt, model, parameters).
+ * each file (its carousel entry: prompt, model, parameters). Files whose
+ * bytes nothing can open are left alone and counted in the message.
  */
 export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: string[]): Promise<string> {
   const { library } = deps;
@@ -361,6 +368,7 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
   });
 
   let imported = 0;
+  let unreadable = 0;
   let failed = 0;
   for (const { projectDir, files } of plan) {
     const workflow = await readProjectWorkflow(projectDir);
@@ -387,10 +395,14 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
       ctx.checkCancelled();
       try {
         const record = await importedRecord(file, mtime, { workflow, workflowId, workflowName, runId }, ctx.signal);
-        // Published, so a move in the other build waits for this record and refuses the next one.
-        const saved = await library.writing(() => library.addRecord(record));
-        deps.thumbs?.enqueue(saved, file);
-        imported++;
+        if (record) {
+          // Published, so a move in the other build waits for this record and refuses the next one.
+          const saved = await library.writing(() => library.addRecord(record));
+          deps.thumbs?.enqueue(saved, file);
+          imported++;
+        } else {
+          unreadable++;
+        }
       } catch (error) {
         if (error instanceof LibraryError && (error.code === "cancelled" || error.code === "paused")) throw error;
         failed++;
@@ -400,6 +412,7 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
     }
   }
   const parts = [`Imported ${imported} ${imported === 1 ? "file" : "files"}.`];
+  if (unreadable) parts.push(`${unreadable} unreadable ${unreadable === 1 ? "file" : "files"} skipped.`);
   if (failed) parts.push(`${failed} could not be read.`);
   if (skippedDirs) parts.push(`${skippedDirs} ${skippedDirs === 1 ? "folder has" : "folders have"} no generations folder.`);
   return parts.join(" ");

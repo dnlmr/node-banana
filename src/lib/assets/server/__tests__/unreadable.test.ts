@@ -10,8 +10,10 @@
 import fs from "fs";
 import path from "path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { AssetKind, RecordAssetMeta, RecordAssetResult } from "../../types";
+import type { AssetKind, LibraryJobStatus, RecordAssetMeta, RecordAssetResult } from "../../types";
 import {
+  __assetLibraryForTests,
+  __drainAssetLibraryForTests,
   __resetAssetLibraryForTests,
   assetExistence,
   beginRecord,
@@ -19,10 +21,12 @@ import {
   completeUpload,
   getAsset,
   getFacets,
+  getJob,
   getLibraryStatus,
   getThumbnail,
   listAssets,
   patchAsset,
+  startImport,
 } from "../index";
 import { assessReadable } from "../readable";
 import { isDecodeError, loadSharp } from "../thumbs";
@@ -97,6 +101,11 @@ async function record(buffer: Buffer, overrides: Partial<RecordAssetMeta> = {}, 
 }
 
 const listedIds = async (scope?: "library" | "trash" | "missing") => (await listAssets(scope ? { scope } : {})).assets.map((asset) => asset.id);
+
+async function finished(job: LibraryJobStatus): Promise<LibraryJobStatus> {
+  await __drainAssetLibraryForTests();
+  return getJob(job.id)!;
+}
 
 describe("assessReadable", () => {
   it("never calls a valid PNG, JPEG, WebP, GIF, SVG, MP4, WAV or GLB unreadable", async () => {
@@ -230,5 +239,33 @@ describe("live recordings", () => {
     ];
     expect(results.map((result) => result.asset.unreadable)).toEqual(results.map(() => undefined));
     expect((await listAssets({})).total).toBe(results.length);
+  });
+});
+
+describe("importing project folders", () => {
+  it("skips unreadable files, leaves them untouched, and says how many", async () => {
+    const project = path.join(base, "Old project");
+    const generations = path.join(project, "generations");
+    fs.mkdirSync(generations, { recursive: true });
+    const put = (name: string, bytes: Buffer) => {
+      fs.writeFileSync(path.join(generations, name), bytes);
+      return path.join(generations, name);
+    };
+    put("good_1.png", png);
+    put("good_2.mp4", TINY_MP4);
+    const damaged = [put("bad_1.png", damagedPng), put("bad_2.png", damagedOctetPng), put("bad_3.wav", damagedWav)];
+
+    const job = await finished(await startImport({ projectDirs: [project] }));
+    const skipped = hasSharp ? 3 : 1;
+    expect(job).toMatchObject({ state: "done", total: 5, done: 5 });
+    expect(job.message).toBe(`Imported ${5 - skipped} files. ${skipped} unreadable ${skipped === 1 ? "file" : "files"} skipped.`);
+    const page = await listAssets({});
+    expect(page.assets.map((asset) => asset.filename).sort()).toEqual(
+      hasSharp ? ["good_1.png", "good_2.mp4"] : ["bad_1.png", "bad_2.png", "good_1.png", "good_2.mp4"],
+    );
+    const library = await __assetLibraryForTests();
+    expect(library.recordsAtPath(damaged[2])).toEqual([]);
+    expect(fs.readFileSync(damaged[0]).equals(damagedPng)).toBe(true);
+    expect(fs.readFileSync(damaged[2]).equals(damagedWav)).toBe(true);
   });
 });
