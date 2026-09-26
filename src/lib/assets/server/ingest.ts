@@ -28,6 +28,8 @@ import { LibraryError } from "./errors";
 import {
   commitPartial,
   discardPartial,
+  isInsideRoot,
+  pathKey,
   streamToPartial,
   sweepStaleTemps,
   unlinkWithRetry,
@@ -77,6 +79,16 @@ export interface IngestDeps {
 function stem(filename: string): string {
   const dot = filename.lastIndexOf(".");
   return dot > 0 ? filename.slice(0, dot) : filename;
+}
+
+/** The library root itself, or a folder inside its Generations or data folder. */
+function isLibraryFolder(library: AssetLibrary, dir: string): boolean {
+  const options = { platform: library.platform, allowEqual: true };
+  return (
+    pathKey(dir, library.platform) === pathKey(library.root, library.platform) ||
+    isInsideRoot(library.layout.generations, dir, options) ||
+    isInsideRoot(library.layout.data, dir, options)
+  );
 }
 
 function withoutUndefined<T extends object>(value: T): T {
@@ -217,12 +229,16 @@ export class Ingestor {
   /**
    * `<project>/generations` when the project folder exists (created if
    * needed), else the library's day folder — an asset is never lost because
-   * its project folder moved or was never created.
+   * its project folder moved or was never created. A "project" that is the
+   * library root, or inside its Generations or data folder, is the library:
+   * its `generations` folder would be the library's own (case-insensitive
+   * disks), and a library move would carry the files away from the project.
    */
   private async resolveDestination(library: AssetLibrary, meta: RecordAssetMeta): Promise<Destination> {
     if (meta.projectDir) {
       try {
         const projectDir = normaliseProjectDir(meta.projectDir);
+        if (isLibraryFolder(library, projectDir)) throw new Error("the library is not a project");
         const stat = await fs.stat(projectDir);
         if (stat.isDirectory()) {
           const dir = path.join(projectDir, "generations");

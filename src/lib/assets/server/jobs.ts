@@ -25,7 +25,7 @@ import { acquireLock, DATA_DIR, GENERATIONS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
 import type { Thumbnailer } from "./thumbs";
-import { extOf, isMediaExtension, isWorkflowId, mediaTypeForExt, normaliseProjectDir } from "./validate";
+import { extOf, isMediaExtension, isWorkflowId, mediaTypeForExt, normaliseProjectDir, safeFileName } from "./validate";
 
 /* ------------------------------------------------------------------ */
 /* Runner                                                              */
@@ -285,12 +285,24 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
   let failed = 0;
   for (const { projectDir, files } of plan) {
     const workflow = await readProjectWorkflow(projectDir);
-    const workflowId =
-      workflow?.id ?? `import_${createHash("sha1").update(pathKey(projectDir)).digest("hex").slice(0, 16)}`;
+    const folderId = `import_${createHash("sha1").update(pathKey(projectDir)).digest("hex").slice(0, 16)}`;
+    let workflowId = workflow?.id ?? folderId;
+    let forkedFrom: string | undefined;
+    const claimed = library.getWorkflow(workflowId)?.projectPath;
+    if (workflowId !== folderId && claimed && pathKey(claimed) !== pathKey(projectDir)) {
+      // That id already belongs to another project (a copied folder, a shared community workflow):
+      // file these under this folder's own id rather than moving the other project's assets here.
+      forkedFrom = workflowId;
+      workflowId = folderId;
+    }
     const workflowName = workflow?.name ?? path.basename(projectDir);
     // Importing is an explicit "these files belong to this folder"; a name set in the app since is kept.
     const existing = library.getWorkflow(workflowId);
-    await library.upsertWorkflow(workflowId, { name: existing?.name ?? workflowName, projectPath: projectDir });
+    await library.upsertWorkflow(workflowId, {
+      name: existing?.name ?? workflowName,
+      projectPath: projectDir,
+      ...(forkedFrom ? { forkedFrom } : {}),
+    });
     const runId = newRunId();
     for (const { file, size, mtime } of files) {
       ctx.checkCancelled();
@@ -473,13 +485,16 @@ export async function runCleanup(
 /* Export                                                              */
 /* ------------------------------------------------------------------ */
 
-/** `name.ext`, then `name (2).ext`, … — whichever does not exist yet (created exclusively). */
+/** `name.ext`, then `name (2).ext`, … — whichever does not exist yet (created exclusively), always directly in `dir`. */
 async function copyToUniqueName(source: string, dir: string, filename: string): Promise<string> {
   const dot = filename.lastIndexOf(".");
   const base = dot > 0 ? filename.slice(0, dot) : filename;
   const ext = dot > 0 ? filename.slice(dot) : "";
   for (let n = 1; n < 10_000; n++) {
     const target = path.join(dir, n === 1 ? filename : `${base} (${n})${ext}`);
+    if (path.dirname(target) !== path.resolve(dir)) {
+      throw new LibraryError(`Can't export a file named ${filename}`, 400, "bad_request");
+    }
     try {
       await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
       return target;
@@ -503,6 +518,20 @@ export async function prepareExportDest(value: unknown, library: AssetLibrary): 
   return dest;
 }
 
+async function isDirectory(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Copies each asset's file into `dest` under its own name (reduced to a
+ * bare file name: a sidecar is user-editable and never picks the folder).
+ * Only a source that is not there marks an asset missing; when the
+ * destination goes away (an unplugged drive), the job stops with that.
+ */
 export async function runExport(ctx: JobContext, library: AssetLibrary, ids: string[], dest: string): Promise<string> {
   const records = ids
     .map((id) => library.get(id))
@@ -510,22 +539,43 @@ export async function runExport(ctx: JobContext, library: AssetLibrary, ids: str
   ctx.update({ total: records.length, bytesTotal: records.reduce((sum, record) => sum + record.bytes, 0) });
   let copied = 0;
   let missing = 0;
+  let failed = 0;
   for (const record of records) {
     ctx.checkCancelled();
     const file = library.filePath(record);
-    try {
-      if (!file) throw new Error("no file");
-      await copyToUniqueName(file, dest, record.filename);
-      copied++;
-    } catch (error) {
-      if (errnoCode(error) === "ENOENT") library.setMissing(record.id, true);
+    let found = false;
+    if (file) {
+      try {
+        found = (await fs.stat(file)).isFile();
+      } catch (error) {
+        library.noteFileError(record.id, error);
+      }
+    }
+    if (!found) {
       missing++;
+    } else {
+      const name = safeFileName(record.filename) ?? safeFileName(file) ?? `${record.id}.${record.ext}`;
+      try {
+        await copyToUniqueName(file!, dest, name);
+        copied++;
+      } catch (error) {
+        if (!(await isDirectory(dest))) {
+          throw new LibraryError(
+            `The export folder is no longer available (${dest}). ${copied} ${copied === 1 ? "file was" : "files were"} copied before it went.`,
+            409,
+            "gone",
+          );
+        }
+        console.warn("[assets] could not export", file, error);
+        failed++;
+      }
     }
     ctx.addBytes(record.bytes);
     ctx.step();
   }
   const parts = [`Exported ${copied} ${copied === 1 ? "file" : "files"}.`];
   if (missing) parts.push(`${missing} could not be found.`);
+  if (failed) parts.push(`${failed} could not be copied.`);
   return parts.join(" ");
 }
 
@@ -595,14 +645,35 @@ interface ManifestEntry {
   rel: string;
   source: string;
   size: number;
+  mtimeMs: number;
 }
 
-/** Library-owned files only: Generations/ and .nodebanana/ (never projects, caches, locks or temp files). */
-async function buildManifest(root: string): Promise<ManifestEntry[]> {
+/** In the source's data folder while a move runs: `{ toRoot, startedAt, pid, state }`. */
+export const MOVE_MARKER = "move.json";
+/** In the source's data folder: each rel path the move is about to copy, one per line. */
+export const MOVE_LOG = "move-copied.ndjson";
+/** In the target's data folder while a move copies into it: `{ fromRoot, startedAt }`. */
+export const MOVE_SOURCE_MARKER = "move-source.json";
+
+const DAY_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Library-owned files only: the day folders of Generations/ and
+ * .nodebanana/ — never projects (not even a project file that ended up
+ * under Generations/), caches, locks, move markers or temp files.
+ */
+async function buildManifest(root: string, library?: AssetLibrary): Promise<ManifestEntry[]> {
   const entries: ManifestEntry[] = [];
-  const skipDirs = new Set([path.join(root, DATA_DIR, "cache")]);
-  const skipFiles = new Set([path.join(root, DATA_DIR, "lock"), path.join(root, DATA_DIR, "config.json")]);
-  const walk = async (dir: string) => {
+  const data = path.join(root, DATA_DIR);
+  const skipDirs = new Set([path.join(data, "cache")]);
+  const skipFiles = new Set([
+    path.join(data, "lock"),
+    path.join(data, "config.json"),
+    path.join(data, MOVE_MARKER),
+    path.join(data, MOVE_LOG),
+    path.join(data, MOVE_SOURCE_MARKER),
+  ]);
+  const walk = async (dir: string, accept: (dirent: import("fs").Dirent) => boolean = () => true) => {
     let names: import("fs").Dirent[];
     try {
       names = await fs.readdir(dir, { withFileTypes: true });
@@ -610,19 +681,21 @@ async function buildManifest(root: string): Promise<ManifestEntry[]> {
       return;
     }
     for (const dirent of names) {
+      if (!accept(dirent)) continue;
       const full = path.join(dir, dirent.name);
       if (dirent.isDirectory()) {
         if (!skipDirs.has(full)) await walk(full);
       } else if (dirent.isFile()) {
         if (skipFiles.has(full) || dirent.name.endsWith(PARTIAL_SUFFIX) || dirent.name.endsWith(".tmp")) continue;
         if (dirent.name.startsWith(".probe-")) continue;
+        if (library?.recordsAtPath(full).some((record) => record.file.root === "external")) continue;
         const stat = await fs.stat(full);
-        entries.push({ rel: path.relative(root, full), source: full, size: stat.size });
+        entries.push({ rel: path.relative(root, full), source: full, size: stat.size, mtimeMs: stat.mtimeMs });
       }
     }
   };
-  await walk(path.join(root, GENERATIONS_DIR));
-  await walk(path.join(root, DATA_DIR));
+  await walk(path.join(root, GENERATIONS_DIR), (dirent) => dirent.isDirectory() && DAY_FOLDER.test(dirent.name));
+  await walk(data);
   return entries;
 }
 
@@ -674,7 +747,7 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
     if (!lock) throw new LibraryError("The library is busy in another window. Try again in a moment.", 409, "busy");
     await from.drain();
 
-    const manifest = await buildManifest(fromRoot);
+    const manifest = await buildManifest(fromRoot, from);
     ctx.update({ total: manifest.length, bytesTotal: manifest.reduce((sum, entry) => sum + entry.size, 0) });
     await fs.mkdir(toRoot, { recursive: true });
     for (const entry of manifest) {

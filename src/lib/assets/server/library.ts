@@ -68,6 +68,7 @@ import {
   isWorkflowId,
   MAX_SIDECAR_BYTES,
   normaliseTags,
+  safeFileName,
   scrubRecord,
   validatePatch,
 } from "./validate";
@@ -178,6 +179,12 @@ export function parseRecord(value: unknown, expectedId: string, root: string, ra
     return null;
   }
 
+  // The name is only ever a label or an export name: never let it carry a path.
+  const filename =
+    safeFileName(raw.filename) ??
+    safeFileName(file.root === "library" ? file.rel : file.path) ??
+    `${raw.id}.${raw.ext.toLowerCase()}`;
+
   const producer = (raw.producer ?? {}) as Record<string, unknown>;
   const record: AssetRecord = {
     ...(raw as unknown as AssetRecord),
@@ -185,6 +192,7 @@ export function parseRecord(value: unknown, expectedId: string, root: string, ra
     bytes,
     createdAt,
     file,
+    filename,
     producer: {
       ...(producer as unknown as AssetRecord["producer"]),
       nodeId: typeof producer.nodeId === "string" ? producer.nodeId : "",

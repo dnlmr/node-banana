@@ -22,9 +22,10 @@ import {
   startCleanup,
   startExport,
   startImport,
+  upsertWorkflowEntry,
 } from "../index";
 import { Ingestor } from "../ingest";
-import { JobRunner, runMove, validateMoveTarget, type JobContext } from "../jobs";
+import { JobRunner, runExport, runMove, validateMoveTarget, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
 import { installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
@@ -56,6 +57,10 @@ async function record(overrides: Partial<RecordAssetMeta> = {}, buffer: Buffer =
   const started = await beginRecord({ meta: meta(overrides), source: { type: "upload" } });
   if ("result" in started) return started.result;
   return completeUpload(started.ticket.uploadId, streamOf(buffer), null);
+}
+
+function jobContext(): JobContext {
+  return { signal: new AbortController().signal, update: () => {}, addBytes: () => {}, step: () => {}, checkCancelled: () => {} };
 }
 
 async function finished(job: LibraryJobStatus): Promise<LibraryJobStatus> {
@@ -165,6 +170,53 @@ describe("move", () => {
       status: 409,
       code: "forbidden",
     });
+  });
+
+  it("moves only the library's own day folders, never a project's files that sit under Generations", async () => {
+    const root = path.join(base, "Owned");
+    const library = new AssetLibrary(root);
+    await library.ready();
+    const day = path.join(root, "Generations", "2026-09-27");
+    fs.mkdirSync(path.join(day, "generations"), { recursive: true });
+    fs.writeFileSync(path.join(day, "own.png"), makePng(2, 2, 1));
+    // From before projects inside the library were refused: a project at <day>, its files in <day>/generations.
+    const projectFile = path.join(day, "generations", "p.png");
+    const png = makePng(2, 2, 2);
+    fs.writeFileSync(projectFile, png);
+    await library.addRecord({
+      v: 1,
+      id: "a" + "p".repeat(13),
+      kind: "image",
+      origin: "generated",
+      mime: "image/png",
+      ext: "png",
+      bytes: png.length,
+      sha256: sha256(png),
+      md5: md5(png),
+      file: { root: "external", path: projectFile },
+      filename: "p.png",
+      createdAt: Date.now(),
+      producer: { nodeId: "n", nodeType: "nanoBanana" },
+      workflowId: "wf_p",
+      workflowName: null,
+      runId: "r" + "p".repeat(13),
+      tags: [],
+      favorite: false,
+    });
+    fs.writeFileSync(path.join(root, "Generations", "loose.png"), makePng(2, 2, 3));
+
+    const target = path.join(base, "OwnedTarget");
+    await runMove(jobContext(), {
+      library,
+      waitForWrites: async () => true,
+      toRoot: target,
+      setPaused: () => {},
+      switchRoot: async () => {},
+    });
+    expect(walk(path.join(target, "Generations"))).toEqual(["2026-09-27/own.png"]);
+    expect(fs.existsSync(projectFile)).toBe(true);
+    expect(fs.existsSync(path.join(root, "Generations", "loose.png"))).toBe(true);
+    await library.drain();
   });
 
   it("pauses writes while copying, switches while paused, and cleans up after a cancel", async () => {
@@ -328,6 +380,23 @@ describe("import", () => {
     expect(again.message).toBe("Imported 0 files.");
   });
 
+  it("files a folder under its own id when its workflow id already belongs to another project", async () => {
+    const first = path.join(base, "A");
+    const second = path.join(base, "B");
+    fs.mkdirSync(path.join(second, "generations"), { recursive: true });
+    fs.writeFileSync(path.join(second, "generations", "x.png"), makePng(2, 2, 5));
+    fs.writeFileSync(path.join(second, "flow.json"), JSON.stringify({ version: 1, id: "wf_shared", name: "Shared", nodes: [], edges: [] }));
+    await upsertWorkflowEntry("wf_shared", { name: "Shared", projectPath: first });
+
+    await finished(await startImport({ projectDirs: [second] }));
+    const [asset] = (await listAssets({})).assets;
+    expect(asset.workflowId).toMatch(/^import_/);
+    expect(asset.workflow).toMatchObject({ projectPath: second, name: "Shared" });
+    const library = await __assetLibraryForTests();
+    expect(library.getWorkflow("wf_shared")?.projectPath).toBe(first);
+    expect(library.getWorkflow(asset.workflowId)?.forkedFrom).toBe("wf_shared");
+  });
+
   it("refuses a bad folder list and a second job while one runs", async () => {
     await expect(startImport({ projectDirs: [] })).rejects.toMatchObject({ status: 400 });
     await expect(startImport({ projectDirs: ["relative"] })).rejects.toMatchObject({ status: 400 });
@@ -447,6 +516,40 @@ describe("export", () => {
       status: 400,
     });
     await expect(startExport({ selection: { mode: "ids", ids: [] }, dest })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("never writes outside the chosen folder, whatever a sidecar's file name says", async () => {
+    const r = await record();
+    const library = await __assetLibraryForTests();
+    const sidecar = path.join(library.layout.assets, `${r.asset.id}.json`);
+    const raw = JSON.parse(fs.readFileSync(sidecar, "utf8"));
+    // A synced library folder: someone else's machine wrote this sidecar.
+    fs.writeFileSync(sidecar, JSON.stringify({ ...raw, filename: "../../escape.png" }));
+    const other = new AssetLibrary(library.root);
+    await other.ready();
+    // Reduced to its last segment when read.
+    expect(other.get(r.asset.id)?.filename).toBe("escape.png");
+    // And a name that never went through a sidecar check still can't leave the folder.
+    await other.addRecord({ ...raw, id: "a" + "q".repeat(13), filename: "../../also-escape.png" });
+
+    const dest = path.join(base, "Out", "Inner");
+    fs.mkdirSync(dest, { recursive: true });
+    const message = await runExport(jobContext(), other, [r.asset.id, "a" + "q".repeat(13)], dest);
+    expect(message).toBe("Exported 2 files.");
+    expect(fs.existsSync(path.join(base, "escape.png"))).toBe(false);
+    expect(fs.existsSync(path.join(base, "also-escape.png"))).toBe(false);
+    expect(fs.readdirSync(dest).sort()).toEqual(["also-escape.png", "escape.png"]);
+    await other.drain();
+  });
+
+  it("stops when the export folder goes away, and marks nothing missing", async () => {
+    const one = await record();
+    const two = await record();
+    const library = await __assetLibraryForTests();
+    const dest = path.join(base, "Unplugged");
+    await expect(runExport(jobContext(), library, [one.asset.id, two.asset.id], dest)).rejects.toThrow(/no longer available/);
+    expect(library.isMissing(one.asset.id)).toBe(false);
+    expect(library.isMissing(two.asset.id)).toBe(false);
   });
 
   it("exports a query selection", async () => {

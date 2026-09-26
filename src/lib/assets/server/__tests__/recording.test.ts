@@ -193,6 +193,19 @@ describe("recording into a project", () => {
     expect(result.asset.file.root).toBe("library");
     expect(fs.existsSync(path.join(base, "gone"))).toBe(false);
   });
+
+  it("records into the library when the 'project folder' is the library itself", async () => {
+    await getLibraryStatus();
+    let seed = 40;
+    for (const projectDir of [root, path.join(root, "Generations"), path.join(root, "Generations", "2026-09-27"), path.join(root, ".nodebanana")]) {
+      fs.mkdirSync(projectDir, { recursive: true });
+      const result = await record(makePng(4, 4, seed++), { projectDir });
+      expect(result.asset.file.root).toBe("library");
+    }
+    // No project-style `generations` folder was made inside the library.
+    expect(listFiles(root)).not.toContain("generations");
+    expect(listFiles(path.join(root, "Generations", "2026-09-27"))).not.toContain("generations");
+  });
 });
 
 describe("byte dedupe", () => {

@@ -152,6 +152,18 @@ export function extOf(filename: string): string {
   return dot <= 0 ? "" : filename.slice(dot + 1).toLowerCase();
 }
 
+/**
+ * A file name read from a sidecar, made safe to join into a folder: its
+ * last path segment, which must carry a media extension and hold no NUL or
+ * `:` (a Windows stream separator). Null when nothing usable is left.
+ */
+export function safeFileName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.split(/[\\/]/).pop() ?? "";
+  if (!name || name === "." || name === ".." || name.length > 255 || /[\0:]/.test(name)) return null;
+  return isMediaExtension(extOf(name)) ? name : null;
+}
+
 /** Extension of an URL's path, when it is a known media extension. */
 export function mediaExtFromUrl(url: string): string | null {
   try {
