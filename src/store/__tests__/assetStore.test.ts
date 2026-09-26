@@ -4,6 +4,7 @@ import { encodeAssetPageRequest } from "@/lib/assets/query";
 
 const api = vi.hoisted(() => ({
   fetchAssetPage: vi.fn(),
+  fetchAsset: vi.fn(),
   fetchFacets: vi.fn(),
   fetchLibraryStatus: vi.fn(),
   bulkAssets: vi.fn(),
@@ -195,6 +196,33 @@ describe("paging", () => {
     api.fetchAssetPage.mockResolvedValueOnce(page(pageOf(25)));
     await useAssetStore.getState().ensurePage(25);
     expect(api.fetchAssetPage).toHaveBeenLastCalledWith({ cursor: "c25", limit: 200 });
+  });
+
+  it("fills a dropped page whose cursor no longer brings all of it back, so no tile stays a placeholder", async () => {
+    const [n2, n1, a3, a2, a1] = [asset("n2", { createdAt: T0 + 5 }), asset("n1", { createdAt: T0 + 4 }), asset("a3", { createdAt: T0 + 3 }), asset("a2", { createdAt: T0 + 2 }), asset("a1", { createdAt: T0 + 1 })];
+    const slot = (a: AssetView, pageIndex: number, loaded: boolean) => ({ id: a.id, createdAt: a.createdAt, kind: a.kind, asset: loaded ? a : null, page: pageIndex });
+    // The first page (a3, a2, a1) was dropped for memory; two arrivals went in above it
+    useAssetStore.setState({
+      status: "ready",
+      loadedQuery: {},
+      items: [slot(n2, -1, true), slot(n1, -1, true), slot(a3, 0, false), slot(a2, 0, false), slot(a1, 0, false)],
+      pages: [{ cursor: null, loaded: false }],
+      total: 5,
+    });
+    // Asked again, "the newest page" starts with the arrivals; a2 fell off its end, a1 was deleted meanwhile
+    api.fetchAssetPage.mockResolvedValueOnce(page([n2, n1, a3]));
+    api.fetchAsset.mockImplementation(async (id: string) => (id === "a2" ? a2 : null));
+    useAssetStore.getState().openDetail("a2");
+    await vi.waitFor(() => expect(useAssetStore.getState().detailAsset?.id).toBe("a2"));
+    expect(api.fetchAsset).toHaveBeenCalledTimes(2);
+    expect(useAssetStore.getState().items.map((item) => [item.id, !!item.asset])).toEqual([
+      ["n2", true],
+      ["n1", true],
+      ["a3", true],
+      ["a2", true],
+    ]);
+    expect(useAssetStore.getState().pages[0]!.loaded).toBe(true);
+    expect(useAssetStore.getState().total).toBe(4);
   });
 });
 

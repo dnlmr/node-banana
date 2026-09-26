@@ -517,6 +517,8 @@ let pollingSeq = -1;
 /** Full arrival pages fetched in a row before the list is loaded again instead. */
 const MAX_ARRIVAL_PAGES = 25;
 let noticeSeq = 0;
+/** A dropped page's items that its cursor no longer brings back are fetched one by one up to this many; past it the list loads again. */
+const LEFT_OUT_MAX = 50;
 /** Failed page requests wait this long before the grid may ask again. */
 const LOAD_RETRY_MS = 5000;
 let lastLoadFailure = 0;
@@ -938,11 +940,40 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       try {
         const page = await api.fetchAssetPage({ ...loadedQuery, cursor: slot.cursor ?? undefined, limit: PAGE_SIZE });
         if (seq !== requestSeq) return;
-        const byId = new Map(page.assets.map((asset) => [asset.id, asset]));
+        const found = new Map(page.assets.map((asset) => [asset.id, asset]));
+        // The same cursor need not bring the same items back: arrivals push the
+        // first page down, deletions shift the rest. Ask for the ones left out by id.
+        const leftOut = get()
+          .items.filter((item) => item.page === pageIndex && !item.asset && !found.has(item.id))
+          .map((item) => item.id);
+        if (leftOut.length > LEFT_OUT_MAX) {
+          void get().refresh();
+          return;
+        }
+        const gone = new Set<string>();
+        let unanswered = false;
+        await Promise.all(
+          leftOut.map(async (id) => {
+            try {
+              const asset = await api.fetchAsset(id);
+              if (asset) found.set(id, asset);
+              else gone.add(id);
+            } catch {
+              unanswered = true;
+            }
+          }),
+        );
+        if (seq !== requestSeq) return;
         set((state) => ({
-          items: state.items.map((item) => (item.page === pageIndex && !item.asset && byId.has(item.id) ? { ...item, asset: byId.get(item.id)! } : item)),
-          pages: state.pages.map((p, i) => (i === pageIndex ? { ...p, loaded: true } : p)),
+          items: state.items.map((item) => (item.page === pageIndex && !item.asset && found.has(item.id) ? { ...item, asset: found.get(item.id)! } : item)),
+          // Loaded only once every slot has its record, or a later scroll could never fill the rest
+          pages: unanswered ? state.pages : state.pages.map((p, i) => (i === pageIndex ? { ...p, loaded: true } : p)),
+          // A detail opened on one of them was waiting for its record
+          ...(state.detailId && !state.detailAsset && found.has(state.detailId) ? { detailAsset: found.get(state.detailId)! } : {}),
         }));
+        removeItems(gone);
+        if (get().detailId && gone.has(get().detailId!)) get().closeDetail();
+        if (unanswered) pageFailures.set(pageIndex, Date.now());
       } catch {
         // Tiles of that page keep their placeholders; scrolling retries after a pause
         pageFailures.set(pageIndex, Date.now());
@@ -1245,6 +1276,7 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const asset = get().items.find((item) => item.id === id)?.asset ?? get().selectedRecords[id] ?? null;
       set({ detailId: id, detailAsset: asset, focusedId: id, popover: null });
       const item = get().items.find((i) => i.id === id);
+      // Its page was dropped: the detail shows the record once the page is back (ensurePage)
       if (item && !item.asset) void get().ensurePage(item.page);
     },
 
