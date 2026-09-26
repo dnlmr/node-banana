@@ -314,7 +314,13 @@ export interface ResolvedLocation {
 
 export type LocationResult =
   | { ok: true; location: ResolvedLocation }
-  | { ok: false; location: ResolvedLocation | null; reason: string };
+  | {
+      ok: false;
+      location: ResolvedLocation | null;
+      reason: string;
+      /** `unwritable`: the root (and any fallback) failed the write probe. `unavailable`: no usable root at all. */
+      code: "unwritable" | "unavailable";
+    };
 
 /** Resolves the root without touching the disk beyond reading library.json. */
 export async function resolveLibraryLocation(ctx: PathContext): Promise<LocationResult> {
@@ -327,6 +333,7 @@ export async function resolveLibraryLocation(ctx: PathContext): Promise<Location
         ok: false,
         location: null,
         reason: "NODE_BANANA_ASSET_LIBRARY must be an absolute path.",
+        code: "unavailable",
       };
     }
     const root = api.resolve(override);
@@ -433,13 +440,13 @@ export async function initLibraryLocation(ctx: PathContext): Promise<LocationRes
     const hint = location.source === "env"
       ? " It is set by NODE_BANANA_ASSET_LIBRARY."
       : " Choose another folder in Settings → Library.";
-    return { ok: false, location, reason: reason + hint };
+    return { ok: false, location, reason: reason + hint, code: "unwritable" };
   }
 
   const fallback = fallbackRoot(ctx);
   const api = pathApi(ctx.platform);
   if (api.resolve(fallback) === api.resolve(location.root)) {
-    return { ok: false, location, reason: `${reason} Choose another folder in Settings → Library.` };
+    return { ok: false, location, reason: `${reason} Choose another folder in Settings → Library.`, code: "unwritable" };
   }
   const fallbackFailure = await probeWritable(fallback);
   if (fallbackFailure) {
@@ -447,6 +454,7 @@ export async function initLibraryLocation(ctx: PathContext): Promise<LocationRes
       ok: false,
       location,
       reason: `${reason} ${describeProbeFailure(fallback, fallbackFailure)} Choose another folder in Settings → Library.`,
+      code: "unwritable",
     };
   }
   const fallbackReason = `${reason} Generations are saved to "${fallback}" instead.`;

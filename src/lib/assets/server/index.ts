@@ -364,10 +364,11 @@ async function waitForWrites(rt: Runtime, timeoutMs: number): Promise<boolean> {
 
 /* Location and status ------------------------------------------------ */
 
-function emptyStatus(reason: string, platform: string): LibraryStatus {
+function emptyStatus(reason: string, reasonCode: NonNullable<LibraryStatus["reasonCode"]>, platform: string): LibraryStatus {
   return {
     available: false,
     reason,
+    reasonCode,
     root: null,
     source: "default",
     defaultRoot: "",
@@ -398,11 +399,16 @@ async function hasAnySidecar(assetsDir: string): Promise<boolean> {
   }
 }
 
-/** Resolves (and on first use, creates and persists) the library root. Never throws for an unwritable root: returns `available: false` with a reason. */
+/**
+ * Resolves (and on first use, creates and persists) the library root. Never
+ * throws for an unwritable root: returns `available: false` with a reason,
+ * and a `reasonCode` that tells a lasting answer ("hosted") from one worth
+ * asking again ("unwritable", "unavailable").
+ */
 export async function getLibraryStatus(): Promise<LibraryStatus> {
   const rt = runtime();
   const ctx = pathContext(rt);
-  if (isHostedServer()) return emptyStatus(HOSTED_REASON, ctx.platform);
+  if (isHostedServer()) return emptyStatus(HOSTED_REASON, "hosted", ctx.platform);
   try {
     const result = await activeLocation(rt);
     const location = result.location;
@@ -417,7 +423,14 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
       job: rt.jobs.visible(),
     };
     if (!result.ok || !location) {
-      return { ...base, available: false, reason: result.ok ? "Unavailable" : result.reason, counts: { assets: 0, trashed: 0, bytes: 0 }, empty: true };
+      return {
+        ...base,
+        available: false,
+        reason: result.ok ? "Unavailable" : result.reason,
+        reasonCode: result.ok ? "unavailable" : result.code,
+        counts: { assets: 0, trashed: 0, bytes: 0 },
+        empty: true,
+      };
     }
     const library = libraryFor(rt, location);
     // Kick off the scan; answer with counts if it finishes quickly.
@@ -429,7 +442,7 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
     // Still scanning: the zeros are not the library's, and the page must not show them as fact.
     return { ...base, available: true, counts, empty, job: rt.jobs.visible(), ...(library.loaded ? {} : { counting: true }) };
   } catch (error) {
-    return emptyStatus(error instanceof Error ? error.message : String(error), ctx.platform);
+    return emptyStatus(error instanceof Error ? error.message : String(error), "unavailable", ctx.platform);
   }
 }
 
