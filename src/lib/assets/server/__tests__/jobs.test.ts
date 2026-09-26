@@ -140,6 +140,23 @@ describe("move", () => {
     expect(await validateMoveTarget(root, path.join(base, "Fresh"))).toBe(path.join(base, "Fresh"));
   });
 
+  it("answers writes with 503 + Retry-After while a move has recording paused", async () => {
+    const r = await record();
+    const rt = (globalThis as { __nodeBananaAssetLibrary?: { paused: boolean } }).__nodeBananaAssetLibrary!;
+    rt.paused = true;
+    try {
+      const paused = { status: 503, code: "paused", retryAfter: expect.any(Number) };
+      await expect(beginRecord({ meta: meta(), source: { type: "upload" } })).rejects.toMatchObject(paused);
+      await expect(patchAsset(r.asset.id, { favorite: true })).rejects.toMatchObject(paused);
+      await expect(putMedia("0".repeat(64), streamOf(Buffer.from("x")), "image/png")).rejects.toMatchObject(paused);
+      // Reads carry on from the old root.
+      expect((await listAssets({})).total).toBe(1);
+    } finally {
+      rt.paused = false;
+    }
+    expect((await patchAsset(r.asset.id, { favorite: true }))?.favorite).toBe(true);
+  });
+
   it("is refused while the root comes from NODE_BANANA_ASSET_LIBRARY", async () => {
     await __resetAssetLibraryForTests({
       pathContext: { platform: process.platform, env: { NODE_BANANA_ASSET_LIBRARY: path.join(base, "EnvLib") }, homedir: home },
@@ -164,13 +181,17 @@ describe("move", () => {
     let pausedAtSwitch: boolean | null = null;
     let isPaused = false;
     const ingest = new Ingestor({ library: () => library, thumbs: () => null, isPaused: () => isPaused });
+    let waitedWhilePaused = false;
 
     const runner = new JobRunner();
     const target = path.join(base, "Target");
     const job = runner.start("move", (ctx) =>
       runMove(ctx, {
         library,
-        ingest,
+        waitForWrites: async (timeoutMs) => {
+          waitedWhilePaused = isPaused;
+          return ingest.waitIdle(timeoutMs);
+        },
         toRoot: target,
         setPaused: (value) => {
           isPaused = value;
@@ -184,6 +205,7 @@ describe("move", () => {
     await runner.drain();
     expect(runner.get(job.id)?.state).toBe("done");
     expect(paused).toEqual([true, false]);
+    expect(waitedWhilePaused).toBe(true);
     expect(pausedAtSwitch).toBe(true);
     expect(walk(path.join(root, "Generations"))).toEqual([]);
 
@@ -212,7 +234,7 @@ describe("move", () => {
     await expect(
       runMove(ctx, {
         library: sourceLibrary,
-        ingest: new Ingestor({ library: () => sourceLibrary, thumbs: () => null, isPaused: () => false }),
+        waitForWrites: async () => true,
         toRoot: cancelledTarget,
         setPaused: () => {},
         switchRoot: async () => {

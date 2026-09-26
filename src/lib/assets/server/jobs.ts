@@ -21,7 +21,6 @@ import {
   sweepStaleTemps,
   unlinkWithRetry,
 } from "./fsutil";
-import type { Ingestor } from "./ingest";
 import { acquireLock, DATA_DIR, GENERATIONS_DIR } from "./layout";
 import type { AssetLibrary } from "./library";
 import { decideMediaType, imageDimensionsFromFile, probeAudioVideo, readHead } from "./media";
@@ -627,7 +626,8 @@ async function removeEmptyDirs(dirs: Iterable<string>, stopAt: string): Promise<
 
 export interface MoveDeps {
   library: AssetLibrary;
-  ingest: Ingestor;
+  /** Resolves true once no write (recording, edit, snapshot) is in flight; false on timeout. */
+  waitForWrites(timeoutMs: number): Promise<boolean>;
   toRoot: string;
   setPaused(paused: boolean): void;
   /** Persists the new root and swaps the server over to it. */
@@ -650,7 +650,7 @@ export async function runMove(ctx: JobContext, deps: MoveDeps): Promise<string> 
   let lock: Awaited<ReturnType<typeof acquireLock>> = null;
   let switched = false;
   try {
-    if (!(await deps.ingest.waitIdle(60_000))) {
+    if (!(await deps.waitForWrites(60_000))) {
       throw new LibraryError("Recordings are still being saved. Try again in a moment.", 409, "busy");
     }
     lock = await acquireLock(from.layout.lock, { heartbeat: true });

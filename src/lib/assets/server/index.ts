@@ -117,6 +117,9 @@ interface Runtime {
   ingest: Ingestor;
   jobs: JobRunner;
   paused: boolean;
+  /** Writes other than recordings in flight (edits, snapshots, media, workflow rows). */
+  writes: number;
+  writeWaiters: (() => void)[];
   initialised: Set<string>;
   background: Set<Promise<unknown>>;
 }
@@ -133,6 +136,8 @@ function createRuntime(): Runtime {
     thumbs: null,
     jobs: new JobRunner(),
     paused: false,
+    writes: 0,
+    writeWaiters: [],
     initialised: new Set<string>(),
     background: new Set<Promise<unknown>>(),
   } as unknown as Runtime;
@@ -291,12 +296,40 @@ function assertWritable(rt: Runtime): void {
   }
 }
 
-async function writableLibrary(): Promise<AssetLibrary> {
+/**
+ * Runs a write against the ready library, counted so a move can wait for it.
+ * The pause check and the count happen with no await between them.
+ */
+async function write<T>(fn: (library: AssetLibrary) => Promise<T>): Promise<T> {
   const rt = runtime();
   assertWritable(rt);
   const library = await readyLibrary();
   assertWritable(rt);
-  return library;
+  rt.writes++;
+  try {
+    return await fn(library);
+  } finally {
+    rt.writes--;
+    if (rt.writes === 0) {
+      const waiters = rt.writeWaiters;
+      rt.writeWaiters = [];
+      waiters.forEach((wake) => wake());
+    }
+  }
+}
+
+/** Resolves once no recording or other write is in flight (false after `timeoutMs`). */
+async function waitForWrites(rt: Runtime, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  if (!(await rt.ingest.waitIdle(timeoutMs))) return false;
+  if (rt.writes === 0) return true;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+    rt.writeWaiters.push(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 /* Location and status ------------------------------------------------ */
@@ -424,7 +457,7 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
   rt.jobs.start("move", (job) =>
     runMove(job, {
       library,
-      ingest: rt.ingest,
+      waitForWrites: (timeoutMs) => waitForWrites(rt, timeoutMs),
       toRoot,
       setPaused: (paused) => {
         rt.paused = paused;
@@ -473,13 +506,11 @@ export async function assetExistence(ids: string[]): Promise<Record<string, Asse
 
 export async function patchAsset(id: string, patch: AssetPatch): Promise<AssetView | null> {
   if (!isAssetId(id)) return null;
-  const library = await writableLibrary();
-  return library.patch(id, patch);
+  return write((library) => library.patch(id, patch));
 }
 
 export async function bulkAssets(request: AssetBulkRequest): Promise<AssetBulkResult> {
-  const library = await writableLibrary();
-  return library.bulk(request);
+  return write((library) => library.bulk(request));
 }
 
 /* Recording ---------------------------------------------------------- */
@@ -489,7 +520,8 @@ export async function beginRecord(
   request: RecordAssetRequest,
 ): Promise<{ ticket: UploadTicket } | { result: RecordAssetResult }> {
   const rt = runtime();
-  await writableLibrary();
+  assertWritable(rt);
+  await readyLibrary();
   return rt.ingest.begin(request);
 }
 
@@ -540,12 +572,13 @@ export async function openAssetFile(id: string): Promise<ServedFile | null> {
 export async function putPoster(id: string, bytes: Uint8Array, mime: string): Promise<void> {
   if (!isAssetId(id)) throw new LibraryError("Invalid asset id", 400, "bad_request");
   const rt = runtime();
-  const library = await writableLibrary();
-  const record = await library.find(id);
-  if (!record) throw new LibraryError("Asset not found", 404, "not_found");
-  if (!rt.thumbs) throw new LibraryError("The asset library is not available", 503, "unavailable");
-  await rt.thumbs.putPoster(record, bytes, mime);
-  await library.setHasPoster(id);
+  await write(async (library) => {
+    const record = await library.find(id);
+    if (!record) throw new LibraryError("Asset not found", 404, "not_found");
+    if (!rt.thumbs) throw new LibraryError("The asset library is not available", 503, "unavailable");
+    await rt.thumbs.putPoster(record, bytes, mime);
+    await library.setHasPoster(id);
+  });
 }
 
 /** Returns a cached webp thumbnail, rendering it on a miss (bounded concurrency). Null → the client draws a placeholder. */
@@ -607,8 +640,7 @@ export async function putMedia(
   mime: string,
 ): Promise<{ sha256: string; bytes: number }> {
   requireSha256(sha256);
-  const library = await writableLibrary();
-  return library.runs.putMedia(sha256, body, mime);
+  return write((library) => library.runs.putMedia(sha256, body, mime));
 }
 
 export async function openMedia(sha256: string): Promise<ServedFile | null> {
@@ -619,8 +651,7 @@ export async function openMedia(sha256: string): Promise<ServedFile | null> {
 }
 
 export async function putRun(runId: string, request: PutRunRequest): Promise<PutRunResult> {
-  const library = await writableLibrary();
-  return library.runs.put(runId, request);
+  return write((library) => library.runs.put(runId, request));
 }
 
 export async function upsertWorkflowEntry(
@@ -628,12 +659,13 @@ export async function upsertWorkflowEntry(
   entry: { name: string | null; projectPath: string | null; forkedFrom?: string },
 ): Promise<LibraryWorkflowEntry> {
   if (!entry || typeof entry !== "object") throw new LibraryError("Invalid workflow entry", 400, "bad_request");
-  const library = await writableLibrary();
-  return library.upsertWorkflow(id, {
-    name: typeof entry.name === "string" ? entry.name : null,
-    projectPath: typeof entry.projectPath === "string" ? entry.projectPath : null,
-    ...(entry.forkedFrom !== undefined ? { forkedFrom: entry.forkedFrom } : {}),
-  });
+  return write((library) =>
+    library.upsertWorkflow(id, {
+      name: typeof entry.name === "string" ? entry.name : null,
+      projectPath: typeof entry.projectPath === "string" ? entry.projectPath : null,
+      ...(entry.forkedFrom !== undefined ? { forkedFrom: entry.forkedFrom } : {}),
+    }),
+  );
 }
 
 /* Jobs --------------------------------------------------------------- */
@@ -641,7 +673,8 @@ export async function upsertWorkflowEntry(
 export async function startImport(request: ImportProjectsRequest): Promise<LibraryJobStatus> {
   const rt = runtime();
   const dirs = normaliseImportDirs(request?.projectDirs);
-  const library = await writableLibrary();
+  assertWritable(rt);
+  const library = await readyLibrary();
   return rt.jobs.start("import", (job) => runImport(job, { library, thumbs: rt.thumbs }, dirs));
 }
 
@@ -650,7 +683,8 @@ export async function startCleanup(request: CleanupRequest): Promise<LibraryJobS
   const unusedMedia = request?.unusedMedia === true;
   const thumbnails = request?.thumbnails === true;
   if (!unusedMedia && !thumbnails) throw new LibraryError("Choose what to clean up", 400, "bad_request");
-  const library = await writableLibrary();
+  assertWritable(rt);
+  const library = await readyLibrary();
   return rt.jobs.start("cleanup", (job) => runCleanup(job, { library, thumbs: rt.thumbs }, { unusedMedia, thumbnails }));
 }
 

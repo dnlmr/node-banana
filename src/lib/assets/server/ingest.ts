@@ -117,7 +117,9 @@ export class Ingestor {
     });
   }
 
+  /** Counts a recording as in flight. The pause check sits here, with no await before the count, so a move never misses one. */
   private async track<T>(work: () => Promise<T>): Promise<T> {
+    this.assertNotPaused();
     this.active++;
     try {
       return await work();
