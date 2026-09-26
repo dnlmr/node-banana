@@ -87,12 +87,15 @@ export class WorkflowTable {
 
   /**
    * Inserts or updates a row. A no-op (no write) when nothing changed, which
-   * is the common case: the recorder upserts at every run start.
+   * is the common case: the recorder upserts at every run start. A null name
+   * or folder never clears one the row already has: the recorder's upsert
+   * carries what the canvas knew when its run started, and lands after any
+   * save or classification made while the run went on.
    */
   async upsert(id: string, input: WorkflowEntryInput, now: number = Date.now()): Promise<{ entry: LibraryWorkflowEntry; changed: boolean }> {
     requireWorkflowId(id);
-    const name = input.name === null || input.name === undefined ? null : String(input.name).slice(0, 512);
-    const projectPath =
+    const incomingName = input.name === null || input.name === undefined ? null : String(input.name).slice(0, 512);
+    const incomingPath =
       input.projectPath === null || input.projectPath === undefined || input.projectPath === ""
         ? null
         : normaliseProjectDir(input.projectPath, this.platform);
@@ -102,6 +105,8 @@ export class WorkflowTable {
     return this.writes.run("table", async () => {
       await this.refresh();
       const existing = this.entries.get(id);
+      const name = incomingName ?? existing?.name ?? null;
+      const projectPath = incomingPath ?? existing?.projectPath ?? null;
       const forkedFrom = input.forkedFrom ?? existing?.forkedFrom;
       if (
         existing &&

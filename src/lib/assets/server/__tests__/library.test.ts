@@ -785,6 +785,12 @@ describe("workflows table", () => {
     expect(fork.forkedFrom).toBe("wf_a");
     const table = JSON.parse(fs.readFileSync(file, "utf8"));
     expect(table.wf_a.projectPath).toBe(project);
+    // A late upsert from a run that started before the save knows less; it never clears the row.
+    const late = await upsertWorkflowEntry("wf_a", { name: null, projectPath: null });
+    expect(late).toMatchObject({ name: "A", projectPath: project });
+    const renamed = await upsertWorkflowEntry("wf_a", { name: "A2", projectPath: null });
+    expect(renamed).toMatchObject({ name: "A2", projectPath: project });
+    expect(await upsertWorkflowEntry("wf_new", { name: null, projectPath: null })).toMatchObject({ name: null, projectPath: null });
     await expect(upsertWorkflowEntry("bad/id", { name: null, projectPath: null })).rejects.toMatchObject({ status: 400 });
     await expect(upsertWorkflowEntry("wf_c", { name: null, projectPath: "relative" })).rejects.toMatchObject({ status: 400 });
   });
