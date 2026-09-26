@@ -6,7 +6,8 @@
  *   Until then (and on hosted/read-only servers, or when the request guard
  *   refuses) `isRecorderEnabled()` is false and callers fall back to today's
  *   project-only save path. The status is asked again: every 30 s while the
- *   request itself fails, every minute while the library is unavailable, on
+ *   request itself fails, every minute while the library is unavailable
+ *   (unless it is off for good: a hosted server, or the request guard), on
  *   returning to the page (at most every 30 s), and at once when a recording
  *   is refused in a way that suggests the library is gone. Settings hands in
  *   the answers it gets with `applyLibraryStatus()`.
@@ -107,11 +108,21 @@ function scheduleStatusCheck(ms: number): void {
   }, ms);
 }
 
+/**
+ * Off for a reason no later answer changes while the page is open: a hosted
+ * server, or a request guard that refuses this page. Polling would only add
+ * a refusal to the server's log every minute.
+ */
+function offForGood(status: LibraryStatus | null = libraryStatus): boolean {
+  return status !== null && !status.available && (status.reasonCode === "hosted" || status.reasonCode === "guard");
+}
+
 function setStatus(status: LibraryStatus, seq: number): void {
   appliedSeq = seq;
   const changed = JSON.stringify(status) !== JSON.stringify(libraryStatus);
   libraryStatus = status;
-  if (status.available) clearStatusTimer();
+  // Returning to the page still asks again (throttled), off for good or not.
+  if (status.available || offForGood(status)) clearStatusTimer();
   else scheduleStatusCheck(UNAVAILABLE_POLL_MS);
   if (changed) statusListeners.emit(status);
 }

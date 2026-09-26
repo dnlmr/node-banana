@@ -190,6 +190,25 @@ describe("initAssetLibrary", () => {
     expect(statusCalls()).toBe(3);
   });
 
+  it.each(["hosted", "guard"] as const)("does not poll a library that is off for good (%s), but still asks on returning to the page", async (reasonCode) => {
+    vi.useFakeTimers();
+    const server = fakeLibrary({ status: libraryStatus({ available: false, reason: "Not here", reasonCode }) });
+    const statusCalls = () => server.calls.filter((call) => call.url === "/api/assets/library").length;
+    await recorder.initAssetLibrary();
+    expect(recorder.isRecorderEnabled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(statusCalls()).toBe(1);
+
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusCalls()).toBe(2);
+    // Throttled as before
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(statusCalls()).toBe(2);
+  });
+
   it("does not poll from a hidden page, and asks on its return", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "visible";
