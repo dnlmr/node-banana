@@ -214,7 +214,8 @@ interface AssetStoreState {
   ensurePage: (page: number) => Promise<void>;
   trimLoaded: (visibleFrom: number, visibleTo: number) => void;
   pollArrivals: () => Promise<void>;
-  receiveArrivals: (assets: AssetView[]) => void;
+  /** New assets for the top of the list. `matched`: the server already matched them against the loaded query. */
+  receiveArrivals: (assets: AssetView[], options?: { matched?: boolean }) => void;
   showArrivals: () => void;
   setScroll: (scrollTop: number, atTop: boolean) => void;
 
@@ -479,6 +480,10 @@ let refreshController: AbortController | null = null;
 let facetsTimer: ReturnType<typeof setTimeout> | null = null;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let jobTimer: ReturnType<typeof setTimeout> | null = null;
+/** The list (requestSeq) an arrivals poll is running for, or -1. */
+let pollingSeq = -1;
+/** Full arrival pages fetched in a row before the list is loaded again instead. */
+const MAX_ARRIVAL_PAGES = 25;
 let noticeSeq = 0;
 /** Failed page requests wait this long before the grid may ask again. */
 const LOAD_RETRY_MS = 5000;
@@ -891,6 +896,9 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
       const { status, loadedQuery, headCursor, items } = get();
       if (status !== "ready" || !loadedQuery || (loadedQuery.sort ?? "newest") !== "newest") return;
       const seq = requestSeq;
+      // One poll at a time per list: a slow one must not deliver the same arrivals twice
+      if (pollingSeq === seq) return;
+      pollingSeq = seq;
       try {
         if (!headCursor) {
           // Nothing loaded yet: the first page is the arrival
@@ -898,25 +906,40 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
             const page = await api.fetchAssetPage({ ...loadedQuery, limit: PAGE_SIZE });
             if (seq !== requestSeq || page.assets.length === 0) return;
             set({ headCursor: page.headCursor, nextCursor: page.nextCursor });
-            get().receiveArrivals(page.assets);
+            get().receiveArrivals(page.assets, { matched: true });
           }
           return;
         }
-        const page = await api.fetchAssetPage({ ...loadedQuery, newerThan: headCursor, limit: PAGE_SIZE });
-        if (seq !== requestSeq) return;
-        if (page.assets.length) set({ headCursor: page.headCursor ?? headCursor });
-        get().receiveArrivals(page.assets);
+        // A full page may have more above it: the server moves the head to the
+        // newest item it sent, so ask again from there until a page comes back short
+        let head = headCursor;
+        for (let round = 0; round < MAX_ARRIVAL_PAGES; round++) {
+          const page = await api.fetchAssetPage({ ...loadedQuery, newerThan: head, limit: PAGE_SIZE });
+          if (seq !== requestSeq) return;
+          const next = page.headCursor ?? head;
+          if (page.assets.length) set({ headCursor: next });
+          // The server matched these against the loaded query itself
+          get().receiveArrivals(page.assets, { matched: true });
+          if (page.assets.length < PAGE_SIZE || next === head) return;
+          head = next;
+        }
+        // Still coming after that many pages: loading the list again is cheaper, and leaves no gap
+        void get().refresh();
       } catch {
         // The next poll tries again
+      } finally {
+        if (pollingSeq === seq) pollingSeq = -1;
       }
     },
 
-    receiveArrivals: (assets) => {
+    receiveArrivals: (assets, options) => {
       const state = get();
       const query = state.loadedQuery;
       if (state.status !== "ready" || !query) return;
       const present = new Set([...state.items.map((item) => item.id), ...state.arrivals.map((asset) => asset.id)]);
-      const fresh = assets.filter((asset) => !present.has(asset.id) && matchesAssetQuery(asset, query, state.library?.platform));
+      const fresh = assets.filter(
+        (asset) => !present.has(asset.id) && (options?.matched || matchesAssetQuery(asset, query, state.library?.platform)),
+      );
       if (fresh.length === 0) return;
       fresh.sort((a, b) => compareAssets(a, b, state.sort));
       const bytes = fresh.reduce((sum, asset) => sum + asset.bytes, 0);

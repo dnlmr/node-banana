@@ -226,6 +226,28 @@ describe("new arrivals", () => {
     expect(useAssetStore.getState().scrollToTopSeq).toBe(before + 1);
   });
 
+  it("keep coming while a page of them comes back full, so none are skipped", async () => {
+    // Oldest first as made; the server sends each page newest first
+    const made = Array.from({ length: 260 }, (_, i) => asset(`n${String(i).padStart(3, "0")}`, { createdAt: T0 + 10 + i }));
+    const newestFirst = (list: AssetView[]) => [...list].reverse();
+    api.fetchAssetPage.mockResolvedValueOnce(page(newestFirst(made.slice(0, 200)), { headCursor: "h199" }));
+    api.fetchAssetPage.mockResolvedValueOnce(page(newestFirst(made.slice(200)), { headCursor: "h259" }));
+    await useAssetStore.getState().pollArrivals();
+    expect(api.fetchAssetPage).toHaveBeenNthCalledWith(2, { newerThan: "h2", limit: 200 });
+    expect(api.fetchAssetPage).toHaveBeenNthCalledWith(3, { newerThan: "h199", limit: 200 });
+    expect(ids()).toHaveLength(262);
+    expect(ids().slice(0, 2)).toEqual(["n259", "n258"]);
+    expect(ids().slice(-3)).toEqual(["n000", "a2", "a1"]);
+    expect(useAssetStore.getState()).toMatchObject({ headCursor: "h259", total: 262 });
+  });
+
+  it("take what the server matched for the list as it is, without second-guessing it", async () => {
+    useAssetStore.setState({ loadedQuery: { tags: ["hero"] } });
+    api.fetchAssetPage.mockResolvedValueOnce(page([asset("a3", { createdAt: T0 + 3, tags: [] })], { headCursor: "h3" }));
+    await useAssetStore.getState().pollArrivals();
+    expect(ids()).toEqual(["a3", "a2", "a1"]);
+  });
+
   it("take recorder results only when they match the current query, once", () => {
     useAssetStore.getState().receiveArrivals([asset("v1", { kind: "video", createdAt: T0 + 5, trashedAt: 3 })]);
     expect(ids()).toEqual(["a2", "a1"]);
