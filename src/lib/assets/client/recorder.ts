@@ -16,9 +16,10 @@
  *   queues the upload (concurrency 2, its own queue: never counted in the
  *   store's pendingMediaSaves, so tabs stay usable), and returns at once.
  *   Failures are retried while the library is temporarily unavailable, then
- *   reported once through `onRecorderError`. Once the library is known to be
- *   off, queued and retrying recordings resolve `done` null at once, so a
- *   project run can still save to its own folder.
+ *   reported once through `onRecorderError`. One answer that the library is
+ *   gone is not enough to drop the bytes (a disk remounting after sleep is
+ *   back within seconds): the write backs off and tries again, and only a
+ *   library that is off for good (hosted, guard) fails it at once.
  * - `beginRun()` / `endRun()` bracket a run. The start graph is held by
  *   reference and only encoded/uploaded when the run records its first
  *   asset. `endRun(id, graph)` writes the final snapshot if the run recorded
@@ -63,6 +64,12 @@ const CONCURRENCY = 2;
 const STATUS_RETRY_MS = 30_000;
 /** While the library is known to be unavailable: a drive plugged back in, a folder fixed elsewhere. */
 const UNAVAILABLE_POLL_MS = 60_000;
+/**
+ * The first check after the library went away comes sooner: a disk or share
+ * remounting after sleep is back within seconds, and the server holds a
+ * failed check for 10 s.
+ */
+const LOST_RECHECK_MS = 15_000;
 /** Coming back to the page asks again, at most this often. */
 const FOCUS_REFRESH_MS = 30_000;
 /** How long a write paused by a library move waits before checking the library is still there. */
@@ -120,10 +127,17 @@ function offForGood(status: LibraryStatus | null = libraryStatus): boolean {
 function setStatus(status: LibraryStatus, seq: number): void {
   appliedSeq = seq;
   const changed = JSON.stringify(status) !== JSON.stringify(libraryStatus);
+  const lost = libraryStatus?.available === true && !status.available;
   libraryStatus = status;
   // Returning to the page still asks again (throttled), off for good or not.
-  if (status.available || offForGood(status)) clearStatusTimer();
-  else scheduleStatusCheck(UNAVAILABLE_POLL_MS);
+  if (status.available || offForGood(status)) {
+    clearStatusTimer();
+  } else if (lost) {
+    clearStatusTimer();
+    scheduleStatusCheck(LOST_RECHECK_MS);
+  } else {
+    scheduleStatusCheck(UNAVAILABLE_POLL_MS);
+  }
   if (changed) statusListeners.emit(status);
 }
 
@@ -239,12 +253,20 @@ function libraryOff(fallback?: unknown): Error {
   return new Error(reason);
 }
 
+/** Worth another try after a backoff: the library is gone, but may be back in a moment. */
+function libraryGoneForNow(fallback: unknown): AssetApiError {
+  return new AssetApiError(libraryOff(fallback).message, 503, undefined, "unavailable");
+}
+
 /**
  * `withRetry` for the library's writes. It gives up at once when the
- * library is known to be off, and when an answer suggests the library is
- * gone it asks for the status first: if that confirms it, recording turns
- * off (so `isRecorderEnabled()` sends later runs down the fallback path) and
- * this write stops instead of backing off for 15 s.
+ * library is off for good (a hosted server, the request guard). When an
+ * answer suggests the library is gone it asks for the status first: if that
+ * confirms it, recording turns off (so `isRecorderEnabled()` sends later
+ * runs down the fallback path), but this write keeps its bytes and backs
+ * off as for any other outage. One answer is not enough to drop them: a disk
+ * or share remounting after sleep is back within seconds. A write that gets
+ * through meanwhile asks for the status again, which turns recording back on.
  *
  * A library move pauses writes for as long as it copies, which can be far
  * longer than any fixed budget. The bytes are already held, so the write
@@ -254,16 +276,20 @@ function libraryOff(fallback?: unknown): Error {
 function retry<T>(task: (attempt: number) => Promise<T>): Promise<T> {
   return withRetry(
     async (attempt) => {
-      if (knownUnavailable()) throw libraryOff();
+      if (offForGood()) throw libraryOff();
+      let result: T;
       try {
-        return await task(attempt);
+        result = await task(attempt);
       } catch (error) {
         if (mayMeanLibraryGone(error)) {
           const status = await recheckStatus();
-          if (status && !status.available) throw libraryOff(error);
+          if (status && !status.available) throw offForGood(status) ? libraryOff(error) : libraryGoneForNow(error);
         }
         throw error;
       }
+      // It is back before the status said so
+      if (knownUnavailable()) void recheckStatus();
+      return result;
     },
     {
       pausedBudgetMs: PAUSED_CHECK_MS,
@@ -528,7 +554,8 @@ export function endRun(runId: string, graph: CapturedGraph | null): void {
 
 export function recordAsset(input: RecordAssetInput, run: AssetRunContext): RecordedAssetHandle {
   const assetId = newAssetId();
-  if (knownUnavailable()) return { assetId, done: Promise.resolve(null) };
+  // Known to be off for now is not off for good: the write tries, and backs off
+  if (offForGood()) return { assetId, done: Promise.resolve(null) };
 
   let media: TakenMedia;
   try {
