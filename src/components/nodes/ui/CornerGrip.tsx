@@ -14,6 +14,8 @@ interface CornerGripProps {
   minWidth?: number;
   maxWidth?: number;
   onHeightChange: (height: number) => void;
+  /** The node data key the height is stored under, written with the width. */
+  dataKey?: string;
   label?: string;
   className?: string;
 }
@@ -35,6 +37,7 @@ export function CornerGrip({
   minWidth = NODE_MIN_W,
   maxWidth = RESIZE_MAX_W,
   onHeightChange,
+  dataKey = "mediaHeight",
   label = "Resize",
   className,
 }: CornerGripProps) {
@@ -65,12 +68,20 @@ export function CornerGrip({
       if (!d) return;
       const width = Math.round(Math.max(minWidth, Math.min(maxWidth, d.startW + (e.clientX - d.startX) / d.zoom)));
       const next = Math.round(Math.max(minHeight, Math.min(maxHeight, d.startH + (e.clientY - d.startY) / d.zoom)));
+      // Width and height go out in ONE write. On a controlled flow setNodes
+      // reaches the store as a "replace" carrying React Flow's copy of the
+      // node, whose data is a render behind: written separately, that copy
+      // would stamp the previous height back over the new one every move.
       reactFlow.setNodes((nodes) =>
-        nodes.map((node) => (node.id === nodeId ? { ...node, width, style: { ...node.style, width } } : node))
+        nodes.map((node) =>
+          node.id === nodeId
+            ? { ...node, width, style: { ...node.style, width }, data: { ...node.data, [dataKey]: next } }
+            : node
+        )
       );
       if (next !== height) onHeightChange(next);
     },
-    [reactFlow, nodeId, minWidth, maxWidth, minHeight, maxHeight, height, onHeightChange]
+    [reactFlow, nodeId, minWidth, maxWidth, minHeight, maxHeight, height, onHeightChange, dataKey]
   );
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
