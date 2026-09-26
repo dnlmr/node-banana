@@ -9,6 +9,11 @@ const config = {
   env: { NEXT_PUBLIC_APP_VERSION: require('./package.json').version },
   experimental: {
     serverActions: { bodySizeLimit: '100mb' },
+    // There is no proxy.ts/middleware.ts today. If one is added, it must skip
+    // /api/assets (matcher) or raise `proxyClientMaxBodySize`: Next clones
+    // request bodies for a proxy and silently truncates them past its limit
+    // (10 MB by default), which would corrupt streamed asset uploads
+    // (PUT /api/assets/uploads/[id], PUT /api/assets/media/[sha256]).
   },
 };
 
