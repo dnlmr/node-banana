@@ -11,6 +11,7 @@ import {
   bulkAssets,
   cancelJob,
   completeUpload,
+  getFacets,
   getJob,
   getLibraryStatus,
   listAssets,
@@ -616,6 +617,24 @@ describe("import", () => {
     await expect(runImport(jobContext(), { library, thumbs: null }, [project])).rejects.toMatchObject({ code: "paused" });
     expect(library.allRecords()).toHaveLength(0);
     fs.rmSync(library.layout.lock);
+  });
+
+  it("keeps imported assets with their folder when a twin folder sharing the workflow id runs later", async () => {
+    const twin = path.join(base, "P", "A");
+    const imported = path.join(base, "P", "B");
+    for (const dir of [twin, imported]) {
+      fs.mkdirSync(path.join(dir, "generations"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "flow.json"), JSON.stringify({ version: 1, id: "wf_twin", name: "Twin", nodes: [], edges: [] }));
+    }
+    fs.writeFileSync(path.join(imported, "generations", "x.png"), makePng(2, 2, 6));
+    await finished(await startImport({ projectDirs: [imported] }));
+    // Later the Finder duplicate is opened and run: its run classifies the shared id there.
+    await upsertWorkflowEntry("wf_twin", { name: "Twin copy", projectPath: twin });
+
+    const [asset] = (await listAssets({ projects: [imported] })).assets;
+    expect(asset.workflow).toEqual({ id: "wf_twin", name: "Twin", projectPath: imported });
+    expect((await listAssets({ projects: [twin] })).total).toBe(0);
+    expect((await getFacets()).projects).toEqual([expect.objectContaining({ path: imported, count: 1 })]);
   });
 
   it("refuses a bad folder list and a second job while one runs", async () => {

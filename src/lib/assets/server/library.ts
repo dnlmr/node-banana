@@ -891,17 +891,30 @@ export class AssetLibrary {
   private projectKey = (projectPath: string): string =>
     foldsCase(this.platform) ? path.resolve(projectPath).toLowerCase() : path.resolve(projectPath);
 
-  /** A record's workflow as the UI shows it: the workflows table first, the record's own name second. */
+  /** The project folder a project file sits in (`<project>/generations/<file>`), else null. */
+  private projectFolderOf(record: AssetRecord): string | null {
+    if (record.file.root !== "external") return null;
+    const dir = path.dirname(record.file.path);
+    return path.basename(dir).toLowerCase() === "generations" ? path.dirname(dir) : null;
+  }
+
+  /**
+   * A record's workflow as the UI shows it: the workflows table first, the
+   * record's own name second. An imported asset stays with the folder it was
+   * imported from, even when a twin folder sharing its workflow id (a Finder
+   * duplicate) later claims that id's row by running.
+   */
   workflowOf(record: AssetRecord): { name: string | null; projectPath: string | null } {
     const entry = this.workflowTable.get(record.workflowId);
-    if (entry) return { name: entry.name ?? record.workflowName, projectPath: entry.projectPath };
-    let projectPath: string | null = null;
-    if (record.file.root === "external") {
-      // A project file with no workflow row (e.g. from another machine): its folder is `<project>/generations`.
-      const dir = path.dirname(record.file.path);
-      if (path.basename(dir).toLowerCase() === "generations") projectPath = path.dirname(dir);
+    if (record.imported) {
+      const folder = this.projectFolderOf(record);
+      if (folder && (!entry?.projectPath || this.projectKey(entry.projectPath) !== this.projectKey(folder))) {
+        return { name: record.workflowName ?? entry?.name ?? null, projectPath: folder };
+      }
     }
-    return { name: record.workflowName, projectPath };
+    if (entry) return { name: entry.name ?? record.workflowName, projectPath: entry.projectPath };
+    // A project file with no workflow row (e.g. from another machine) belongs to the folder it is in.
+    return { name: record.workflowName, projectPath: this.projectFolderOf(record) };
   }
 
   private queryContext(): QueryContext {
