@@ -10,7 +10,7 @@ const { createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { _electron: electron } = require('playwright-core');
-const { checkWindowControls, checkStartupWindowControls } = require('./electron-smoke.cjs');
+const { checkWindowControls, checkStartupWindowControls, checkLibraryRoot } = require('./electron-smoke.cjs');
 const run = promisify(execFile);
 const root = path.resolve(__dirname, '..');
 const supplied = process.argv.indexOf('--executable');
@@ -116,6 +116,8 @@ async function main() {
     assert.ok(assets.mime.startsWith('image/'));
     assert.ok(!JSON.stringify(assets.status).includes(':true'), 'Developer provider environment reached the packaged backend');
     console.log('PASS: public assets and native sharp image processing work without provider environment variables');
+    // The packaged environment is an allowlist; main must still hand over the profile's library.
+    await checkLibraryRoot(page, profile);
 
     await page.evaluate(secret => {
       localStorage.setItem('node-banana-provider-settings', JSON.stringify({ providers: { gemini: { apiKey: secret, enabled: true } } }));

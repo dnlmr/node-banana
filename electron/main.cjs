@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, utilityProcess, safeStorage, screen } = require('electron');
 const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { createRecoveryStore } = require('./lib/recovery.cjs');
 const { importEnvironmentFile } = require('./lib/environment-import.cjs');
@@ -11,6 +12,8 @@ const { createBackend } = require('./lib/backend.cjs');
 const { atomicWrite } = require('./lib/files.cjs');
 const { visibleBounds } = require('./lib/window-state.cjs');
 const { pickHostEnvironment } = require('./lib/env.cjs');
+const { libraryEnv } = require('./lib/library.cjs');
+const { createServerMessageHandler } = require('./lib/bridge-main.cjs');
 let root = path.resolve(__dirname, '..');
 let runtime, backend, window, credentialStore, recoveryStore, diagnostics;
 let quitting = false, rendererCrashed = false, starting;
@@ -39,6 +42,8 @@ async function fail(error) {
   if (response === 0) await openLogs();
   app.quit();
 }
+// app.getPath throws when the OS has no such folder (a bare Linux session).
+function picturesDir() { try { return app.getPath('pictures'); } catch { return undefined; } }
 function openExternal(url) { if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(log); }
 function allowedPermission(contents, permission, requestingURL) {
   if (!contents || contents !== window?.webContents) return false;
@@ -225,6 +230,7 @@ else {
       redactor.add(values); backend?.post({ type: 'secrets', values });
     });
     recoveryStore = createRecoveryStore(app.getPath('userData'));
+    const serverMessage = createServerMessageHandler({ shell, dialog, fs, getWindow: () => window, log });
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('NODE_BANANA_ELECTRON_PORT must be a port number between 1 and 65535.');
     if (app.isPackaged) { runtime = await provisionRuntime(path.join(process.resourcesPath, 'runtime'), app.getPath('userData')); root = runtime.directory; }
     backend = createBackend({ fork: (...args) => utilityProcess.fork(...args),
@@ -233,13 +239,16 @@ else {
         ...(app.isPackaged ? pickHostEnvironment() : process.env),
         NODE_ENV: dev ? 'development' : 'production', NODE_BANANA_ELECTRON: '1', NODE_BANANA_LOGS_DIR: app.getPath('logs'),
         NODE_BANANA_ELECTRON_PORT: String(port), NODE_BANANA_ELECTRON_TOKEN: token,
+        // Where generations are saved (see lib/library.cjs). Only main knows the
+        // Pictures folder, and a test profile must never reach the real library.
+        ...libraryEnv({ platform: process.platform, picturesDir: picturesDir(), homeDir: os.homedir(), userDataDir: app.getPath('userData'), processEnv: process.env }),
       } }),
+      // The server's requests for native actions (lib/bridge-main.cjs). The
+      // reply goes to the child that asked, which may have exited meanwhile.
       onMessage: async (message, child) => {
-        if (message.type !== 'choose-directory') return;
-        try {
-          const result = await dialog.showOpenDialog(window, { title: 'Select a folder to save workflows', properties: ['openDirectory', 'createDirectory'] });
-          child.postMessage({ id: message.id, result: { success: true, cancelled: result.canceled, path: result.filePaths[0] || null } });
-        } catch { child.postMessage({ id: message.id, result: { success: false, error: 'The folder picker could not open.' } }); }
+        const reply = await serverMessage(message);
+        if (!reply) return;
+        try { child.postMessage(reply); } catch (error) { log(error); }
       },
     });
     const localURLs = [`${origin}/*`, `${origin.replace('http:', 'ws:')}/*`];
