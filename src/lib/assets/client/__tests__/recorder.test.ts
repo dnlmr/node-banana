@@ -433,6 +433,43 @@ describe("recordAsset", () => {
     expect(server.calls.filter((call) => call.url === "/api/assets")).toHaveLength(9);
   });
 
+  it("keeps waiting through a move that takes longer than ten minutes", async () => {
+    vi.useFakeTimers();
+    const pausedUntil = 20 * 60_000;
+    const server = fakeLibrary({
+      route: (call) =>
+        call.url === "/api/assets" && Date.now() < pausedUntil
+          ? jsonResponse({ error: "The library is being moved.", code: "paused" }, { status: 503, headers: { "Retry-After": "5" } })
+          : undefined,
+    });
+    vi.setSystemTime(0);
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
+    await vi.advanceTimersByTimeAsync(pausedUntil + 10_000);
+    await expect(handle.done).resolves.not.toBeNull();
+    // It checked the library was still there now and then, not on every refusal.
+    const checks = server.calls.filter((call) => call.url === "/api/assets/library").length;
+    expect(checks).toBeGreaterThan(0);
+    expect(checks).toBeLessThanOrEqual(10);
+  });
+
+  it("stops waiting for a move once the status says the library is gone", async () => {
+    vi.useFakeTimers();
+    const errors: string[] = [];
+    recorder.onRecorderError((message) => errors.push(message));
+    fakeLibrary({
+      status: libraryStatus({ available: false, reason: "The move failed and the old folder is gone." }),
+      route: (call) =>
+        call.url === "/api/assets"
+          ? jsonResponse({ error: "The library is being moved.", code: "paused" }, { status: 503, headers: { "Retry-After": "5" } })
+          : undefined,
+    });
+    const handle = recorder.recordAsset(input(dataUrlOf("PNG")), RUN);
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    await expect(handle.done).resolves.toBeNull();
+    expect(recorder.isRecorderEnabled()).toBe(false);
+    expect(errors).toEqual(["Couldn't save an asset to the library: The move failed and the old folder is gone."]);
+  });
+
   it("retries network failures with backoff, then reports once", async () => {
     vi.useFakeTimers();
     const errors: string[] = [];

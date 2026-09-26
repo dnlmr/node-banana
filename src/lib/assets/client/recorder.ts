@@ -64,6 +64,8 @@ const STATUS_RETRY_MS = 30_000;
 const UNAVAILABLE_POLL_MS = 60_000;
 /** Coming back to the page asks again, at most this often. */
 const FOCUS_REFRESH_MS = 30_000;
+/** How long a write paused by a library move waits before checking the library is still there. */
+const PAUSED_CHECK_MS = 2 * 60_000;
 /** The same failure is reported at most once in this window. */
 const ERROR_REPEAT_MS = 60_000;
 /** Runs are sequential, so more open than this means some never got an endRun; the oldest are let go. */
@@ -231,20 +233,36 @@ function libraryOff(fallback?: unknown): Error {
  * gone it asks for the status first: if that confirms it, recording turns
  * off (so `isRecorderEnabled()` sends later runs down the fallback path) and
  * this write stops instead of backing off for 15 s.
+ *
+ * A library move pauses writes for as long as it copies, which can be far
+ * longer than any fixed budget. The bytes are already held, so the write
+ * keeps waiting, checking the status every few minutes, and gives up only
+ * when the status says the library is no longer available.
  */
 function retry<T>(task: (attempt: number) => Promise<T>): Promise<T> {
-  return withRetry(async (attempt) => {
-    if (knownUnavailable()) throw libraryOff();
-    try {
-      return await task(attempt);
-    } catch (error) {
-      if (mayMeanLibraryGone(error)) {
-        const status = await recheckStatus();
-        if (status && !status.available) throw libraryOff(error);
+  return withRetry(
+    async (attempt) => {
+      if (knownUnavailable()) throw libraryOff();
+      try {
+        return await task(attempt);
+      } catch (error) {
+        if (mayMeanLibraryGone(error)) {
+          const status = await recheckStatus();
+          if (status && !status.available) throw libraryOff(error);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    },
+    {
+      pausedBudgetMs: PAUSED_CHECK_MS,
+      keepWaiting: async () => {
+        const status = await recheckStatus();
+        // Unreachable is not "gone": the server may be restarting mid-move.
+        if (status && !status.available) throw libraryOff();
+        return true;
+      },
+    },
+  );
 }
 
 /* Errors -------------------------------------------------------------- */

@@ -48,11 +48,17 @@ export interface RetryOptions {
    * long move does not drop the recordings made during it.
    */
   pausedBudgetMs?: number;
+  /**
+   * Asked each time the paused budget runs out: true starts a new budget,
+   * false gives up with the paused error (or it can throw its own). Without
+   * it the budget is a hard cap.
+   */
+  keepWaiting?: () => Promise<boolean>;
 }
 
 /** `task` gets the attempt number; a paused wait does not use one up. */
 export async function withRetry<T>(task: (attempt: number) => Promise<T>, options: RetryOptions = {}): Promise<T> {
-  const { attempts = 5, baseDelayMs = 1000, maxDelayMs = 30_000, pausedBudgetMs = 10 * 60 * 1000 } = options;
+  const { attempts = 5, baseDelayMs = 1000, maxDelayMs = 30_000, pausedBudgetMs = 10 * 60 * 1000, keepWaiting } = options;
   let attempt = 0;
   let pausedFor = 0;
   for (;;) {
@@ -65,7 +71,10 @@ export async function withRetry<T>(task: (attempt: number) => Promise<T>, option
       const paused = error instanceof AssetApiError && error.status === 503 && retryAfter !== undefined;
       if (paused) {
         const wait = Math.max(retryAfter, 250);
-        if (pausedFor + wait > pausedBudgetMs) throw error;
+        if (pausedFor + wait > pausedBudgetMs) {
+          if (!keepWaiting || !(await keepWaiting())) throw error;
+          pausedFor = 0;
+        }
         pausedFor += wait;
         attempt -= 1;
         await delay(wait);
