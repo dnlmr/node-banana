@@ -54,7 +54,9 @@ rows laid out at the socket pitch.
 
 Node **height is derived** from width ÷ media aspect plus the gap row and the
 measured controls card. Users resize width only — the node's, and
-independently the controls card's.
+independently the controls card's. The exceptions carry a `HeightGrip` on
+the media card's bottom edge and store the result as `mediaHeight`: the
+text surfaces (prompt, LLM, Comfy text) and the output gallery's grid.
 
 The tokens live in `src/app/globals.css` (`@theme`) and, for anything
 computed in JavaScript, `src/components/nodes/ui/tokens.ts`.

@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { NodeProps, Node, useReactFlow } from "@xyflow/react";
 import { Dialog } from "@/components/ui/Dialog";
 import { NodeShell } from "./NodeShell";
-import { ControlsCard, EmptyState, type SocketSpec } from "./ui";
+import { ControlsCard, EmptyState, type SocketSpec, HeightGrip } from "./ui";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { OutputGalleryNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
@@ -18,7 +18,9 @@ const INPUT_SOCKETS: SocketSpec[] = [
   { id: "video", type: "video", label: "Video" },
 ];
 const EMPTY_HEIGHT = 150;
+/** The grid's height until the user drags its grip. */
 const GRID_HEIGHT = 240;
+const MIN_GRID_HEIGHT = 120;
 
 type MediaItem = { type: "image" | "video"; src: string };
 
@@ -315,13 +317,14 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
   }, [lightboxIndex, closeLightbox, navigateLightbox]);
 
   const currentItem = lightboxIndex !== null ? displayMedia[lightboxIndex] : null;
+  const gridHeight = nodeData.mediaHeight ?? GRID_HEIGHT;
 
   return (
     <>
       <NodeShell
         id={id}
         selected={selected}
-        media={{ kind: "fixed", height: displayMedia.length === 0 ? EMPTY_HEIGHT : GRID_HEIGHT }}
+        media={{ kind: "fixed", height: displayMedia.length === 0 ? EMPTY_HEIGHT : gridHeight }}
         inputs={INPUT_SOCKETS}
         minWidth={240}
         controls={
@@ -349,7 +352,8 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
           <EmptyState message="Connect image or video nodes to view gallery" />
         ) : (
           <div className="absolute inset-0 overflow-y-auto nodrag nopan nowheel bg-neutral-900/40">
-            <div className="grid grid-cols-3 gap-1 p-1">
+            {/* Bottom padding keeps the last row clear of the grip. */}
+            <div className="grid grid-cols-3 gap-1 p-1 pb-4">
               {displayMedia.map((item, idx) => (
                 <button
                   key={idx}
@@ -380,6 +384,14 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
               ))}
             </div>
           </div>
+        )}
+        {displayMedia.length > 0 && (
+          <HeightGrip
+            height={gridHeight}
+            min={MIN_GRID_HEIGHT}
+            label="Resize gallery"
+            onChange={(h) => updateNodeData(id, { mediaHeight: h })}
+          />
         )}
       </NodeShell>
 

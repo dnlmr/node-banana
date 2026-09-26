@@ -346,6 +346,7 @@ export interface OutputGalleryNodeData extends BaseNodeData {
   imageRefs?: string[]; // External storage refs for images
   videos?: string[]; // Array of video URLs from connected nodes
   videoRefs?: string[]; // External storage refs for videos
+  mediaHeight?: number; // Height of the grid, set by dragging its grip
 }
 
 /**
