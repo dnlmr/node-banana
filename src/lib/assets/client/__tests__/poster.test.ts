@@ -134,6 +134,25 @@ describe("capturePoster", () => {
     await expect(capture).resolves.toBe(true);
     expect(calls).toHaveLength(3);
   });
+
+  it("does not hold the next capture while an upload waits", async () => {
+    vi.useFakeTimers();
+    playableVideo({ width: 100, height: 100, duration: 1 });
+    drawableCanvas({ "image/webp": "image/webp" });
+    stubFetch((call) =>
+      call.url.includes("/held/")
+        ? jsonResponse({ error: "The library is being moved.", code: "paused" }, { status: 503, headers: { "Retry-After": "5" } })
+        : jsonResponse({}),
+    );
+    const held = capturePoster("held", "video/mp4");
+    const next = capturePoster("next", "video/mp4");
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(next).resolves.toBe(true);
+    let settled = false;
+    void held.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+  });
 });
 
 describe("ensurePoster", () => {

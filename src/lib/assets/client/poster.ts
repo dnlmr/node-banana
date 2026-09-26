@@ -57,7 +57,8 @@ function canPlay(video: HTMLVideoElement, mime?: string): boolean {
   return [mime, "video/mp4", "video/webm"].some((type) => !!type && video.canPlayType(type) !== "");
 }
 
-async function capture(assetId: string, mime?: string): Promise<Outcome> {
+/** Draws the poster frame; the decoder is released before this resolves. */
+async function drawPoster(assetId: string, mime?: string): Promise<Blob | Exclude<Outcome, "stored">> {
   if (typeof document === "undefined") return "unsupported";
   const video = document.createElement("video");
   if (!canPlay(video, mime)) return "unsupported";
@@ -89,10 +90,7 @@ async function capture(assetId: string, mime?: string): Promise<Outcome> {
     // Browsers without a WebP encoder hand back PNG; JPEG is the smaller fallback.
     let poster = await toBlob(canvas, "image/webp", 0.8);
     if (!poster || poster.type !== "image/webp") poster = await toBlob(canvas, "image/jpeg", 0.85);
-    if (!poster) return "failed";
-    // A blip, or a library move holding writes, is waited out rather than lost.
-    await withRetry(() => uploadPoster(assetId, poster));
-    return "stored";
+    return poster ?? "failed";
   } catch (error) {
     console.warn("Couldn't make a poster for a recorded video:", error instanceof Error ? error.message : error);
     return "failed";
@@ -106,10 +104,20 @@ async function capture(assetId: string, mime?: string): Promise<Outcome> {
   }
 }
 
-function enqueue(assetId: string, mime?: string): Promise<Outcome> {
-  const run = queue.then(() => capture(assetId, mime)).catch((): Outcome => "failed");
-  queue = run;
-  return run;
+/** Draws in the one-at-a-time queue, then uploads outside it: a small image waiting out a library move holds no decoder. */
+async function enqueue(assetId: string, mime?: string): Promise<Outcome> {
+  const drawn = queue.then(() => drawPoster(assetId, mime)).catch((): Outcome => "failed");
+  queue = drawn;
+  const poster = await drawn;
+  if (typeof poster === "string") return poster;
+  try {
+    // A blip, or a library move holding writes, is waited out rather than lost.
+    await withRetry(() => uploadPoster(assetId, poster));
+    return "stored";
+  } catch (error) {
+    console.warn("Couldn't store a poster for a recorded video:", error instanceof Error ? error.message : error);
+    return "failed";
+  }
 }
 
 /** Makes and uploads a poster for a recorded video, once. Never rejects; resolves whether a poster was stored. */
