@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import type { LibraryJobStatus, LibraryStatus } from "@/lib/assets/types";
 import {
+  COUNT_POLL_MS,
   JOB_POLL_MS,
   LibrarySettingsTab,
   formatBytes,
@@ -20,6 +21,11 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/assets/client/api", () => api);
+
+// Every status the page reads or is handed goes on to the recorder, which
+// decides from it whether generations are recorded at all.
+const recorder = vi.hoisted(() => ({ applyLibraryStatus: vi.fn() }));
+vi.mock("@/lib/assets/client/recorder", () => recorder);
 
 // The confirm step is a Dialog, which holds the store's modal count.
 vi.mock("@/store/workflowStore", () => ({
@@ -169,6 +175,56 @@ describe("LibrarySettingsTab", () => {
       expect(screen.getByRole("button", { name: "Change…" })).toBeEnabled();
     });
 
+    it.each([
+      ["the request guard refuses", "The asset library only answers Node Banana's own page on this computer."],
+      ["the server is hosted", "The asset library needs Node Banana running on your own computer."],
+    ])("cannot change the folder when %s, and says why", async (_case, reason) => {
+      // No location was resolved: a picker would open on the server's screen, and the change would be refused
+      await renderTab(
+        makeStatus({ available: false, reason, root: null, defaultRoot: "", cacheDir: "", counts: { assets: 0, trashed: 0, bytes: 0 } })
+      );
+      expect(screen.getByRole("alert")).toHaveTextContent(reason);
+      const change = screen.getByRole("button", { name: "Change…" });
+      expect(change).toBeDisabled();
+      expect(change).toHaveAttribute("title", reason);
+      fireEvent.click(change);
+      await flush();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("says it is still counting rather than showing provisional zeros, and reads again until the counts are in", async () => {
+      vi.useFakeTimers();
+      await renderTab(makeStatus({ counting: true, counts: { assets: 0, trashed: 0, bytes: 0 } }));
+
+      const stats = screen.getByLabelText("Library contents");
+      expect(within(stats).getAllByText("Counting…")).toHaveLength(3);
+      expect(within(stats).queryByText("0")).not.toBeInTheDocument();
+      expect(within(stats).queryByText("0 B")).not.toBeInTheDocument();
+      expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(1);
+
+      await advance(COUNT_POLL_MS);
+      expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(2);
+      expect(within(screen.getByLabelText("Library contents")).getAllByText("Counting…")).toHaveLength(3);
+
+      api.fetchLibraryStatus.mockResolvedValue(makeStatus());
+      await advance(COUNT_POLL_MS);
+      expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(3);
+      const counted = screen.getByLabelText("Library contents");
+      expect(within(counted).queryByText("Counting…")).not.toBeInTheDocument();
+      expect(within(counted).getByText("12")).toBeInTheDocument();
+
+      await advance(COUNT_POLL_MS * 3);
+      expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(3);
+    });
+
+    it("stops reading again once it unmounts", async () => {
+      vi.useFakeTimers();
+      const { unmount } = await renderTab(makeStatus({ counting: true, counts: { assets: 0, trashed: 0, bytes: 0 } }));
+      unmount();
+      await advance(COUNT_POLL_MS * 3);
+      expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(1);
+    });
+
     it("offers a retry when the status cannot be read", async () => {
       api.fetchLibraryStatus.mockRejectedValueOnce(new Error("The asset library only answers Node Banana's own page"));
       render(<LibrarySettingsTab />);
@@ -241,6 +297,42 @@ describe("LibrarySettingsTab", () => {
       expect(screen.getByText("Chosen")).toBeInTheDocument();
     });
 
+    it("offers only a switch for a library that is not available, and says why", async () => {
+      mockBrowse({ success: true, path: NEW_ROOT });
+      await renderTab(
+        makeStatus({
+          available: false,
+          source: "config",
+          root: "/Volumes/Gone/Node Banana",
+          reason: "The drive is not connected.",
+          counts: { assets: 0, trashed: 0, bytes: 0 },
+        })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+
+      const dialog = screen.getByRole("dialog");
+      const move = within(dialog).getByRole("button", { name: /Move my library there/ });
+      expect(move).toBeDisabled();
+      expect(move).toHaveTextContent("The current library isn't available, so there is nothing to move.");
+      expect(dialog).not.toHaveTextContent(/Copies your 0 assets/);
+      expect(within(dialog).getByRole("button", { name: /Use that folder/ })).toBeEnabled();
+    });
+
+    it("does not quote provisional counts in the move", async () => {
+      mockBrowse({ success: true, path: NEW_ROOT });
+      api.fetchLibraryStatus.mockResolvedValue(makeStatus({ counting: true, counts: { assets: 0, trashed: 0, bytes: 0 } }));
+      render(<LibrarySettingsTab />);
+      await flush();
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+
+      const move = within(screen.getByRole("dialog")).getByRole("button", { name: /Move my library there/ });
+      expect(move).toBeEnabled();
+      expect(move).toHaveTextContent("Copies your library there, checks every file");
+      expect(move).not.toHaveTextContent(/0 assets|0 B/);
+    });
+
     it("changes nothing when the confirm step is cancelled", async () => {
       mockBrowse({ success: true, path: NEW_ROOT });
       await renderTab();
@@ -287,6 +379,70 @@ describe("LibrarySettingsTab", () => {
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
       expect(screen.getByRole("alert")).toHaveTextContent("No folder picker on this system");
+    });
+  });
+
+  describe("keeping the recorder current", () => {
+    const NEW_ROOT = "/Volumes/Media/Node Banana";
+
+    it("hands the status it reads to the recorder", async () => {
+      const status = makeStatus();
+      await renderTab(status);
+      expect(recorder.applyLibraryStatus).toHaveBeenCalledWith(status);
+    });
+
+    it("hands nothing over when the status cannot be read", async () => {
+      api.fetchLibraryStatus.mockRejectedValue(new Error("offline"));
+      render(<LibrarySettingsTab />);
+      await flush();
+      expect(recorder.applyLibraryStatus).not.toHaveBeenCalled();
+    });
+
+    it("turns recording back on after switching away from an unplugged drive", async () => {
+      mockBrowse({ success: true, path: NEW_ROOT });
+      await renderTab(
+        makeStatus({ available: false, source: "config", root: "/Volumes/Gone/Node Banana", reason: "The drive is not connected." })
+      );
+      const fixed = makeStatus({ root: NEW_ROOT, source: "config" });
+      api.setLibraryRoot.mockResolvedValue(fixed);
+
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Use that folder/ }));
+      await flush();
+
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(fixed);
+    });
+
+    it("hands over the answer to a move, then the status once the move ends", async () => {
+      vi.useFakeTimers();
+      mockBrowse({ success: true, path: NEW_ROOT });
+      await renderTab();
+      const moving = makeStatus({ job: makeJob({ id: "move-7", type: "move", total: 4 }) });
+      api.setLibraryRoot.mockResolvedValue(moving);
+
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move my library there/ }));
+      await flush();
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(moving);
+
+      const moved = makeStatus({ root: NEW_ROOT, source: "config" });
+      api.fetchLibraryStatus.mockResolvedValue(moved);
+      api.fetchJob.mockResolvedValueOnce(makeJob({ id: "move-7", type: "move", state: "done", done: 4, total: 4, finishedAt: 9 }));
+      await advance(JOB_POLL_MS);
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(moved);
+    });
+
+    it("hands over the status once an import ends", async () => {
+      vi.useFakeTimers();
+      const running = makeJob({ id: "import-7" });
+      await renderTab(makeStatus({ job: running }));
+      const imported = makeStatus({ counts: { assets: 40, trashed: 3, bytes: 1024 } });
+      api.fetchLibraryStatus.mockResolvedValue(imported);
+      api.fetchJob.mockResolvedValueOnce({ ...running, state: "done", done: 10, finishedAt: 3 });
+      await advance(JOB_POLL_MS);
+      expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(imported);
     });
   });
 

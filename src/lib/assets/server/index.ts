@@ -426,7 +426,8 @@ export async function getLibraryStatus(): Promise<LibraryStatus> {
     await Promise.race([loading, new Promise((resolve) => setTimeout(resolve, 1500))]);
     const counts = library.loaded ? library.stats() : { assets: 0, trashed: 0, bytes: 0 };
     const empty = library.loaded ? library.isEmpty() : !(await hasAnySidecar(library.layout.assets));
-    return { ...base, available: true, counts, empty, job: rt.jobs.visible() };
+    // Still scanning: the zeros are not the library's, and the page must not show them as fact.
+    return { ...base, available: true, counts, empty, job: rt.jobs.visible(), ...(library.loaded ? {} : { counting: true }) };
   } catch (error) {
     return emptyStatus(error instanceof Error ? error.message : String(error), ctx.platform);
   }
