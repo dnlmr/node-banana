@@ -174,6 +174,23 @@ describe("LibrarySettingsTab", () => {
       expect(screen.getByRole("button", { name: "Change…" })).toBeEnabled();
     });
 
+    it.each([
+      ["the request guard refuses", "The asset library only answers Node Banana's own page on this computer."],
+      ["the server is hosted", "The asset library needs Node Banana running on your own computer."],
+    ])("cannot change the folder when %s, and says why", async (_case, reason) => {
+      // No location was resolved: a picker would open on the server's screen, and the change would be refused
+      await renderTab(
+        makeStatus({ available: false, reason, root: null, defaultRoot: "", cacheDir: "", counts: { assets: 0, trashed: 0, bytes: 0 } })
+      );
+      expect(screen.getByRole("alert")).toHaveTextContent(reason);
+      const change = screen.getByRole("button", { name: "Change…" });
+      expect(change).toBeDisabled();
+      expect(change).toHaveAttribute("title", reason);
+      fireEvent.click(change);
+      await flush();
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it("offers a retry when the status cannot be read", async () => {
       api.fetchLibraryStatus.mockRejectedValueOnce(new Error("The asset library only answers Node Banana's own page"));
       render(<LibrarySettingsTab />);

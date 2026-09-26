@@ -377,12 +377,19 @@ export function LibrarySettingsTab() {
 
   const busy = runningJobId !== null || starting || applying !== null;
   const fromEnv = status.source === "env";
-  const changeDisabled = fromEnv || busy || choosing;
+  // Off with no location at all: the request guard refused this page, or the
+  // server is hosted. The picker would open on the server's own screen and
+  // the change be refused. A location that resolved but cannot be written
+  // (an unplugged drive) is different: another folder is the fix.
+  const unreachable = !status.available && !status.root;
+  const changeDisabled = fromEnv || unreachable || busy || choosing;
   const changeTitle = fromEnv
     ? "Set by the NODE_BANANA_ASSET_LIBRARY environment variable"
-    : busy
-      ? BUSY_REASON
-      : undefined;
+    : unreachable
+      ? (status.reason ?? "The library can't be changed from here.")
+      : busy
+        ? BUSY_REASON
+        : undefined;
   const allSelected = projects.length > 0 && projects.every((project) => selected.has(project.dir));
 
   const reveal = async () => {
