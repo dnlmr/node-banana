@@ -1,7 +1,9 @@
 "use client";
 
+import { LoaderCircle, Search, X } from "lucide-react";
 import {
   createContext,
+  forwardRef,
   useCallback,
   useContext,
   useEffect,
@@ -9,6 +11,7 @@ import {
   useRef,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
+  type InputHTMLAttributes,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
@@ -18,6 +21,7 @@ import { createPortal } from "react-dom";
 
 import { useWorkflowStore } from "@/store/workflowStore";
 import { cn } from "@/components/nodes/ui/cn";
+import { inputClass } from "@/components/ui/Controls";
 
 /**
  * The one dialog shell. Every modal in the app — settings, editors, the
@@ -379,9 +383,7 @@ export function DialogCloseButton({ className, label = "Close" }: { className?: 
         className
       )}
     >
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-      </svg>
+      <X size={16} strokeWidth={2} />
     </button>
   );
 }
@@ -692,6 +694,107 @@ export function DialogRailItem({
       />
       {children}
     </button>
+  );
+}
+
+/**
+ * The filter pane of a browser dialog (models, templates): everything sits
+ * on one line, the search icon's, 11px in. Pass `filterPaneClass` to
+ * `DialogPane` and use these parts inside it.
+ */
+export const filterPaneClass = "px-4 pt-5 pb-3 gap-2";
+
+/** The 17px title at the top of a filter pane, inset to the search icon's line. */
+export function DialogPaneTitle({ asTitle, className, children }: { asTitle?: boolean; className?: string; children: ReactNode }) {
+  return (
+    <DialogHeading asTitle={asTitle} className={cn("pl-[11px] text-[17px] leading-6 font-semibold tracking-[-0.02em]", className)}>
+      {children}
+    </DialogHeading>
+  );
+}
+
+/** A 32px search well with the glyph at 11px, for the top of a filter pane. */
+export const DialogSearchField = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  function DialogSearchField({ className, ...rest }, ref) {
+    return (
+      <div className={cn("relative shrink-0", className)}>
+        <DialogSearchGlyph className="pointer-events-none absolute left-[11px] top-2 w-4 h-4 text-neutral-500" />
+        <input
+          ref={ref}
+          type="text"
+          {...rest}
+          // Focused on open: a quiet ring, since the caret already says where typing goes.
+          className={cn(inputClass, "h-8 bg-canvas-bg pl-[34px] focus-visible:ring-1 focus-visible:ring-neutral-500")}
+        />
+      </div>
+    );
+  }
+);
+
+/** The magnifier: in the search well, and large in an empty state. */
+export function DialogSearchGlyph({ className, strokeWidth = 1.75 }: { className?: string; strokeWidth?: number }) {
+  return (
+    <Search className={className} strokeWidth={strokeWidth} />
+  );
+}
+
+/** A labelled group of filter rows in the pane. */
+export function DialogFilterGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label}>
+      <DialogEyebrow className="block mb-1 pl-[11px] text-neutral-500">{label}</DialogEyebrow>
+      <div className="flex flex-col">{children}</div>
+    </div>
+  );
+}
+
+/** Hairline between filter groups, and above the pane's foot. */
+export function DialogPaneRule({ className }: { className?: string }) {
+  return <div aria-hidden="true" className={cn("h-px bg-white/[0.06]", className)} />;
+}
+
+/**
+ * One filter row: 28px, inset to the search icon, a soft fill as wide as the
+ * search box when it is the current filter.
+ */
+export function DialogFilterItem({
+  active,
+  icon,
+  className,
+  children,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & { active: boolean; icon?: ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      {...rest}
+      className={cn(
+        "flex items-center gap-2.5 h-7 px-[11px] rounded-md text-left font-display text-[13px] tracking-[-0.01em] transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection",
+        active
+          ? "bg-white/[0.06] text-neutral-100 font-semibold"
+          : "text-neutral-400 font-medium hover:text-neutral-200 hover:bg-white/[0.03]",
+        "disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-neutral-400",
+        className
+      )}
+    >
+      {icon && <span className={cn("w-4 flex justify-center shrink-0", !active && "opacity-75")}>{icon}</span>}
+      {children}
+    </button>
+  );
+}
+
+/** Card surface of a browser grid: a recent entry, a model, a template. */
+export const dialogCardClass = cn(
+  "text-left rounded-[10px] border border-card-border transition-colors hover:border-neutral-600 hover:bg-white/[0.02]",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection focus-visible:ring-offset-2 focus-visible:ring-offset-canvas-bg"
+);
+
+/** The 20px spinner, for a first load or a busy card. */
+export function DialogSpinner({ className }: { className?: string }) {
+  return (
+    <LoaderCircle size={20} strokeWidth={3} className={cn("text-neutral-500 animate-spin", className)} />
   );
 }
 

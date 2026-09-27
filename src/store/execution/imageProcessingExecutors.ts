@@ -9,6 +9,7 @@ import type { GifEncoderNodeData, ImageResizeNodeData } from "@/types";
 import type { NodeExecutionContext } from "./types";
 import { resizeImage } from "@/utils/imageResize";
 import { encodeFramesToGif } from "@/utils/gifEncode";
+import { assetParameters, assetProducer, recordOutput } from "./assetRecording";
 
 /**
  * ImageResize: takes a single upstream image and produces a resized image.
@@ -49,6 +50,29 @@ export async function executeImageResize(ctx: NodeExecutionContext): Promise<voi
       status: "complete",
       error: null,
     });
+
+    // The same image at the same settings is not a new asset
+    if (result.dataUrl !== fresh.outputImage) {
+      recordOutput(ctx, {
+        kind: "image",
+        origin: "edited",
+        media: result.dataUrl,
+        parameters: assetParameters({
+          mode: fresh.mode,
+          width: fresh.width,
+          height: fresh.height,
+          maxEdge: fresh.maxEdge,
+          scalePct: fresh.scalePct,
+          fit: fresh.fit,
+          padColor: fresh.padColor,
+          format: fresh.format,
+          quality: fresh.quality,
+        }),
+        producer: assetProducer(ctx, { operation: "resize" }),
+        width: result.width,
+        height: result.height,
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     updateNodeData(node.id, { status: "error", error: message });
@@ -118,6 +142,28 @@ export async function executeGifEncoder(ctx: NodeExecutionContext): Promise<void
       progress: 100,
       error: null,
     });
+
+    // The same frames at the same settings are not a new asset
+    if (result.dataUrl !== fresh.outputGif) {
+      recordOutput(ctx, {
+        kind: "image",
+        origin: "edited",
+        media: result.dataUrl,
+        mime: "image/gif",
+        parameters: assetParameters({
+          frames: frameSrcs.length,
+          fps: fresh.fps,
+          loopCount: fresh.loopCount,
+          colorCount: fresh.colorCount,
+          dither: fresh.dither,
+          targetMaxBytes: fresh.targetMaxBytes,
+        }),
+        producer: assetProducer(ctx, { operation: "gif" }),
+        width: result.width,
+        height: result.height,
+        ...(fresh.fps > 0 ? { durationSec: frameSrcs.length / fresh.fps } : {}),
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     updateNodeData(node.id, { status: "error", error: message, progress: 0 });

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
 import { crossesEdge, FORK_HOTSPOT, FORK_PATHS, FORK_SIZE, type Point } from "@/lib/edges/hook";
 
 /** Hold H and sweep the rendered noodles; nodes never participate in this gesture. */
@@ -37,6 +38,8 @@ export function EdgeHookSelection({ canvas, disabled }: { canvas: RefObject<HTML
   useEffect(() => {
     if (disabled) { setHeld(false); finish.current(true); return; }
     const down = (event: KeyboardEvent) => {
+      // The canvas is hidden behind the Assets view
+      if (useAssetStore.getState().appView !== "canvas") return;
       if (event.key === "Escape") { finish.current(true); setHeld(false); return; }
       if (event.key.toLowerCase() !== "h" || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"], .nokey')) return;

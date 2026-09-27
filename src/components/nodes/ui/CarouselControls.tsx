@@ -2,6 +2,7 @@
 
 import React from "react";
 import { cn } from "./cn";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 interface CarouselControlsProps {
   index: number;
@@ -46,6 +47,8 @@ export function CarouselControls({
   className,
 }: CarouselControlsProps) {
   if (count <= 1) return null;
+  // Below 0: the node shows an output that is not in the list, so no item is current
+  const current = index >= 0;
   const safeIndex = Math.min(Math.max(index, 0), count - 1);
   const window = dotWindow(safeIndex, count);
 
@@ -59,14 +62,14 @@ export function CarouselControls({
               key={i}
               className={cn(
                 "block rounded-full transition-colors",
-                i === safeIndex ? "w-[5px] h-[5px] bg-neutral-300" : "w-1 h-1 bg-neutral-600"
+                current && i === safeIndex ? "w-[5px] h-[5px] bg-neutral-300" : "w-1 h-1 bg-neutral-600"
               )}
             />
           ))}
         </div>
       )}
       <span className={cn("text-node text-neutral-400 tabular-nums text-center", compact ? "min-w-[28px]" : "min-w-[32px]")}>
-        {`${safeIndex + 1} / ${count}`}
+        {`${current ? safeIndex + 1 : "–"} / ${count}`}
       </span>
       <NavButton title={`Next ${noun}`} onClick={onNext} disabled={loading} dir="next" />
     </div>
@@ -93,9 +96,7 @@ function NavButton({
       aria-label={title}
       className="w-5 h-5 rounded-[6px] squircle flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
     >
-      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-        <path strokeLinecap="round" strokeLinejoin="round" d={dir === "prev" ? "M15 19l-7-7 7-7" : "M9 5l7 7-7 7"} />
-      </svg>
+      {dir === "prev" ? <ChevronLeft size={12} strokeWidth={2} /> : <ChevronRight size={12} strokeWidth={2} />}
     </button>
   );
 }

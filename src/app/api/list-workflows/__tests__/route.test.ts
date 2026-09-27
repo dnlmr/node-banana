@@ -20,6 +20,9 @@ vi.mock("@/utils/pathValidation", () => ({
   },
 }));
 
+// The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
+
 import { GET } from "../route";
 
 function createRequest(path?: string): NextRequest {

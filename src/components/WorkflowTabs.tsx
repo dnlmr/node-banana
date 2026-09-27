@@ -1,10 +1,22 @@
 "use client";
 
+import { LibraryBig, Plus, X } from "lucide-react";
 import { useEffect, useMemo, type MouseEvent } from "react";
 import { useOnViewportChange, useReactFlow } from "@xyflow/react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
 import { useShallow } from "zustand/shallow";
 import { summarizeWorkflowTabs } from "@/store/utils/workflowTabs";
+
+/** The shown tab's shape: hanging over the frame's top border, outlined on three sides. */
+const SHOWN_TAB_SHAPE =
+  "-mb-0.5 h-[32px] text-neutral-100 shadow-[inset_1px_0_0_rgba(64,64,64,0.6),inset_-1px_0_0_rgba(64,64,64,0.6),inset_0_1px_0_rgba(64,64,64,0.6)]";
+
+/** The shown tab: canvas-coloured, so it reads as part of the canvas. */
+const SHOWN_TAB_CLASS = `${SHOWN_TAB_SHAPE} bg-canvas-bg`;
+
+/** The shown Assets entry: the colour of the Assets rail it sits over. */
+const SHOWN_ASSETS_CLASS = `${SHOWN_TAB_SHAPE} bg-pane`;
 
 /**
  * Open workflows as browser-style tabs across the top of the window. The bar
@@ -13,8 +25,17 @@ import { summarizeWorkflowTabs } from "@/store/utils/workflowTabs";
  * Switching and closing are blocked while a run, a save or a media write is
  * in flight, because the store holds only the live workflow's execution state.
  * Each tab also remembers its pan and zoom.
+ *
+ * The Assets entry leads the strip, as an icon until Assets is shown, when
+ * it takes its label. It is a toggle button, not a tab (it is
+ * a view over every workflow, not one of them), and takes the shown-tab look
+ * while the Assets view is up. That look is styling only: which workflow
+ * tab is live, and what the busy state blocks, never changes with it. Any
+ * workflow tab, the plus and closing a tab all go back to the canvas.
  */
 export function WorkflowTabs() {
+  const assetsShown = useAssetStore((state) => state.appView === "assets");
+  const setAppView = useAssetStore((state) => state.setAppView);
   const {
     tabs,
     activeTabId,
@@ -69,7 +90,11 @@ export function WorkflowTabs() {
     if (busy) return;
     if (unsaved && !window.confirm(`Close ${name ?? "Untitled"} and discard its unsaved changes?`)) return;
     closeTab(id);
+    setAppView("canvas");
   };
+
+  // The live tab looks shown only while the canvas is what is shown
+  const shownIndex = assetsShown ? -1 : summaries.findIndex((tab) => tab.isActive);
 
   return (
     <div
@@ -80,9 +105,32 @@ export function WorkflowTabs() {
       // fixed (modals, menus) still stacks above
       className="workflow-tabs relative z-[1] flex h-[38px] min-w-0 shrink-0 items-end bg-[#0f0f0f] pl-3 pr-2"
     >
+      <button
+        type="button"
+        aria-pressed={assetsShown}
+        onClick={() => setAppView(assetsShown ? "canvas" : "assets")}
+        aria-label="Assets"
+        title={assetsShown ? "Back to the canvas (A)" : "Assets (A)"}
+        className={`relative flex h-[30px] shrink-0 items-center gap-1.5 rounded-t-lg text-xs whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+          assetsShown ? `${SHOWN_ASSETS_CLASS} px-3` : "w-[34px] justify-center text-neutral-400 hover:bg-white/[0.04] hover:text-neutral-200"
+        }`}
+      >
+        {assetsShown && (
+          <>
+            <TabEar side="left" fill="var(--color-pane)" />
+            <TabEar side="right" fill="var(--color-pane)" />
+          </>
+        )}
+        <LibraryBig size={14} strokeWidth={1.75} />
+        {/* Closed, the entry is just its icon; the label shows while Assets is up */}
+        {assetsShown && "Assets"}
+      </button>
       {summaries.map((tab, index) => {
         const name = tab.name ?? "Untitled";
-        const previousActive = index > 0 && summaries[index - 1].isActive;
+        const shown = index === shownIndex;
+        // The entry before this one: the previous tab, or the Assets button.
+        // The first tab never draws a hairline: nothing divides it from the Assets icon.
+        const previousShown = index > 0 ? index - 1 === shownIndex : assetsShown;
         return (
           <div
             key={tab.id}
@@ -94,25 +142,28 @@ export function WorkflowTabs() {
               if (event.button === 1) handleClose(tab.id, tab.name, tab.hasUnsavedChanges);
             }}
             className={`group relative flex h-[30px] min-w-[72px] max-w-[220px] shrink items-center rounded-t-lg pl-3 pr-2 text-xs whitespace-nowrap ${
-              tab.isActive
-                ? "-mb-0.5 h-[32px] bg-canvas-bg text-neutral-100 shadow-[inset_1px_0_0_rgba(64,64,64,0.6),inset_-1px_0_0_rgba(64,64,64,0.6),inset_0_1px_0_rgba(64,64,64,0.6)]"
-                : `text-neutral-400 ${busy ? "opacity-60" : "hover:bg-white/[0.04] hover:text-neutral-200"}`
+              shown
+                ? SHOWN_TAB_CLASS
+                : `text-neutral-400 ${busy && !tab.isActive ? "opacity-60" : "hover:bg-white/[0.04] hover:text-neutral-200"}`
             }`}
           >
-            {/* The active tab flows into the canvas frame: concave corners at its feet */}
-            {tab.isActive && (
+            {/* The shown tab flows into the canvas frame: concave corners at its feet */}
+            {shown && (
               <>
                 <TabEar side="left" />
                 <TabEar side="right" />
               </>
             )}
-            {/* Hairline between two inactive neighbours */}
-            {index > 0 && !tab.isActive && !previousActive && (
+            {/* Hairline between two neighbours neither of which is shown */}
+            {!shown && !previousShown && index > 0 && (
               <span aria-hidden className="absolute top-[7px] bottom-[7px] -left-px w-px bg-neutral-800" />
             )}
             <button
               type="button"
-              onClick={() => !tab.isActive && switchTab(tab.id)}
+              onClick={() => {
+                setAppView("canvas");
+                if (!tab.isActive) switchTab(tab.id);
+              }}
               disabled={busy && !tab.isActive}
               // The label always leaves room for the slot on its right, so the
               // close button and the unsaved dot never move the text
@@ -137,14 +188,12 @@ export function WorkflowTabs() {
                 aria-label={`Close ${name}`}
                 title={busy ? busyReason : "Close tab"}
                 className={`h-4 w-4 items-center justify-center rounded text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed ${
-                  tab.hasUnsavedChanges || !tab.isActive
+                  tab.hasUnsavedChanges || !shown
                     ? "hidden group-hover:flex group-focus-within:flex"
                     : "flex"
                 }`}
               >
-                <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" d="M6 6l12 12M18 6L6 18" />
-                </svg>
+                <X size={10} strokeWidth={2.5} />
               </button>
             </span>
           </div>
@@ -152,15 +201,16 @@ export function WorkflowTabs() {
       })}
       <button
         type="button"
-        onClick={() => newTab()}
+        onClick={() => {
+          setAppView("canvas");
+          newTab();
+        }}
         disabled={busy}
         aria-label="New tab"
         title={busy ? busyReason : "New tab"}
         className="mb-px ml-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-white/[0.06] hover:text-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.25}>
-          <path strokeLinecap="round" d="M12 5v14M5 12h14" />
-        </svg>
+        <Plus size={14} strokeWidth={2.25} />
       </button>
     </div>
   );
@@ -171,7 +221,7 @@ export function WorkflowTabs() {
  * outside the tab's foot on one side. Canvas-coloured, with the frame's border
  * running along its curve, so the tab and the canvas read as one sheet.
  */
-function TabEar({ side }: { side: "left" | "right" }) {
+function TabEar({ side, fill = "var(--color-canvas-bg)" }: { side: "left" | "right"; fill?: string }) {
   return (
     // 9px square, one column into the tab so the curve starts on the tab's own
     // 1px side border and ends on the centre of the frame's top border row.
@@ -183,7 +233,7 @@ function TabEar({ side }: { side: "left" | "right" }) {
       viewBox="0 0 9 9"
       fill="none"
     >
-      <path d="M8.5 0 A8 8.5 0 0 1 0.5 8.5 L0.5 9 L9 9 L9 0 Z" fill="var(--color-canvas-bg)" />
+      <path d="M8.5 0 A8 8.5 0 0 1 0.5 8.5 L0.5 9 L9 9 L9 0 Z" fill={fill} />
       <path d="M8.5 0 A8 8.5 0 0 1 0.5 8.5" stroke="var(--color-card-border)" strokeWidth="1" />
     </svg>
   );

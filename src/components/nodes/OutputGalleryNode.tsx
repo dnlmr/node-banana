@@ -11,6 +11,7 @@ import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
 import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { downloadMedia as downloadMediaUtil } from "@/utils/downloadMedia";
+import { ChevronLeft, ChevronRight, Download, Menu, Play, Trash2, X } from "lucide-react";
 
 const INPUT_SOCKETS: SocketSpec[] = [
   { id: "image", type: "image", label: "Image" },
@@ -335,9 +336,7 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
                     className="nodrag nopan flex items-center gap-1 h-5 px-1.5 text-node text-neutral-400 hover:text-white hover:bg-neutral-700 rounded-[6px] squircle transition-colors"
                     title="Extract each item as an input node"
                   >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                    </svg>
+                    <Menu size={12} strokeWidth={2} />
                     Extract
                   </button>
                 ),
@@ -371,9 +370,7 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
                       )}
                       {/* Video play icon overlay */}
                       <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                        <svg className="w-5 h-5 text-white drop-shadow" fill="currentColor" viewBox="0 0 24 24" aria-hidden>
-                          <path d="M8 5v14l11-7z" />
-                        </svg>
+                        <Play size={20} strokeWidth={0} fill="currentColor" className="text-white drop-shadow" />
                       </div>
                     </>
                   ) : (
@@ -404,9 +401,7 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
                 onClick={closeLightbox}
                 className="absolute top-4 right-4 w-8 h-8 bg-white/10 hover:bg-white/20 rounded text-white text-sm transition-colors flex items-center justify-center"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X size={16} strokeWidth={2} />
               </button>
 
               {/* Download + Remove buttons */}
@@ -415,18 +410,14 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
                   onClick={downloadMedia}
                   className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-white text-xs font-medium transition-colors flex items-center gap-1.5"
                 >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                  </svg>
+                  <Download size={14} strokeWidth={2} />
                   Download
                 </button>
                 <button
                   onClick={() => removeMedia(lightboxIndex)}
                   className="px-3 py-1.5 bg-white/10 hover:bg-red-600/80 rounded text-white text-xs font-medium transition-colors flex items-center gap-1.5"
                 >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                  </svg>
+                  <Trash2 size={14} strokeWidth={2} />
                   Remove
                 </button>
               </div>
@@ -437,9 +428,7 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
                   onClick={() => navigateLightbox("prev")}
                   className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors flex items-center justify-center"
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                  </svg>
+                  <ChevronLeft size={20} strokeWidth={2} />
                 </button>
               )}
 
@@ -449,9 +438,7 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
                   onClick={() => navigateLightbox("next")}
                   className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors flex items-center justify-center"
                 >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
+                  <ChevronRight size={20} strokeWidth={2} />
                 </button>
               )}
 

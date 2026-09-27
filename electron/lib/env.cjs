@@ -12,6 +12,8 @@ const hostEnvironmentKeys = [
   ...(process.platform === 'win32' ? [
     'SystemRoot', 'windir', 'SystemDrive', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'USERNAME',
     'HOMEDRIVE', 'HOMEPATH', 'COMSPEC', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS',
+    // OneDrive's roots, so the asset library can tell when it sits in a synced folder.
+    'OneDrive', 'OneDriveConsumer', 'OneDriveCommercial',
   ] : []),
 ];
 function pickHostEnvironment(extra = [], source = process.env) {

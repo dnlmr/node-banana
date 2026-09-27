@@ -15,6 +15,25 @@ import {
   CHROME_SURFACE,
 } from "./chromeStyles";
 import { KbdGroup } from "@/components/ui/Kbd";
+import {
+  AlignLeft,
+  Box,
+  ChevronDown,
+  ChevronUp,
+  ChevronsRight,
+  Eye,
+  EyeOff,
+  FastForward,
+  Image,
+  LoaderCircle,
+  MessageSquareText,
+  Play,
+  Shapes,
+  Sparkles,
+  SquareArrowOutUpRight,
+  Video,
+  type LucideProps,
+} from "lucide-react";
 
 /** The action-bar button cycles curved → angular → straight → curved. */
 const NEXT_EDGE_STYLE: Record<EdgeStyle, EdgeStyle> = { curved: "angular", angular: "straight", straight: "curved" };
@@ -91,74 +110,29 @@ function getPaneCenter() {
   return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 }
 
-// ---- Icons: 16px, 1.5 stroke, one style throughout ------------------------------
+// ---- Icons: Lucide at 20px, 1.5 stroke, one style throughout ------------------
 
-const ICON = "h-5 w-5";
-const iconProps = { fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round", viewBox: "0 0 24 24", "aria-hidden": true } as const;
+const ICON: LucideProps = { size: 20, strokeWidth: 1.5 };
+/** Menu rows run a size down. */
+const MENU_ICON: LucideProps = { size: 14, strokeWidth: 2 };
 
-const ImageIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <rect x="3" y="5" width="18" height="14" rx="2.5" />
-    <path d="M3 16l5-5 4 4 3-3 6 6" />
-    <circle cx="16" cy="9" r="1.25" fill="currentColor" stroke="none" />
-  </svg>
-);
-const VideoIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <rect x="3" y="7" width="13" height="10" rx="2.5" />
-    <path d="M16 11l5-3v8l-5-3" />
-  </svg>
-);
-const PromptIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <path d="M4 6h16M4 12h10M4 18h7" />
-  </svg>
-);
-const SparkleIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />
-    <path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z" />
-  </svg>
-);
-const OutputIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <path d="M14 4h6v6M20 4l-8 8M11 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-5" />
-  </svg>
-);
-const GridIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <rect x="4" y="4" width="6" height="6" rx="1.5" />
-    <rect x="14" y="4" width="6" height="6" rx="1.5" />
-    <rect x="4" y="14" width="6" height="6" rx="1.5" />
-    <rect x="14" y="14" width="6" height="6" rx="1.5" />
-  </svg>
-);
-const CubeIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <path d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
-  </svg>
-);
-const LlmIcon = () => (
-  <svg className={ICON} {...iconProps}>
-    <path d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-  </svg>
-);
+const ImageIcon = () => <Image {...ICON} />;
+const VideoIcon = () => <Video {...ICON} />;
+const PromptIcon = () => <AlignLeft {...ICON} />;
+const SparkleIcon = () => <Sparkles {...ICON} />;
+const OutputIcon = () => <SquareArrowOutUpRight {...ICON} />;
+/** All nodes: one of every kind. */
+const NodesIcon = () => <Shapes {...ICON} />;
+/** All models: a box of models. The 3D item in the Generate menu uses the same cube. */
+const ModelsIcon = () => <Box {...ICON} />;
+/** 3D generation. */
+const CubeIcon = () => <Box {...ICON} />;
+const LlmIcon = () => <MessageSquareText {...ICON} />;
 const CaretUpIcon = ({ open = false }: { open?: boolean }) => (
-  <svg className={`h-3 w-3 transition-transform duration-[120ms] ${open ? "rotate-180" : ""}`} {...iconProps} strokeWidth={2.25}>
-    <path d="M5 15l7-7 7 7" />
-  </svg>
+  <ChevronUp size={12} strokeWidth={2.25} className={`transition-transform duration-[120ms] ${open ? "rotate-180" : ""}`} />
 );
-const PlayIcon = () => (
-  <svg className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M8 5v14l11-7z" />
-  </svg>
-);
-const SpinnerIcon = () => (
-  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" opacity="0.25" />
-    <path d="M12 3a9 9 0 019 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-  </svg>
-);
+const PlayIcon = () => <Play size={18} strokeWidth={0} fill="currentColor" />;
+const SpinnerIcon = () => <LoaderCircle size={16} strokeWidth={3} className="animate-spin" />;
 
 // ---- Primitives -------------------------------------------------------------------
 
@@ -305,7 +279,7 @@ function AllNodesMenu() {
         aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
       >
-        <GridIcon />
+        <NodesIcon />
       </IconButton>
 
       {isOpen && (
@@ -340,39 +314,17 @@ function AllNodesMenu() {
   );
 }
 
+/** A diagram of the connector style rather than a symbol, so it stays hand-drawn. */
 function EdgeStyleIcon({ style }: { style: EdgeStyle }) {
-  if (style === "angular") {
-    return (
-      <svg className={ICON} {...iconProps} strokeWidth={1.75}>
-        <path d="M4 12h4l4-8 4 8h4" />
-      </svg>
-    );
-  }
-  if (style === "straight") {
-    return (
-      <svg className={ICON} {...iconProps} strokeWidth={1.75}>
-        <path d="M4 16L20 8" />
-      </svg>
-    );
-  }
+  const d = style === "angular" ? "M4 12h4l4-8 4 8h4" : style === "straight" ? "M4 16L20 8" : "M4 17c0 0 4-10 8-10s8 10 8 10";
   return (
-    <svg className={ICON} {...iconProps} strokeWidth={1.75}>
-      <path d="M4 17c0 0 4-10 8-10s8 10 8 10" />
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
     </svg>
   );
 }
 
-const EyeIcon = ({ off = false }: { off?: boolean }) =>
-  off ? (
-    <svg className={ICON} {...iconProps} strokeWidth={1.75}>
-      <path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A9.8 9.8 0 0112 5c4.5 0 8.3 2.9 9.6 7a10 10 0 01-2.2 3.6M6.6 6.6A10 10 0 002.4 12c1.3 4.1 5.1 7 9.6 7 1.4 0 2.8-.3 4-.8" />
-    </svg>
-  ) : (
-    <svg className={ICON} {...iconProps} strokeWidth={1.75}>
-      <path d="M2.4 12C3.7 7.9 7.5 5 12 5s8.3 2.9 9.6 7c-1.3 4.1-5.1 7-9.6 7s-8.3-2.9-9.6-7z" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
+const EyeIcon = ({ off = false }: { off?: boolean }) => (off ? <EyeOff {...ICON} /> : <Eye {...ICON} />);
 
 export function FloatingActionBar() {
   const {
@@ -562,7 +514,7 @@ export function FloatingActionBar() {
 
         <AllNodesMenu />
         <IconButton label="All models" onClick={() => setModelSearchOpen(true)}>
-          <CubeIcon />
+          <ModelsIcon />
         </IconButton>
 
         <Divider />
@@ -627,9 +579,7 @@ export function FloatingActionBar() {
                 title="Run options"
                 className={`flex w-7 items-center justify-center border-l border-black/10 transition-colors duration-[120ms] focus-visible:outline-none ${runMenuOpen ? "bg-neutral-200" : ""}`}
               >
-                <svg className={`h-3 w-3 transition-transform duration-[120ms] ${runMenuOpen ? "rotate-180" : ""}`} {...iconProps} strokeWidth={2.5}>
-                  <path d="M19 9l-7 7-7-7" />
-                </svg>
+                <ChevronDown size={12} strokeWidth={2.5} className={`transition-transform duration-[120ms] ${runMenuOpen ? "rotate-180" : ""}`} />
               </button>
             )}
           </div>
@@ -654,9 +604,7 @@ export function FloatingActionBar() {
                 disabled={!selectedNodeId}
                 title={!selectedNodeId ? "Select a single node first" : undefined}
               >
-                <svg className="h-3.5 w-3.5" {...iconProps} strokeWidth={2}>
-                  <path d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-                </svg>
+                <ChevronsRight {...MENU_ICON} />
                 Run from selected node
               </MenuItem>
               <MenuItem
@@ -665,9 +613,7 @@ export function FloatingActionBar() {
                 disabled={!selectedNodeId}
                 title={!selectedNodeId ? "Select a single node first" : undefined}
               >
-                <svg className="h-3.5 w-3.5" {...iconProps} strokeWidth={2}>
-                  <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
-                </svg>
+                <Play {...MENU_ICON} />
                 Run selected node only
               </MenuItem>
               <MenuItem
@@ -676,10 +622,7 @@ export function FloatingActionBar() {
                 disabled={selectedNodeIds.length === 0}
                 title={selectedNodeIds.length === 0 ? "Select one or more nodes first" : `Run ${selectedNodeIds.length} selected node${selectedNodeIds.length > 1 ? 's' : ''}`}
               >
-                <svg className="h-3.5 w-3.5" {...iconProps} strokeWidth={2}>
-                  <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
-                  <path d="M9.75 9.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V9.653z" />
-                </svg>
+                <FastForward {...MENU_ICON} />
                 {selectedNodeIds.length > 0
                   ? `Run ${selectedNodeIds.length} selected node${selectedNodeIds.length !== 1 ? 's' : ''}`
                   : 'Run selected nodes'}

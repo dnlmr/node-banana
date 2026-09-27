@@ -5,6 +5,7 @@ import { TEMPLATE_NODE_CATALOG } from "@/components/splitgrid/templateCatalog";
 import type { SplitGridNodeData } from "@/types";
 import type { FinalConnectionState } from "@xyflow/react";
 import type { ProviderModel } from "@/lib/providers/types";
+import { pickOption } from "@/test/dropdown";
 
 vi.mock("@/components/modals/ModelSearchDialog", () => ({
   ModelSearchDialog: ({ initialCapabilityFilter, onModelSelected }: {
@@ -223,7 +224,7 @@ describe("SplitGridTemplateModal", () => {
       expect(screen.getByText("Run to generate video")).toBeInTheDocument();
       fireEvent.click(screen.getByText("Browse"));
       fireEvent.click(screen.getByText("Choose video model"));
-      fireEvent.change(await screen.findByLabelText("Duration"), { target: { value: "10" } });
+      pickOption(await screen.findByLabelText("Duration"), "10");
       fireEvent.contextMenu(document.querySelector(".react-flow__pane")!);
       fireEvent.click(screen.getByRole("button", { name: "Prompt" }));
       const nodes = reactFlowCapture.props!.nodes as Array<{ id: string; data: { nodeType: string } }>;
@@ -309,8 +310,8 @@ describe("SplitGridTemplateModal", () => {
   describe("Apply", () => {
     it.each(["grid", "vertical", "horizontal"] as const)("applies the %s cell layout", (layout) => {
       renderModal();
-      expect(screen.getByRole("combobox", { name: "Cell layout" })).toHaveValue("grid");
-      fireEvent.change(screen.getByRole("combobox", { name: "Cell layout" }), { target: { value: layout } });
+      expect(screen.getByRole("combobox", { name: "Cell layout" })).toHaveAttribute("data-value", "grid");
+      pickOption(screen.getByRole("combobox", { name: "Cell layout" }), layout);
       fireEvent.click(screen.getByRole("button", { name: "Apply to 6 cells" }));
       const template = mockMaterializeSplitGridCells.mock.calls[0][1].template;
       expect(template.layout ?? "grid").toBe(layout);
@@ -321,7 +322,7 @@ describe("SplitGridTemplateModal", () => {
         baseNodeId: "cell-image", layout: "vertical",
         nodes: [{ id: "cell-image", type: "imageInput", position: { x: 0, y: 0 } }], edges: [],
       } } });
-      expect(screen.getByRole("combobox", { name: "Cell layout" })).toHaveValue("vertical");
+      expect(screen.getByRole("combobox", { name: "Cell layout" })).toHaveAttribute("data-value", "vertical");
       fireEvent.click(screen.getByRole("button", { name: "Prompt + Generate" }));
       fireEvent.click(screen.getByRole("button", { name: "Apply to 6 cells" }));
       expect(mockMaterializeSplitGridCells.mock.calls[0][1].template.layout).toBe("vertical");
@@ -329,7 +330,7 @@ describe("SplitGridTemplateModal", () => {
 
     it("treats a layout change as an unsaved edit", () => {
       const { onClose } = renderModal();
-      fireEvent.change(screen.getByRole("combobox", { name: "Cell layout" }), { target: { value: "horizontal" } });
+      pickOption(screen.getByRole("combobox", { name: "Cell layout" }), "horizontal");
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(screen.getByText("Discard changes?")).toBeInTheDocument();
       expect(onClose).not.toHaveBeenCalled();

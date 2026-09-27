@@ -2,6 +2,7 @@
 
 import { Dialog, DialogBody, DialogHeader, DialogSectionHeader, DialogTitle } from "@/components/ui/Dialog";
 import { KbdGroup } from "@/components/ui/Kbd";
+import { useAssetStore } from "@/store/assetStore";
 
 interface ShortcutItem {
   keys: string[];
@@ -63,12 +64,37 @@ const shortcutGroups: ShortcutGroup[] = [
   },
 ];
 
+/** Switching views: bare A, outside the Shift+letter namespace that adds nodes. */
+const viewGroup: ShortcutGroup = {
+  title: "Views",
+  shortcuts: [{ keys: ["A"], description: "Show or hide Assets" }],
+};
+
+const assetsGroup: ShortcutGroup = {
+  title: "Assets",
+  shortcuts: [
+    { keys: ["←", "→", "↑", "↓"], description: "Move between assets" },
+    { keys: ["Enter"], description: "Open the asset" },
+    { keys: ["←", "→"], description: "Previous / next asset (open)" },
+    { keys: ["Space"], description: "Select the asset" },
+    { keys: [`${modKey}`, "A"], description: "Select all loaded assets" },
+    { keys: ["Delete"], description: "Trash the selected assets" },
+    { keys: [`${modKey}`, "Z"], description: "Undo the last asset action" },
+    { keys: [`${modKey}`, "C"], description: "Copy the prompt (open)" },
+    { keys: ["F"], description: "Full screen (open)" },
+    { keys: ["Esc"], description: "Close, clear selection, back to canvas" },
+  ],
+};
+
 interface KeyboardShortcutsDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
 export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDialogProps) {
+  // Opened from the Assets view (?), its keys come first
+  const inAssets = useAssetStore((state) => state.appView === "assets");
+  const groups = inAssets ? [viewGroup, assetsGroup, ...shortcutGroups] : [...shortcutGroups, viewGroup, assetsGroup];
   return (
     <Dialog open={isOpen} onClose={onClose} className="w-[520px] max-h-[80vh]">
       <DialogHeader>
@@ -76,7 +102,7 @@ export function KeyboardShortcutsDialog({ isOpen, onClose }: KeyboardShortcutsDi
       </DialogHeader>
 
       <DialogBody className="pb-4 space-y-4">
-          {shortcutGroups.map((group) => (
+          {groups.map((group) => (
             <div key={group.title}>
               <DialogSectionHeader className="mb-2">{group.title}</DialogSectionHeader>
               <div className="space-y-0.5">

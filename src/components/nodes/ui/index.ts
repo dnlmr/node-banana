@@ -19,8 +19,9 @@ export {
   ellipsisClass,
 } from "./Field";
 export type { SelectOption, ChipOption } from "./Field";
-export { ControlsCard, SummaryValues } from "./ControlsCard";
-export type { ControlsCardProps, SummaryRowProps } from "./ControlsCard";
+export { ControlsCard, SummaryValues, ControlsSizingContext, autoControlsWidth } from "./ControlsCard";
+export type { ControlsCardProps, SummaryRowProps, ControlsSizing } from "./ControlsCard";
+export { WidthGrip } from "./WidthGrip";
 export { CarouselControls, dotWindow } from "./CarouselControls";
 export { ScrubRow, formatTime } from "./ScrubRow";
 export { Spinner, LoadingOverlay } from "./Spinner";
@@ -31,4 +32,6 @@ export type { SocketSpec, SocketType, SocketOutline } from "./Socket";
 export { schemaSockets, sameInputSchema } from "./schemaSockets";
 export type { SchemaSocketOptions } from "./schemaSockets";
 export { HeightGrip } from "./HeightGrip";
+export { Dropdown } from "./Dropdown";
+export type { DropdownOption, DropdownProps, DropdownSize } from "./Dropdown";
 export { LogicRows, LogicRow } from "./LogicRows";

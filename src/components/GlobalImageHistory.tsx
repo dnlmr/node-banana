@@ -1,8 +1,11 @@
 "use client";
 
+import { Images, LayoutGrid, LibraryBig, X } from "lucide-react";
 import { memo, useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
+import { getRecorderLibraryStatus } from "@/lib/assets/client/recorder";
 import { ImageHistoryItem } from "@/types";
 import { ChromeIconButton } from "./ChromeIconButton";
 import { CHROME_SURFACE } from "./chromeStyles";
@@ -76,30 +79,11 @@ export function formatRelativeTime(timestamp: number): string {
 }
 
 const ImagesIcon = () => (
-  <svg
-    className="h-[18px] w-[18px]"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={1.75}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <rect x="7" y="3" width="14" height="14" rx="2" />
-    <path d="M17 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2" />
-    <circle cx="11.5" cy="7.5" r="1.25" />
-    <path d="m21 14-3.3-3.3a1.5 1.5 0 0 0-2.1 0L10 16" />
-  </svg>
+  <Images size={18} strokeWidth={1.75} />
 );
 
 const GridIcon = () => (
-  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="4" y="4" width="6" height="6" rx="1.5" />
-    <rect x="14" y="4" width="6" height="6" rx="1.5" />
-    <rect x="4" y="14" width="6" height="6" rx="1.5" />
-    <rect x="14" y="14" width="6" height="6" rx="1.5" />
-  </svg>
+  <LayoutGrid size={14} strokeWidth={1.75} />
 );
 
 /** One thumbnail in the drop-down grid. */
@@ -200,19 +184,17 @@ function HistorySidebar({
         <div className="flex items-center gap-2">
           <button
             onClick={onClear}
-            className="text-[10px] text-neutral-500 transition-colors hover:text-red-400"
-            title="Clear all history"
+            className="text-[10px] text-neutral-500 transition-colors hover:text-neutral-200"
+            title="Files stay in Assets"
           >
-            Clear All
+            Clear list
           </button>
           <button
             onClick={onClose}
             className="flex h-5 w-5 items-center justify-center rounded text-neutral-400 transition-colors hover:bg-white/7 hover:text-white"
             title="Close"
           >
-            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={12} strokeWidth={2} />
           </button>
         </div>
       </div>
@@ -273,6 +255,14 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
 
   const history = useWorkflowStore((state) => state.globalImageHistory);
   const clearGlobalHistory = useWorkflowStore((state) => state.clearGlobalHistory);
+  const appView = useAssetStore((state) => state.appView);
+  const setAppView = useAssetStore((state) => state.setAppView);
+
+  // Nothing of this stays open over the Assets view (the sidebar is portaled above it)
+  useEffect(() => {
+    setIsOpen(false);
+    setShowSidebar(false);
+  }, [appView]);
 
   // Notifications hang beneath this button (Toast.tsx); tell them where it went.
   useEffect(() => {
@@ -329,10 +319,21 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
     }, 0);
   }, []);
 
-  const handleShowAll = useCallback(() => {
+  const openAssets = useCallback(() => {
     setIsOpen(false);
-    setShowSidebar(true);
-  }, []);
+    setAppView("assets");
+  }, [setAppView]);
+
+  // Everything lives in Assets; this tab's list is only a recent slice of it.
+  // Without a library (a hosted server) the list itself is all there is.
+  const handleShowAll = useCallback(() => {
+    if (getRecorderLibraryStatus()?.available === false) {
+      setIsOpen(false);
+      setShowSidebar(true);
+    } else {
+      openAssets();
+    }
+  }, [openAssets]);
 
   const handleCloseSidebar = useCallback(() => {
     setShowSidebar(false);
@@ -389,10 +390,10 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
             <button
               type="button"
               onClick={handleClear}
-              className="text-[10px] text-neutral-500 transition-colors hover:text-red-400"
-              title="Clear all history"
+              className="text-[10px] text-neutral-500 transition-colors hover:text-neutral-200"
+              title="Files stay in Assets"
             >
-              Clear
+              Clear list
             </button>
           </div>
           <div className="grid grid-cols-4 gap-1">
@@ -410,6 +411,15 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
               <span>Show all · {history.length}</span>
             </button>
           )}
+          <button
+            type="button"
+            onClick={openAssets}
+            className="flex h-7 items-center justify-center gap-2 rounded-md squircle text-[11px] font-medium text-neutral-400 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
+            title="Every generation, from every workflow (A)"
+          >
+            <LibraryBig size={14} strokeWidth={1.75} />
+            <span>Open Assets</span>
+          </button>
         </div>
       )}
 

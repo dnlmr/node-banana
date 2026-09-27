@@ -4,10 +4,14 @@ import { promisify } from "util";
 import { stat } from "fs/promises";
 import path from "path";
 import os from "os";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 
 const execFileAsync = promisify(execFile);
 
+// Only Node Banana's own page may open a folder on this computer (see guard.ts).
 export async function POST(req: NextRequest) {
+    const refused = guardAssetRequest(req);
+    if (refused) return refused;
     try {
         const body = await req.json();
         const { path: inputPath } = body;

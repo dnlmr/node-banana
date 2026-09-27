@@ -11,6 +11,17 @@ import { pollGenerateTask } from "./pollTaskCompletion";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
+import type { RecordAssetResult } from "@/lib/assets/types";
+import {
+  assetCost,
+  assetModel,
+  assetParameters,
+  assetProducer,
+  recordingResult,
+  recordOutput,
+  resolvedPrompt,
+  withFolderFallback,
+} from "./assetRecording";
 
 export interface Generate3DOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -134,8 +145,21 @@ export async function executeGenerate3D(
       }
 
       if (result.success && result.model3dUrl) {
+        const model3dUrl: string = result.model3dUrl;
+        // The provider's URL expires, so the server downloads it right away
+        const recorded = recordOutput(ctx, {
+          kind: "3d",
+          origin: "generated",
+          media: model3dUrl,
+          prompt: resolvedPrompt(promptText, dynamicInputs),
+          model: assetModel(modelToUse),
+          parameters: assetParameters(requestPayload.parameters),
+          cost: assetCost(modelToUse.pricing?.amount),
+          producer: assetProducer(ctx),
+        });
+
         updateNodeData(node.id, {
-          output3dUrl: result.model3dUrl,
+          output3dUrl: model3dUrl,
           status: "complete",
           error: null,
           savedFilename: null,
@@ -147,31 +171,64 @@ export async function executeGenerate3D(
           addIncurredCost(modelToUse.pricing.amount);
         }
 
-        // Auto-save 3D model to generations folder if configured
-        if (generationsPath) {
-          const savePromise = fetch("/api/save-generation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              directoryPath: generationsPath,
-              model3d: result.model3dUrl,
-              prompt: promptText,
-            }),
-          })
-            .then((res) => res.json())
-            .then((saveResult) => {
-              if (saveResult.success && saveResult.filename) {
-                updateNodeData(node.id, {
-                  savedFilename: saveResult.filename,
-                  savedFilePath: saveResult.filePath,
-                });
-              }
-            })
-            .catch((err) => {
-              console.error("Failed to save 3D model:", err);
-            });
+        // The save to the generations folder: a project's only save without
+        // the asset library, and its fallback when a recording fails
+        const saveToFolder = generationsPath
+          ? () =>
+              fetch("/api/save-generation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  directoryPath: generationsPath,
+                  model3d: model3dUrl,
+                  prompt: promptText,
+                }),
+              })
+                .then((res) => res.json())
+                .then((saveResult) => {
+                  if (saveResult.success && saveResult.filename) {
+                    updateNodeData(node.id, {
+                      savedFilename: saveResult.filename,
+                      savedFilePath: saveResult.filePath,
+                    });
+                  }
+                })
+                .catch((err) => {
+                  console.error("Failed to save 3D model:", err);
+                })
+          : null;
 
-          trackSaveGeneration(`3d-${Date.now()}`, savePromise);
+        if (recorded) {
+          // Point the node at the saved file once it is on disk, unless the
+          // node has moved on to another model (or the canvas to another workflow)
+          const pointAtSaved = (saved: RecordAssetResult | null) => {
+            if (!saved) return;
+            const current = getFreshNode(node.id)?.data as Generate3DNodeData | undefined;
+            if (current?.output3dUrl !== model3dUrl) return;
+            updateNodeData(node.id, {
+              savedFilename: saved.filename,
+              savedFilePath: saved.asset.displayPath,
+            });
+          };
+          if (saveToFolder) {
+            // A project's model lands in its folder whatever the library does,
+            // and whichever wrote the file first points the node at it
+            trackSaveGeneration(
+              `3d-${Date.now()}`,
+              withFolderFallback(recorded, saveToFolder, (saved) => {
+                if (!(getFreshNode(node.id)?.data as Generate3DNodeData | undefined)?.savedFilename) pointAtSaved(saved);
+              })
+            );
+          } else {
+            void recordingResult(recorded)
+              .then(pointAtSaved)
+              .catch((err) => {
+                console.error("Failed to save 3D model:", err);
+              });
+          }
+        } else if (saveToFolder) {
+          // No asset library: auto-save 3D model to the generations folder
+          trackSaveGeneration(`3d-${Date.now()}`, saveToFolder());
         }
       } else {
         updateNodeData(node.id, {

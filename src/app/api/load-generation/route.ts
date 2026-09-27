@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { logger } from "@/utils/logger";
 
 // Supported file extensions
-const SUPPORTED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm', 'mov', 'mp3', 'wav', 'ogg', 'flac', 'aac'];
+const SUPPORTED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'mp4', 'webm', 'mov', 'mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'];
 
 // Video extensions
 const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov'];
 
 // Audio extensions
-const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'aac'];
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'];
 
 // Extension to MIME type mapping
 const EXT_TO_MIME: Record<string, string> = {
@@ -19,6 +20,7 @@ const EXT_TO_MIME: Record<string, string> = {
   jpeg: 'image/jpeg',
   webp: 'image/webp',
   gif: 'image/gif',
+  svg: 'image/svg+xml',
   mp4: 'video/mp4',
   webm: 'video/webm',
   mov: 'video/quicktime',
@@ -27,10 +29,14 @@ const EXT_TO_MIME: Record<string, string> = {
   ogg: 'audio/ogg',
   flac: 'audio/flac',
   aac: 'audio/aac',
+  m4a: 'audio/mp4',
 };
 
-// POST: Load a generated image or video from the generations folder by ID
+// POST: Load a generated image or video from the generations folder by ID.
+// Only Node Banana's own page may ask (see guard.ts).
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let directoryPath: string | undefined;
   let imageId: string | undefined;
   try {

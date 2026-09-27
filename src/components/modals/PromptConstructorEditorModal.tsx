@@ -1,3 +1,5 @@
+import { Dropdown } from "@/components/nodes/ui/Dropdown";
+import { Check, Copy, X } from "lucide-react";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 import { Dialog, DialogButton, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
@@ -140,8 +142,8 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
     onClose();
   }, [template, onSubmit, onClose]);
 
-  const handleFontSizeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setFontSize(parseInt(e.target.value, 10));
+  const handleFontSizeChange = useCallback((next: string) => {
+    setFontSize(parseInt(next, 10));
   }, []);
 
   const handleDismissConfirmation = useCallback(() => {
@@ -203,17 +205,15 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
           {/* Toolbar */}
           <div className="min-h-[40px] bg-canvas-bg border-b border-chrome-border flex items-center px-3 gap-3 shrink-0 flex-wrap py-2">
             {/* Font Size Control */}
-            <select
-              value={fontSize}
+            <Dropdown
+              value={String(fontSize)}
+              options={FONT_SIZE_OPTIONS.map((size) => ({ value: String(size), label: `${size}px` }))}
               onChange={handleFontSizeChange}
-              className="text-xs h-[26px] px-2 border border-chrome-border rounded-md bg-well focus:outline-none focus:ring-1 focus:ring-neutral-600 text-neutral-300"
-            >
-              {FONT_SIZE_OPTIONS.map((size) => (
-                <option key={size} value={size}>
-                  {size}px
-                </option>
-              ))}
-            </select>
+              size="dialog"
+              aria-label="Font size"
+              className="w-[88px]"
+              triggerClassName="h-[26px] w-full px-2 rounded-md border border-chrome-border bg-well text-xs text-neutral-300 text-left flex items-center justify-between gap-2 outline-none focus:ring-1 focus:ring-neutral-600 cursor-pointer"
+            />
 
             {/* Divider */}
             {availableVariables.length > 0 && (
@@ -295,13 +295,9 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
                 } disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400`}
               >
                 {copied ? (
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
+                  <Check size={12} strokeWidth={2} />
                 ) : (
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
+                  <Copy size={12} strokeWidth={2} />
                 )}
                 {copied ? "Copied" : "Copy"}
               </button>
@@ -334,14 +330,7 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
                 className="absolute top-3 right-3 text-neutral-400 hover:text-neutral-200 transition-colors focus:outline-none"
                 aria-label="Close"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
+                <X size={20} strokeWidth={2} />
               </button>
 
               <p className="text-neutral-100 text-[13px] text-center mb-5">You have unsaved changes</p>

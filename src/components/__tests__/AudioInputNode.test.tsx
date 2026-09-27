@@ -332,7 +332,7 @@ describe("AudioInputNode", () => {
       const buttons = container.querySelectorAll("button");
       // Find the remove button (has the X SVG icon, positioned absolute top right)
       const removeButton = Array.from(buttons).find((btn) =>
-        btn.querySelector("path[d*='M6 18L18 6']")
+        btn.querySelector("svg.lucide-x")
       );
       expect(removeButton).toBeTruthy();
 

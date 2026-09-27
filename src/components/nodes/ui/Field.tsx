@@ -2,6 +2,7 @@
 
 import React, { ReactNode, useCallback, useEffect, useId, useState } from "react";
 import { cn } from "./cn";
+import { Dropdown, type DropdownOption } from "./Dropdown";
 
 /**
  * Settings-panel fields. One column, tight density: a 22px row with a 72px
@@ -77,7 +78,7 @@ function useFieldId(id?: string): string {
 
 /* ------------------------------------------------------------------ select */
 
-export type SelectOption = { value: string; label: string; disabled?: boolean };
+export type SelectOption = DropdownOption;
 
 export interface SelectFieldProps {
   label: string;
@@ -131,38 +132,16 @@ export function SelectWell({
   ...rest
 }: Omit<SelectFieldProps, "label" | "hint"> & { className?: string }) {
   return (
-    <div className={cn("relative min-w-0", className)}>
-      <select
-        id={id}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        data-tutorial={rest["data-tutorial"]}
-        className={cn(wellClass, "appearance-none pr-5 cursor-pointer")}
-      >
-        {emptyLabel !== undefined && <option value="">{emptyLabel}</option>}
-        {options.map((opt) => {
-          const o = typeof opt === "string" ? { value: opt, label: opt } : opt;
-          return (
-            <option key={o.value} value={o.value} disabled={o.disabled}>
-              {o.label}
-            </option>
-          );
-        })}
-      </select>
-      <svg
-        className="pointer-events-none absolute right-[6px] top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-neutral-500"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <polyline points="6 9 12 15 18 9" />
-      </svg>
-    </div>
+    <Dropdown
+      id={id}
+      value={value}
+      options={options}
+      onChange={onChange}
+      emptyLabel={emptyLabel}
+      disabled={disabled}
+      className={className}
+      data-tutorial={rest["data-tutorial"]}
+    />
   );
 }
 

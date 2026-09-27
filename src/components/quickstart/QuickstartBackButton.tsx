@@ -1,5 +1,6 @@
 "use client";
 
+import { ArrowLeft } from "lucide-react";
 import { cn } from "@/components/nodes/ui/cn";
 
 interface QuickstartBackButtonProps {
@@ -29,18 +30,7 @@ export function QuickstartBackButton({
         className
       )}
     >
-      <svg
-        className="w-3.5 h-3.5 shrink-0"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.75}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M19 12H5M11 18l-6-6 6-6" />
-      </svg>
+      <ArrowLeft size={14} strokeWidth={1.75} className="shrink-0" />
       <span>Back</span>
     </button>
   );

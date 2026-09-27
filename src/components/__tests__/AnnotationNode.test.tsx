@@ -307,7 +307,7 @@ describe("AnnotationNode", () => {
       );
 
       // The remove button has an X SVG icon
-      const removeButton = container.querySelector('button svg path[d*="M6 18"]');
+      const removeButton = container.querySelector('button svg.lucide-x');
       expect(removeButton).toBeInTheDocument();
     });
 
@@ -327,7 +327,7 @@ describe("AnnotationNode", () => {
       const buttons = container.querySelectorAll('button');
       // The remove button is the one with the X icon SVG
       const removeButton = Array.from(buttons).find((btn) =>
-        btn.querySelector('svg path[d*="M6 18"]')
+        btn.querySelector('svg.lucide-x')
       );
       expect(removeButton).toBeInTheDocument();
 

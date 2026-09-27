@@ -7,7 +7,7 @@ import { WorkflowFile } from "@/store/workflowStore";
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
-// Mock WorkflowBrowserView (Load workflow now navigates to this view)
+// Mock WorkflowBrowserView (Open project navigates to this view)
 vi.mock("@/components/quickstart/WorkflowBrowserView", () => ({
   WorkflowBrowserView: ({
     onBack,
@@ -26,6 +26,20 @@ vi.mock("@/components/quickstart/WorkflowBrowserView", () => ({
       <button data-testid="close-browser-btn" onClick={onClose}>
         Close
       </button>
+    </div>
+  ),
+}));
+
+const mockFetchProjects = vi.fn();
+vi.mock("@/lib/assets/client/api", () => ({
+  fetchProjects: (...args: unknown[]) => mockFetchProjects(...args),
+}));
+
+vi.mock("@/components/quickstart/BringInView", () => ({
+  BringInView: ({ onBack, onClose, onDone }: { onBack?: () => void; onClose: () => void; onDone: () => void }) => (
+    <div data-testid="bring-in-view">
+      <button onClick={onBack ?? onClose}>Leave bring-in</button>
+      <button onClick={onDone}>Brought in</button>
     </div>
   ),
 }));
@@ -61,6 +75,7 @@ describe("WelcomeModal", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetchProjects.mockResolvedValue({ root: "/Users/ada/Documents/Node Banana", projects: [{ dir: "/x" }], elsewhere: null, offerDismissed: false });
     // Setup default fetch mock for community workflows
     mockFetch.mockImplementation((url: string) => {
       if (url === "/api/community-workflows") {
@@ -144,7 +159,7 @@ describe("WelcomeModal", () => {
 
       await waitFor(() => {
         expect(screen.getByRole("heading", { name: "Templates" })).toBeInTheDocument();
-        expect(screen.getByText("Quick Start")).toBeInTheDocument();
+        expect(screen.getByText(/^1 template$/)).toBeInTheDocument();
       });
     });
 
@@ -196,7 +211,7 @@ describe("WelcomeModal", () => {
   });
 
   describe("Load Workflow via Browser View", () => {
-    it("should show WorkflowBrowserView when 'Load workflow' is clicked", () => {
+    it("should show WorkflowBrowserView when 'Open project' is clicked", () => {
       render(
         <WelcomeModal
           onWorkflowGenerated={mockOnWorkflowGenerated}
@@ -206,7 +221,7 @@ describe("WelcomeModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Load workflow"));
+      fireEvent.click(screen.getByText("Open project"));
 
       expect(screen.getByTestId("workflow-browser-view")).toBeInTheDocument();
     });
@@ -221,7 +236,7 @@ describe("WelcomeModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Load workflow"));
+      fireEvent.click(screen.getByText("Open project"));
       expect(screen.getByTestId("workflow-browser-view")).toBeInTheDocument();
 
       fireEvent.click(screen.getByText("Back"));
@@ -238,13 +253,53 @@ describe("WelcomeModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Load workflow"));
+      fireEvent.click(screen.getByText("Open project"));
       fireEvent.click(screen.getByTestId("load-workflow-btn"));
 
       expect(mockOnWorkflowGenerated).toHaveBeenCalledWith(
         expect.objectContaining({ version: 1, nodes: [], edges: [] }),
         "/test/dir"
       );
+    });
+  });
+
+  describe("Bring In", () => {
+    const props = () => ({
+      onWorkflowGenerated: mockOnWorkflowGenerated,
+      onClose: mockOnClose,
+      onNewProject: mockOnNewProject,
+      onStartWithAgent: mockOnStartWithAgent,
+    });
+
+    it("offers to bring projects in only while none are known", async () => {
+      mockFetchProjects.mockResolvedValue({ root: "/r", projects: [], elsewhere: null, offerDismissed: false });
+      render(<WelcomeModal {...props()} />);
+
+      fireEvent.click(await screen.findByText("Bring in your projects"));
+      expect(screen.getByTestId("bring-in-view")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Leave bring-in"));
+      expect(screen.getByText("Start with Agent")).toBeInTheDocument();
+      expect(mockOnClose).not.toHaveBeenCalled();
+    });
+
+    it("says nothing about bringing in once projects are known", async () => {
+      render(<WelcomeModal {...props()} />);
+
+      await waitFor(() => expect(mockFetchProjects).toHaveBeenCalled());
+      expect(screen.queryByText("Bring in your projects")).not.toBeInTheDocument();
+    });
+
+    it("opens straight onto Bring-in, where leaving closes the dialog, and moves on to Open when done", () => {
+      const { unmount } = render(<WelcomeModal {...props()} initialView="bringIn" />);
+
+      fireEvent.click(screen.getByText("Leave bring-in"));
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+      unmount();
+
+      render(<WelcomeModal {...props()} initialView="bringIn" />);
+      fireEvent.click(screen.getByText("Brought in"));
+      expect(screen.getByTestId("workflow-browser-view")).toBeInTheDocument();
     });
   });
 
@@ -269,7 +324,7 @@ describe("WelcomeModal", () => {
       });
 
       // Verify templates view is showing - the actual workflow selection is tested in QuickstartTemplatesView tests
-      expect(screen.getByText("Quick Start")).toBeInTheDocument();
+      expect(screen.getByText(/^1 template$/)).toBeInTheDocument();
     });
 
   });

@@ -1,6 +1,8 @@
+import { Dropdown } from "@/components/nodes/ui/Dropdown";
 import React, { useState, useEffect, useCallback } from 'react';
 
 import { Dialog, DialogButton, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
+import { X } from "lucide-react";
 
 const FONT_SIZE_STORAGE_KEY = 'prompt-editor-font-size';
 const DEFAULT_FONT_SIZE = 14;
@@ -83,8 +85,8 @@ export const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
     onClose();
   }, [prompt, onSubmit, onClose]);
 
-  const handleFontSizeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setFontSize(parseInt(e.target.value, 10));
+  const handleFontSizeChange = useCallback((next: string) => {
+    setFontSize(parseInt(next, 10));
   }, []);
 
   const handleDismissConfirmation = useCallback(() => {
@@ -118,17 +120,15 @@ export const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
           {/* Toolbar - header of the box */}
           <div className="h-10 bg-canvas-bg border-b border-chrome-border flex items-center px-3 gap-3 shrink-0">
             {/* Font Size Control */}
-            <select
-              value={fontSize}
+            <Dropdown
+              value={String(fontSize)}
+              options={FONT_SIZE_OPTIONS.map((size) => ({ value: String(size), label: `${size}px` }))}
               onChange={handleFontSizeChange}
-              className="text-xs h-[26px] px-2 border border-chrome-border rounded-md bg-well focus:outline-none focus:ring-1 focus:ring-neutral-600 text-neutral-300"
-            >
-              {FONT_SIZE_OPTIONS.map((size) => (
-                <option key={size} value={size}>
-                  {size}px
-                </option>
-              ))}
-            </select>
+              size="dialog"
+              aria-label="Font size"
+              className="w-[88px]"
+              triggerClassName="h-[26px] w-full px-2 rounded-md border border-chrome-border bg-well text-xs text-neutral-300 text-left flex items-center justify-between gap-2 outline-none focus:ring-1 focus:ring-neutral-600 cursor-pointer"
+            />
           </div>
 
           {/* Textarea */}
@@ -165,19 +165,7 @@ export const PromptEditorModal: React.FC<PromptEditorModalProps> = ({
                 className="absolute top-3 right-3 text-neutral-400 hover:text-neutral-200 transition-colors focus:outline-none"
                 aria-label="Close"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
+                <X size={20} strokeWidth={2} />
               </button>
 
               <p className="text-neutral-100 text-[13px] text-center mb-5">

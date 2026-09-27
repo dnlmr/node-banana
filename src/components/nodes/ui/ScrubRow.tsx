@@ -2,6 +2,7 @@
 
 import React, { RefObject, useEffect, useState } from "react";
 import { cn } from "./cn";
+import { Pause, Play } from "lucide-react";
 
 interface ScrubRowProps {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -62,9 +63,12 @@ export function ScrubRow({ videoRef, src, className, leading, trailing }: ScrubR
     else video.pause();
   };
 
+  // Scrubbing is looking at frames: hold the video on the chosen one. The
+  // pause counts as the user's, so a hover preview will not restart it.
   const seek = (t: number) => {
     const video = videoRef.current;
     if (!video) return;
+    if (!video.paused) video.pause();
     video.currentTime = t;
     setTime(t);
   };
@@ -80,14 +84,9 @@ export function ScrubRow({ videoRef, src, className, leading, trailing }: ScrubR
         className="w-5 h-5 rounded-[6px] squircle flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
       >
         {playing ? (
-          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-            <rect x="6" y="5" width="4" height="14" rx="1" />
-            <rect x="14" y="5" width="4" height="14" rx="1" />
-          </svg>
+          <Pause size={12} strokeWidth={0} fill="currentColor" />
         ) : (
-          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-            <path d="M8 5v14l11-7z" />
-          </svg>
+          <Play size={12} strokeWidth={0} fill="currentColor" />
         )}
       </button>
       <input

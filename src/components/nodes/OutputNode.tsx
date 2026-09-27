@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, useMemo, useEffect, useRef } from "react";
+import { Download, SquareArrowOutUpRight, X } from "lucide-react";
 import { NodeProps, Node } from "@xyflow/react";
 import { Dialog } from "@/components/ui/Dialog";
 import { NodeShell } from "./NodeShell";
@@ -33,7 +34,6 @@ export function OutputNode({ id, data, selected }: NodeProps<OutputNodeType>) {
   const isRunning = useWorkflowStore((state) => state.isRunning);
   const [showLightbox, setShowLightbox] = useState(false);
   const previousEdgeCountRef = useRef<number | null>(null);
-  const videoAutoplayRef = useVideoAutoplay(id);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
   // Determine if content is audio
@@ -64,6 +64,7 @@ export function OutputNode({ id, data, selected }: NodeProps<OutputNodeType>) {
   const imageSrc = !isAudio && !isVideo ? contentSrc : null;
   const adaptiveImage = useAdaptiveImageSrc(imageSrc, id);
   const videoBlobUrl = useVideoBlobUrl(isVideo ? contentSrc ?? null : null);
+  const videoAutoplayRef = useVideoAutoplay(id, videoBlobUrl);
 
   // Auto-trigger execution when a new connection is made
   useEffect(() => {
@@ -158,18 +159,14 @@ export function OutputNode({ id, data, selected }: NodeProps<OutputNodeType>) {
               className="absolute top-2 right-2 p-1.5 bg-black/60 hover:bg-black/80 text-white text-xs rounded transition-colors flex items-center gap-1 opacity-0 group-hover:opacity-100 focus:opacity-100"
               title="Download"
             >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
+              <Download size={14} strokeWidth={2} />
             </button>
           </>
         ) : (
           <EmptyState
             message="Connect input"
             icon={
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-              </svg>
+              <SquareArrowOutUpRight size={24} strokeWidth={1.5} />
             }
           />
         )}
@@ -201,9 +198,7 @@ export function OutputNode({ id, data, selected }: NodeProps<OutputNodeType>) {
               onClick={() => setShowLightbox(false)}
               className="absolute top-4 right-4 w-8 h-8 bg-white/10 hover:bg-white/20 rounded text-white text-sm transition-colors flex items-center justify-center"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X size={16} strokeWidth={2} />
             </button>
         </Dialog>
       )}

@@ -6,8 +6,10 @@ import { NodeShell } from "./NodeShell";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { VideoInputNodeData } from "@/types";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
+import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, ScrubRow, SummaryValues, formatTime, type SocketSpec } from "./ui";
+import { Download, Video, X } from "lucide-react";
 
 type VideoInputNodeType = Node<VideoInputNodeData, "videoInput">;
 
@@ -22,11 +24,11 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
   const nodeData = data;
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
   // Use blob URL for efficient playback of large base64 videos
   const playbackUrl = useVideoBlobUrl(nodeData.video ?? null);
+  const videoRef = useVideoAutoplay(id, playbackUrl);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -168,6 +170,8 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
             src={playbackUrl ?? undefined}
             className="absolute inset-0 w-full h-full object-cover"
             preload="metadata"
+            loop
+            muted
             playsInline
             onLoadedMetadata={(e) => {
               const v = e.currentTarget;
@@ -186,18 +190,14 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
             aria-label="Download video"
             className="absolute top-2 right-10 w-6 h-6 bg-black/60 hover:bg-black/80 text-white rounded text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all flex items-center justify-center"
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
+            <Download size={14} strokeWidth={2} />
           </button>
           <button
             onClick={handleRemove}
             aria-label="Remove video"
             className="absolute top-2 right-2 w-6 h-6 bg-black/60 hover:bg-red-600/80 text-white rounded text-xs opacity-0 group-hover:opacity-100 focus:opacity-100 focus:ring-1 focus:ring-red-400 transition-all flex items-center justify-center"
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={14} strokeWidth={2} />
           </button>
         </>
       ) : (
@@ -212,9 +212,7 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
           className="absolute inset-0 bg-neutral-900/40 flex flex-col items-center justify-center cursor-pointer hover:bg-neutral-900/60 transition-colors"
         >
           <div className={`absolute inset-2 rounded-[6px] squircle border border-dashed pointer-events-none ${nodeData.isOptional ? "border-neutral-600" : "border-neutral-700/70"}`} />
-          <svg className="w-8 h-8 text-neutral-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
-          </svg>
+          <Video size={32} strokeWidth={1.5} className="text-neutral-600" />
           <span className="text-xs text-neutral-500 mt-2">{nodeData.isOptional ? "Optional" : "Drop video or click"}</span>
         </div>
       )}

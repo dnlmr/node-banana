@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { logger } from "@/utils/logger";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 
 export const maxDuration = 300; // 5 minute timeout for large workflow files
 
+// Both handlers answer only Node Banana's own page (see guard.ts).
+
 // POST: Save workflow to file
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let directoryPath: string | undefined;
   let filename: string | undefined;
   try {
@@ -143,6 +148,8 @@ export async function POST(request: NextRequest) {
 
 // GET: Validate directory path, or load workflow from directory
 export async function GET(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const directoryPath = request.nextUrl.searchParams.get("path");
   const shouldLoad = request.nextUrl.searchParams.get("load") === "true";
 

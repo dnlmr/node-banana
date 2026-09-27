@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { toast } from "sonner";
 import {
   GENERATION_TOAST_BATCH_MS,
   GENERATION_TOAST_DURATION_MS,
@@ -7,6 +8,7 @@ import {
   clearGenerationToasts,
   pushGenerationToast,
 } from "@/components/GenerationToast";
+import { useAssetStore } from "@/store/assetStore";
 
 /** Sonner dismisses through two animation frames (16ms each under fake timers). */
 const DISMISS_FRAMES_MS = 40;
@@ -61,6 +63,31 @@ describe("GenerationToaster", () => {
     expect(screen.getByText("Image generated")).toBeInTheDocument();
     expect(screen.getByText("Nano Banana Pro · 1:1")).toBeInTheDocument();
     expect(document.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,a");
+  });
+
+  it("stays quiet while the Assets view shows (it shows arrivals itself)", () => {
+    useAssetStore.setState({ appView: "assets" });
+    render(<GenerationToaster />);
+    push();
+    expect(screen.queryByTestId("generation-toast")).not.toBeInTheDocument();
+    useAssetStore.setState({ appView: "canvas" });
+    push();
+    expect(screen.getByTestId("generation-toast")).toBeInTheDocument();
+  });
+
+  it("clears only generation cards, leaving another toast (the library's first-run hint) up", () => {
+    render(<GenerationToaster />);
+    push();
+    act(() => {
+      toast.custom(() => <div data-testid="other-toast">Saved to Pictures › Node Banana</div>, { id: "other", duration: 60_000 });
+      vi.advanceTimersByTime(0);
+    });
+    act(() => clearGenerationToasts());
+    settle();
+    expect(screen.queryByTestId("generation-toast")).not.toBeInTheDocument();
+    expect(screen.getByTestId("other-toast")).toBeInTheDocument();
+    act(() => toast.dismiss("other"));
+    settle();
   });
 
   it("collapses a burst from one producer into a single stacked card", () => {

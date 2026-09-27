@@ -12,6 +12,7 @@ import {
   type ComfyUpload,
 } from "@/components/modals/ComfyWorkflowImportModal";
 import { ComfyWordmark } from "@/components/icons/ComfyWordmark";
+import { RefreshCw, Settings, type LucideIcon } from "lucide-react";
 import { useComfyPreview } from "@/hooks/useComfyPreview";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { outputsToNodeData } from "@/store/execution/comfyAppExecutor";
@@ -299,16 +300,8 @@ export function ComfyAppNode({ id, data, selected }: NodeProps<ComfyAppNodeType>
                     <SummaryValues
                       items={[runStatus ? runStatus.replace(/_/g, " ") : `${app.nodeCount} node${app.nodeCount === 1 ? "" : "s"}`]}
                     />
-                    <HeaderButton onClick={() => setModal("edit")} title="Choose inputs, settings and outputs">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </HeaderButton>
-                    <HeaderButton onClick={() => setModal("replace")} title="Replace this workflow">
-                      <path d="M21 2v6h-6" />
-                      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-                      <path d="M3 22v-6h6" />
-                      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
-                    </HeaderButton>
+                    <HeaderButton onClick={() => setModal("edit")} title="Choose inputs, settings and outputs" icon={Settings} />
+                    <HeaderButton onClick={() => setModal("replace")} title="Replace this workflow" icon={RefreshCw} />
                   </span>
                 ),
               }}
@@ -453,11 +446,11 @@ function NoWorkflow({
 function HeaderButton({
   onClick,
   title,
-  children,
+  icon: Icon,
 }: {
   onClick: () => void;
   title: string;
-  children: React.ReactNode;
+  icon: LucideIcon;
 }) {
   return (
     <button
@@ -471,17 +464,7 @@ function HeaderButton({
       aria-label={title}
       className="nodrag nopan shrink-0 text-neutral-500 hover:text-neutral-200 transition-colors"
     >
-      <svg
-        className="w-3.5 h-3.5"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        {children}
-      </svg>
+      <Icon size={14} strokeWidth={2} />
     </button>
   );
 }

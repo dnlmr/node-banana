@@ -141,12 +141,31 @@ async function checkStartupWindowControls(desktop, page) {
   console.log('PASS: startup window controls remain clickable and native actions work above the pending dialog');
 }
 
+// A scripted run must never write into the developer's real library: main
+// gives a test profile its own (<userData>/Library, electron/lib/library.cjs).
+async function checkLibraryRoot(page, profile) {
+  const library = await page.evaluate(async () => {
+    const response = await fetch('/api/assets/library');
+    return { status: response.status, body: response.ok ? await response.json() : null };
+  });
+  if (library.status === 404) { console.log('SKIP: this build has no asset library route'); return; }
+  assert.equal(library.status, 200);
+  const { root } = library.body;
+  if (root !== null) {
+    // The server may report the real path (/private/var/... for /var/... on macOS).
+    const profiles = [profile, path.join(await fs.realpath(path.dirname(profile)), path.basename(profile))];
+    assert.ok(profiles.some(dir => root === dir || root.startsWith(dir + path.sep)), `The asset library is outside the test profile: ${root}`);
+  }
+  console.log(`PASS: the asset library stays inside the test profile${root === null ? ' (library unavailable)' : ''}`);
+}
+
 async function main() {
   if (nativeInput) {
     assert.equal(process.platform, 'darwin', '--native-input is supported on macOS');
     await run('cliclick', ['-V']);
   }
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'node-banana-electron-'));
+  const profile = path.join(temp, 'profile');
   const port = await availablePort();
   const origin = `http://127.0.0.1:${port}`;
   let desktop;
@@ -156,7 +175,7 @@ async function main() {
       executablePath,
       args: executablePath ? [] : [root, ...(production ? [] : ['--dev'])],
       cwd: executablePath ? temp : root,
-      env: { ...launchEnv, NODE_BANANA_ELECTRON_PORT: String(port), NODE_BANANA_ELECTRON_USER_DATA: path.join(temp, 'profile') },
+      env: { ...launchEnv, NODE_BANANA_ELECTRON_PORT: String(port), NODE_BANANA_ELECTRON_USER_DATA: profile },
       timeout: 120_000,
     });
     // Only the isolated smoke-test process has native dialogs stubbed.
@@ -189,6 +208,7 @@ async function main() {
       require: 'undefined', process: 'undefined',
     });
     console.log('PASS: Electron renders the editor in a sandboxed window');
+    await checkLibraryRoot(page, profile);
 
     if (!production) {
       const hmrMessage = await page.evaluate(() => new Promise((resolve, reject) => {
@@ -228,16 +248,27 @@ async function main() {
     const directory = path.join(temp, 'workflow');
     await fs.mkdir(directory);
     await desktop.evaluate(({ dialog }, directory) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
+      global.__smokePickerTitles = [];
+      dialog.showOpenDialog = async (...args) => {
+        global.__smokePickerTitles.push(args.at(-1).title);
+        return { canceled: false, filePaths: [directory] };
+      };
     }, directory);
     const folder = await page.evaluate(async () => (await fetch('/api/browse-directory')).json());
     assert.equal(folder.path, directory);
     assert.equal(folder.success, true);
+    const libraryFolder = await page.evaluate(async () => (await fetch('/api/browse-directory?purpose=library')).json());
+    assert.equal(libraryFolder.path, directory);
+    const exportFolder = await page.evaluate(async () => (await fetch('/api/browse-directory?purpose=export')).json());
+    assert.equal(exportFolder.path, directory);
+    const importFolder = await page.evaluate(async () => (await fetch('/api/browse-directory?purpose=import')).json());
+    assert.equal(importFolder.path, directory);
+    assert.deepEqual(await desktop.evaluate(() => global.__smokePickerTitles), ['Select a folder to save workflows', 'Choose where Node Banana saves your media', 'Choose a folder to export to', 'Choose a folder of Node Banana projects']);
     await desktop.evaluate(({ dialog }) => {
       dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
     });
     assert.equal(await page.evaluate(async () => (await (await fetch('/api/browse-directory')).json()).cancelled), true);
-    console.log('PASS: native folder picker bridge handles selection and cancellation');
+    console.log('PASS: native folder picker bridge handles selection, cancellation and the library, export and import titles');
 
     const workflow = {
       version: 1,
@@ -289,7 +320,7 @@ async function main() {
   }
 }
 
-module.exports = { checkWindowControls, checkStartupWindowControls };
+module.exports = { checkWindowControls, checkStartupWindowControls, checkLibraryRoot };
 if (require.main === module) main().catch((error) => {
   console.error(error);
   process.exitCode = 1;

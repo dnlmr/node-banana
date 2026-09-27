@@ -18,6 +18,11 @@ export interface BaseNodeData extends Record<string, unknown> {
    * by "source:<handleId>" or "target:<handleId>". Set by dragging the clamp.
    */
   bundleClamps?: Record<string, number>;
+  /**
+   * Width of the controls card in flow px, set by dragging its edge grips.
+   * Unset, the card follows the node width (see CONTROLS_MAX_W).
+   */
+  controlsWidth?: number;
 }
 
 // Shape type discriminator

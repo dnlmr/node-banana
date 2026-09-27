@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useMemo, useEffect, useState, useCallback } from "react";
+import { Check, ChevronDown, ChevronUp, Plus, X } from "lucide-react";
 import { useReactFlow, NodeProps } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -23,9 +24,7 @@ function Match({ on }: { on: boolean }) {
   return (
     <div className="w-3 h-3 flex items-center justify-center shrink-0">
       {on ? (
-        <svg className="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-        </svg>
+        <Check size={12} strokeWidth={3} className="text-green-400" />
       ) : (
         <div className="w-2 h-2 rounded-full bg-neutral-600" />
       )}
@@ -208,7 +207,7 @@ export const ConditionalSwitchNode = memo(({ id, data, selected }: NodeProps<Wor
                 title="Move up"
                 aria-label="Move rule up"
               >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden><path d="M6 15l6-6 6 6" /></svg>
+                <ChevronUp size={12} strokeWidth={2.5} />
               </button>
               <button
                 className="nodrag nopan flex-1 flex items-center justify-center rounded-[3px] text-neutral-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:hover:text-neutral-400 disabled:hover:bg-transparent"
@@ -217,7 +216,7 @@ export const ConditionalSwitchNode = memo(({ id, data, selected }: NodeProps<Wor
                 title="Move down"
                 aria-label="Move rule down"
               >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden><path d="M6 9l6 6 6-6" /></svg>
+                <ChevronDown size={12} strokeWidth={2.5} />
               </button>
             </div>
 
@@ -264,9 +263,7 @@ export const ConditionalSwitchNode = memo(({ id, data, selected }: NodeProps<Wor
                 onClick={() => handleDelete(rule.id)}
                 title="Delete rule"
               >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X size={12} strokeWidth={2} />
               </button>
             )}
           </LogicRow>
@@ -284,9 +281,7 @@ export const ConditionalSwitchNode = memo(({ id, data, selected }: NodeProps<Wor
             className="nodrag nopan w-full h-[22px] flex items-center justify-center gap-1 text-neutral-400 hover:text-white text-node rounded-well squircle hover:bg-white/5 transition-colors"
             onClick={handleAddRule}
           >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
+            <Plus size={12} strokeWidth={2} />
             Add Rule
           </button>
         </div>

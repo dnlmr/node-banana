@@ -1,5 +1,6 @@
 "use client";
 
+import { Check, CircleAlert, CircleCheck, Copy, Info, Pause, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 
@@ -20,12 +21,29 @@ export const HISTORY_RIGHT_VAR = "--nb-history-right";
 /** STACK_RIGHT as CSS, following the history button when it moves. */
 export const STACK_RIGHT_CSS = `calc(${STACK_RIGHT - 16}px + var(${HISTORY_RIGHT_VAR}, 16px))`;
 
+/** A text button on the toast ("Show", "Change…"); choosing it also dismisses the toast. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+/** How long a toast stays up; one with actions gets longer, so there is time to reach them. */
+const AUTO_HIDE_MS = 4000;
+const AUTO_HIDE_WITH_ACTIONS_MS = 8000;
+
 interface ToastState {
   message: string | null;
   type: "info" | "success" | "warning" | "error";
   persistent: boolean;
   details: string | null;
-  show: (message: string, type?: "info" | "success" | "warning" | "error", persistent?: boolean, details?: string | null) => void;
+  actions: ToastAction[] | null;
+  show: (
+    message: string,
+    type?: "info" | "success" | "warning" | "error",
+    persistent?: boolean,
+    details?: string | null,
+    actions?: ToastAction[] | null
+  ) => void;
   hide: () => void;
 }
 
@@ -34,8 +52,10 @@ export const useToast = create<ToastState>((set) => ({
   type: "info",
   persistent: false,
   details: null,
-  show: (message, type = "info", persistent = false, details = null) => set({ message, type, persistent, details }),
-  hide: () => set({ message: null, persistent: false, details: null }),
+  actions: null,
+  show: (message, type = "info", persistent = false, details = null, actions = null) =>
+    set({ message, type, persistent, details, actions: actions && actions.length > 0 ? actions : null }),
+  hide: () => set({ message: null, persistent: false, details: null, actions: null }),
 }));
 
 const typeStyles = {
@@ -47,29 +67,21 @@ const typeStyles = {
 
 const typeIcons = {
   info: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <Info size={20} strokeWidth={2} />
   ),
   success: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <CircleCheck size={20} strokeWidth={2} />
   ),
   warning: (
-    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-    </svg>
+    <Pause size={20} strokeWidth={0} fill="currentColor" />
   ),
   error: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <CircleAlert size={20} strokeWidth={2} />
   ),
 };
 
 export function Toast() {
-  const { message, type, persistent, details, hide } = useToast();
+  const { message, type, persistent, details, actions, hide } = useToast();
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -92,10 +104,10 @@ export function Toast() {
     if (message && !persistent) {
       const timer = setTimeout(() => {
         hide();
-      }, 4000);
+      }, actions ? AUTO_HIDE_WITH_ACTIONS_MS : AUTO_HIDE_MS);
       return () => clearTimeout(timer);
     }
-  }, [message, persistent, hide]);
+  }, [message, persistent, actions, hide]);
 
   return (
     <div
@@ -116,13 +128,9 @@ export function Toast() {
             title="Copy message"
           >
             {copied ? (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
+              <Check size={16} strokeWidth={2} />
             ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
+              <Copy size={16} strokeWidth={2} />
             )}
           </button>
           <button
@@ -130,11 +138,27 @@ export function Toast() {
             className="shrink-0 p-1 rounded hover:bg-white/10 transition-colors"
             title="Dismiss"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={16} strokeWidth={2} />
           </button>
         </div>
+        {actions && (
+          // Under the message, the labels on its left edge: px-4 + 20px icon + gap-3, less the buttons' own 6px
+          <div className="-mt-1.5 flex shrink-0 flex-wrap items-center gap-1 pb-2.5 pl-[42px] pr-4">
+            {actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => {
+                  hide();
+                  action.onClick();
+                }}
+                className="rounded px-1.5 py-1 text-xs font-semibold opacity-90 hover:bg-white/10 hover:opacity-100 transition-colors"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
         {details && (
           <>
             <button

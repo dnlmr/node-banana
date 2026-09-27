@@ -1,5 +1,6 @@
 'use client';
 
+import { TriangleAlert, X } from "lucide-react";
 import { watchDesktopConnection } from "@/lib/desktop/connection";
 import { DesktopRecovery } from './DesktopRecovery';
 import { DesktopWindowControls, DesktopStartupDragRegion } from './DesktopWindowControls';
@@ -11,10 +12,7 @@ import { Dialog, DialogBody, DialogButton, DialogDescription, DialogFooter, Dial
 import { CHROME_SURFACE } from './chromeStyles';
 
 const WarningIcon = () => (
-  <svg className="h-4 w-4 shrink-0 text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M12 9v4m0 4h.01" />
-    <path d="M10.3 3.9 2.6 17.2A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.8L13.7 3.9a2 2 0 0 0-3.4 0Z" />
-  </svg>
+  <TriangleAlert size={16} strokeWidth={1.75} className="shrink-0 text-amber-400" />
 );
 
 const BANNER_ACTION = 'h-7 shrink-0 whitespace-nowrap rounded-md px-2.5 text-xs font-medium text-neutral-200 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30';
@@ -37,7 +35,7 @@ function DisconnectedBanner() {
       <button type="button" className={BANNER_ACTION} onClick={() => void window.nodeBananaDesktop?.backend.restart()}>Restart server</button>
       <button type="button" className={BANNER_ACTION} onClick={() => void window.nodeBananaDesktop?.openLogs()}>Open logs</button>
       <button type="button" aria-label="Dismiss" className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-500 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white" onClick={() => setDismissed(true)}>
-        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" aria-hidden="true"><path d="M6 18L18 6M6 6l12 12" /></svg>
+        <X size={14} strokeWidth={1.75} />
       </button>
     </div>
   </div>;

@@ -1,5 +1,6 @@
 "use client";
 
+import { Eye, EyeOff, Minus, Pause, Play, Plus, Trash2 } from "lucide-react";
 import { MenuSurface } from "@/components/ui/Menu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EdgeLabelRenderer, useViewport } from "@xyflow/react";
@@ -121,9 +122,7 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
                 className={`p-1 rounded hover:bg-neutral-700 text-fuchsia-300 hover:text-fuchsia-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed`}
                 title="Decrease loop count"
               >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" d="M5 12h14" />
-                </svg>
+                <Minus size={12} strokeWidth={2} />
               </button>
               <span className="text-[11px] font-mono text-fuchsia-100 min-w-[20px] text-center">{loopCount}</span>
               <button
@@ -132,9 +131,7 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
                 className={`p-1 rounded hover:bg-neutral-700 text-fuchsia-300 hover:text-fuchsia-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed`}
                 title="Increase loop count"
               >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" d="M12 5v14M5 12h14" />
-                </svg>
+                <Plus size={12} strokeWidth={2} />
               </button>
               <div className="w-px h-4 bg-neutral-600" />
             </>
@@ -189,10 +186,7 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
               className={`${iconButton} text-neutral-400 hover:text-neutral-100`}
               title={grouped ? `Show ${selectedIds.length} connections` : "Show connection"}
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M2.4 12C3.7 7.9 7.5 5 12 5s8.3 2.9 9.6 7c-1.3 4.1-5.1 7-9.6 7s-8.3-2.9-9.6-7z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
+              <Eye size={16} strokeWidth={1.5} />
             </button>
           ) : (
             <button
@@ -200,9 +194,7 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
               className={`${iconButton} text-neutral-400 hover:text-neutral-100`}
               title={grouped ? `Hide ${selectedIds.length} connections` : "Hide connection"}
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A9.8 9.8 0 0112 5c4.5 0 8.3 2.9 9.6 7a10 10 0 01-2.2 3.6M6.6 6.6A10 10 0 002.4 12c1.3 4.1 5.1 7 9.6 7 1.4 0 2.8-.3 4-.8" />
-              </svg>
+              <EyeOff size={16} strokeWidth={1.5} />
             </button>
           )}
           {!isLoop && (
@@ -212,13 +204,9 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
               title={hasPause ? (grouped ? "Remove pauses" : "Remove pause") : grouped ? "Pause all" : "Add pause"}
             >
               {hasPause ? (
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+                <Play size={16} strokeWidth={0} fill="currentColor" />
               ) : (
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                </svg>
+                <Pause size={16} strokeWidth={0} fill="currentColor" />
               )}
             </button>
           )}
@@ -227,13 +215,7 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
             className={`${iconButton} text-neutral-400 hover:text-red-400`}
             title={grouped ? `Delete ${selectedIds.length} connections` : "Delete"}
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
-              />
-            </svg>
+            <Trash2 size={16} strokeWidth={1.5} />
           </button>
           {/* Pointer down to the noodle */}
           <span
