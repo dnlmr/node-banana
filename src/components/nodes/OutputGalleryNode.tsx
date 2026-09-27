@@ -1,10 +1,11 @@
 "use client";
 
+import { LIGHTBOX_BUTTON } from "../chromeStyles";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { NodeProps, Node, useReactFlow } from "@xyflow/react";
 import { Dialog } from "@/components/ui/Dialog";
 import { NodeShell } from "./NodeShell";
-import { ControlsCard, EmptyState, type SocketSpec } from "./ui";
+import { ControlsCard, CornerGrip, EmptyState, type SocketSpec, HeightGrip } from "./ui";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { OutputGalleryNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
@@ -18,7 +19,9 @@ const INPUT_SOCKETS: SocketSpec[] = [
   { id: "video", type: "video", label: "Video" },
 ];
 const EMPTY_HEIGHT = 150;
+/** The grid's height until the user drags its grip. */
 const GRID_HEIGHT = 240;
+const MIN_GRID_HEIGHT = 120;
 
 type MediaItem = { type: "image" | "video"; src: string };
 
@@ -315,15 +318,29 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
   }, [lightboxIndex, closeLightbox, navigateLightbox]);
 
   const currentItem = lightboxIndex !== null ? displayMedia[lightboxIndex] : null;
+  const gridHeight = nodeData.mediaHeight ?? GRID_HEIGHT;
 
   return (
     <>
       <NodeShell
         id={id}
         selected={selected}
-        media={{ kind: "fixed", height: displayMedia.length === 0 ? EMPTY_HEIGHT : GRID_HEIGHT }}
+        media={{ kind: "fixed", height: displayMedia.length === 0 ? EMPTY_HEIGHT : gridHeight }}
         inputs={INPUT_SOCKETS}
         minWidth={240}
+        // On the card, not in the clipped media, so the corner target can hang past the edge.
+        cardChildren={
+          displayMedia.length > 0 ? (
+            <CornerGrip
+              nodeId={id}
+              height={gridHeight}
+              minHeight={MIN_GRID_HEIGHT}
+              minWidth={240}
+              label="Resize gallery"
+              onHeightChange={(h) => updateNodeData(id, { mediaHeight: h })}
+            />
+          ) : undefined
+        }
         controls={
           displayMedia.length > 0 ? (
             <ControlsCard
@@ -349,7 +366,8 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
           <EmptyState message="Connect image or video nodes to view gallery" />
         ) : (
           <div className="absolute inset-0 overflow-y-auto nodrag nopan nowheel bg-neutral-900/40">
-            <div className="grid grid-cols-3 gap-1 p-1">
+            {/* Bottom padding keeps the last row clear of the grip. */}
+            <div className="grid grid-cols-3 gap-1 p-1 pb-4">
               {displayMedia.map((item, idx) => (
                 <button
                   key={idx}
@@ -381,6 +399,14 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
             </div>
           </div>
         )}
+        {displayMedia.length > 0 && (
+          <HeightGrip
+            height={gridHeight}
+            min={MIN_GRID_HEIGHT}
+            label="Resize gallery height"
+            onChange={(h) => updateNodeData(id, { mediaHeight: h })}
+          />
+        )}
       </NodeShell>
 
       {/* Lightbox */}
@@ -399,7 +425,8 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
               {/* Close button */}
               <button
                 onClick={closeLightbox}
-                className="absolute top-4 right-4 w-8 h-8 bg-white/10 hover:bg-white/20 rounded text-white text-sm transition-colors flex items-center justify-center"
+                aria-label="Close"
+                className={`absolute top-4 right-4 w-8 h-8 ${LIGHTBOX_BUTTON} rounded-lg text-sm transition-colors flex items-center justify-center`}
               >
                 <X size={16} strokeWidth={2} />
               </button>
@@ -408,14 +435,14 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
               <div className="absolute top-4 left-4 flex gap-1.5">
                 <button
                   onClick={downloadMedia}
-                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-white text-xs font-medium transition-colors flex items-center gap-1.5"
+                  className={`px-3 py-1.5 ${LIGHTBOX_BUTTON} rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5`}
                 >
                   <Download size={14} strokeWidth={2} />
                   Download
                 </button>
                 <button
                   onClick={() => removeMedia(lightboxIndex)}
-                  className="px-3 py-1.5 bg-white/10 hover:bg-red-600/80 rounded text-white text-xs font-medium transition-colors flex items-center gap-1.5"
+                  className={`px-3 py-1.5 ${LIGHTBOX_BUTTON} hover:bg-red-600/80 hover:border-red-500/40 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5`}
                 >
                   <Trash2 size={14} strokeWidth={2} />
                   Remove
@@ -426,7 +453,8 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
               {lightboxIndex > 0 && (
                 <button
                   onClick={() => navigateLightbox("prev")}
-                  className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors flex items-center justify-center"
+                  aria-label="Previous"
+                  className={`absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 ${LIGHTBOX_BUTTON} rounded-full transition-colors flex items-center justify-center`}
                 >
                   <ChevronLeft size={20} strokeWidth={2} />
                 </button>
@@ -436,14 +464,15 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
               {lightboxIndex < displayMedia.length - 1 && (
                 <button
                   onClick={() => navigateLightbox("next")}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors flex items-center justify-center"
+                  aria-label="Next"
+                  className={`absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 ${LIGHTBOX_BUTTON} rounded-full transition-colors flex items-center justify-center`}
                 >
                   <ChevronRight size={20} strokeWidth={2} />
                 </button>
               )}
 
               {/* Media counter */}
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-black/50 rounded text-white text-xs font-medium">
+              <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 ${LIGHTBOX_BUTTON} rounded-lg text-xs font-medium`}>
                 {lightboxIndex + 1} / {displayMedia.length}
               </div>
         </Dialog>

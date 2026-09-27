@@ -1,5 +1,6 @@
 "use client";
 
+import { LIGHTBOX_BUTTON } from "../chromeStyles";
 import { useCallback, useState, useMemo, useEffect, useRef } from "react";
 import { Download, SquareArrowOutUpRight, X } from "lucide-react";
 import { NodeProps, Node } from "@xyflow/react";
@@ -196,7 +197,7 @@ export function OutputNode({ id, data, selected }: NodeProps<OutputNodeType>) {
             )}
             <button
               onClick={() => setShowLightbox(false)}
-              className="absolute top-4 right-4 w-8 h-8 bg-white/10 hover:bg-white/20 rounded text-white text-sm transition-colors flex items-center justify-center"
+              className={`absolute top-4 right-4 w-8 h-8 ${LIGHTBOX_BUTTON} rounded-lg text-sm transition-colors flex items-center justify-center`}
             >
               <X size={16} strokeWidth={2} />
             </button>

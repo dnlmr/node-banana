@@ -9,6 +9,8 @@ interface HeightGripProps {
   min?: number;
   max?: number;
   onChange: (height: number) => void;
+  /** Accessible name; names what is being resized. */
+  label?: string;
   className?: string;
 }
 
@@ -17,7 +19,7 @@ interface HeightGripProps {
  * surfaces). Dragging it changes the slot's height in flow pixels, so it
  * accounts for the canvas zoom.
  */
-export function HeightGrip({ height, min = 60, max = 800, onChange, className }: HeightGripProps) {
+export function HeightGrip({ height, min = 60, max = 800, onChange, label = "Resize text area", className }: HeightGripProps) {
   const reactFlow = useReactFlow();
   const drag = useRef<{ startY: number; startH: number; zoom: number } | null>(null);
 
@@ -51,7 +53,7 @@ export function HeightGrip({ height, min = 60, max = 800, onChange, className }:
     <div
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Resize text area"
+      aria-label={label}
       title="Drag to resize"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
