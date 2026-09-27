@@ -35,10 +35,10 @@ export interface PathContext {
   env: EnvMap;
   homedir: string;
   /**
-   * Windows only: the expanded "My Pictures" shell folder. Undefined queries
+   * Windows only: the expanded "Personal" shell folder. Undefined queries
    * the registry (cached per process); null means "unknown, use the fallback".
    */
-  winPicturesDir?: string | null;
+  winDocumentsDir?: string | null;
 }
 
 export function currentPathContext(): PathContext {
@@ -78,10 +78,10 @@ export function expandWindowsEnv(value: string, ctx: PathContext): string {
   return value.replace(/%([^%]+)%/g, (whole, name: string) => envVar({ ...ctx, platform: "win32" }, name) ?? whole);
 }
 
-/** Parses `reg query … /v "My Pictures"` output. */
-export function parseRegistryPictures(output: string): string | null {
+/** Parses `reg query … /v "Personal"` output. */
+export function parseRegistryDocuments(output: string): string | null {
   for (const line of output.split(/\r?\n/)) {
-    const match = /^\s*My Pictures\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/.exec(line);
+    const match = /^\s*Personal\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/.exec(line);
     if (match) return match[1];
   }
   return null;
@@ -100,8 +100,8 @@ const runCommand: CommandRunner = (command, args) =>
   });
 
 /** Asks for UTF-8 output: PowerShell otherwise writes the console code page, like reg.exe does. */
-const PICTURES_SCRIPT =
-  "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Environment]::GetFolderPath('MyPictures')";
+const DOCUMENTS_SCRIPT =
+  "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Environment]::GetFolderPath('MyDocuments')";
 
 /** The first line of a tool's answer, or null when it is empty or was mangled in decoding (U+FFFD). */
 function folderFromOutput(output: string | null | undefined): string | null {
@@ -114,36 +114,36 @@ function folderFromOutput(output: string | null | undefined): string | null {
 }
 
 /**
- * The Pictures folder as Windows resolves it, from PowerShell with UTF-8
+ * The Documents folder as Windows resolves it, from PowerShell with UTF-8
  * output. `reg query` is only the fallback when PowerShell can't run: it
  * writes the OEM code page, so a non-ASCII path from it is mangled — and
  * then dropped, rather than persisted as the library root.
  */
-export async function queryWindowsPictures(run: CommandRunner = runCommand): Promise<string | null> {
+export async function queryWindowsDocuments(run: CommandRunner = runCommand): Promise<string | null> {
   try {
-    const folder = folderFromOutput(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", PICTURES_SCRIPT]));
+    const folder = folderFromOutput(await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", DOCUMENTS_SCRIPT]));
     if (folder) return folder;
   } catch {
     // No PowerShell (or it failed): try the registry.
   }
   try {
-    return folderFromOutput(parseRegistryPictures(await run("reg", ["query", REGISTRY_KEY, "/v", "My Pictures"])));
+    return folderFromOutput(parseRegistryDocuments(await run("reg", ["query", REGISTRY_KEY, "/v", "Personal"])));
   } catch {
     return null;
   }
 }
 
-let windowsPictures: Promise<string | null> | null = null;
+let windowsDocuments: Promise<string | null> | null = null;
 
-function cachedWindowsPictures(): Promise<string | null> {
-  windowsPictures ??= queryWindowsPictures();
-  return windowsPictures;
+function cachedWindowsDocuments(): Promise<string | null> {
+  windowsDocuments ??= queryWindowsDocuments();
+  return windowsDocuments;
 }
 
-/** Parses `XDG_PICTURES_DIR` from a user-dirs.dirs file, as `xdg-user-dir PICTURES` does. */
-export function parseXdgPictures(contents: string, homedir: string): string | null {
+/** Parses `XDG_DOCUMENTS_DIR` from a user-dirs.dirs file, as `xdg-user-dir PICTURES` does. */
+export function parseXdgDocuments(contents: string, homedir: string): string | null {
   for (const line of contents.split(/\r?\n/)) {
-    const match = /^\s*XDG_PICTURES_DIR\s*=\s*"?([^"]*)"?\s*$/.exec(line);
+    const match = /^\s*XDG_DOCUMENTS_DIR\s*=\s*"?([^"]*)"?\s*$/.exec(line);
     if (!match) continue;
     const value = match[1].replace(/^\$HOME|^\$\{HOME\}/, homedir);
     const resolved = path.posix.isAbsolute(value) ? value : path.posix.join(homedir, value);
@@ -154,31 +154,31 @@ export function parseXdgPictures(contents: string, homedir: string): string | nu
   return null;
 }
 
-async function linuxPicturesDir(ctx: PathContext): Promise<string> {
+async function linuxDocumentsDir(ctx: PathContext): Promise<string> {
   const configHome = envVar(ctx, "XDG_CONFIG_HOME") || path.posix.join(ctx.homedir, ".config");
   try {
     const contents = await fs.readFile(path.posix.join(configHome, "user-dirs.dirs"), "utf8");
-    const dir = parseXdgPictures(contents, ctx.homedir);
+    const dir = parseXdgDocuments(contents, ctx.homedir);
     if (dir) return dir;
   } catch {
     // No user-dirs file: the XDG default applies.
   }
-  return path.posix.join(ctx.homedir, "Pictures");
+  return path.posix.join(ctx.homedir, "Documents");
 }
 
-/** The user's Pictures folder on this platform. */
-export async function platformPicturesDir(ctx: PathContext): Promise<string> {
+/** The user's Documents folder on this platform. */
+export async function platformDocumentsDir(ctx: PathContext): Promise<string> {
   const api = pathApi(ctx.platform);
   if (ctx.platform === "win32") {
-    const raw = ctx.winPicturesDir !== undefined ? ctx.winPicturesDir : await cachedWindowsPictures();
+    const raw = ctx.winDocumentsDir !== undefined ? ctx.winDocumentsDir : await cachedWindowsDocuments();
     const expanded = raw ? expandWindowsEnv(raw, ctx) : null;
     if (expanded && api.isAbsolute(expanded) && !expanded.includes("%") && !expanded.includes("�")) {
       return api.resolve(expanded);
     }
-    return api.join(userProfile(ctx), "Pictures");
+    return api.join(userProfile(ctx), "Documents");
   }
-  if (ctx.platform === "darwin") return api.join(ctx.homedir, "Pictures");
-  return linuxPicturesDir(ctx);
+  if (ctx.platform === "darwin") return api.join(ctx.homedir, "Documents");
+  return linuxDocumentsDir(ctx);
 }
 
 /** OneDrive's sync roots, from the environment variables its client sets. */
@@ -195,7 +195,7 @@ export function isSameOrInside(root: string, candidate: string, platform: NodeJS
 }
 
 /**
- * The folder this machine uses when nothing was chosen. On Windows a Pictures
+ * The folder this machine uses when nothing was chosen. On Windows a Documents
  * folder redirected into OneDrive (Known Folder Move) is skipped: gigabytes of
  * generations would sync and placeholders would make browsing slow offline.
  */
@@ -203,11 +203,11 @@ export async function platformDefaultRoot(ctx: PathContext): Promise<string> {
   const api = pathApi(ctx.platform);
   const provided = envVar(ctx, "NODE_BANANA_DEFAULT_LIBRARY");
   if (provided && api.isAbsolute(provided)) return api.resolve(provided);
-  const pictures = await platformPicturesDir(ctx);
-  if (ctx.platform === "win32" && oneDriveRoots(ctx).some((root) => isSameOrInside(root, pictures, "win32"))) {
+  const documents = await platformDocumentsDir(ctx);
+  if (ctx.platform === "win32" && oneDriveRoots(ctx).some((root) => isSameOrInside(root, documents, "win32"))) {
     return api.join(userProfile(ctx), LIBRARY_FOLDER_NAME);
   }
-  return api.join(pictures, LIBRARY_FOLDER_NAME);
+  return api.join(documents, LIBRARY_FOLDER_NAME);
 }
 
 /** Where a default root that cannot be written falls back to. */
@@ -473,7 +473,7 @@ export async function initLibraryLocation(ctx: PathContext): Promise<LocationRes
   return { ok: true, location: next };
 }
 
-/** Test hook: forget the cached Pictures answer. */
+/** Test hook: forget the cached Documents answer. */
 export function resetPathCachesForTests(): void {
-  windowsPictures = null;
+  windowsDocuments = null;
 }

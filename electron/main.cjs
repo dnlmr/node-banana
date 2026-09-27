@@ -44,7 +44,7 @@ async function fail(error) {
   app.quit();
 }
 // app.getPath throws when the OS has no such folder (a bare Linux session).
-function picturesDir() { try { return app.getPath('pictures'); } catch { return undefined; } }
+function documentsDir() { try { return app.getPath('documents'); } catch { return undefined; } }
 function openExternal(url) { if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(log); }
 function allowedPermission(contents, permission, requestingURL) {
   if (!contents || contents !== window?.webContents) return false;
@@ -241,8 +241,8 @@ else {
         NODE_ENV: dev ? 'development' : 'production', NODE_BANANA_ELECTRON: '1', NODE_BANANA_LOGS_DIR: app.getPath('logs'),
         NODE_BANANA_ELECTRON_PORT: String(port), NODE_BANANA_ELECTRON_TOKEN: token,
         // Where generations are saved (see lib/library.cjs). Only main knows the
-        // Pictures folder, and a test profile must never reach the real library.
-        ...libraryEnv({ platform: process.platform, picturesDir: picturesDir(), homeDir: os.homedir(), userDataDir: app.getPath('userData'), processEnv: process.env }),
+        // Documents folder, and a test profile must never reach the real library.
+        ...libraryEnv({ platform: process.platform, documentsDir: documentsDir(), homeDir: os.homedir(), userDataDir: app.getPath('userData'), processEnv: process.env }),
       } }),
       // The server's requests for native actions (lib/bridge-main.cjs). The
       // reply goes to the child that asked, which may have exited meanwhile.

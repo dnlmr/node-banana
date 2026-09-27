@@ -8,11 +8,11 @@ import {
   expandWindowsEnv,
   fallbackRoot,
   initLibraryLocation,
-  parseRegistryPictures,
-  parseXdgPictures,
+  parseRegistryDocuments,
+  parseXdgDocuments,
   platformCacheDir,
   platformDefaultRoot,
-  queryWindowsPictures,
+  queryWindowsDocuments,
   readLibraryConfig,
   resolveLibraryLocation,
   userConfigFile,
@@ -31,7 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   // Undo any chmod from the fallback tests before removing.
-  for (const dir of [path.join(home, "Pictures"), home]) {
+  for (const dir of [path.join(home, "Documents"), home]) {
     try {
       fs.chmodSync(dir, 0o755);
     } catch {
@@ -47,7 +47,7 @@ describe("resolution order", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.location.source).toBe("default");
-    expect(result.location.root).toBe(path.posix.join(home, "Pictures", "Node Banana"));
+    expect(result.location.root).toBe(path.posix.join(home, "Documents", "Node Banana"));
     expect(result.location.cacheDir).toBe(path.posix.join(home, "Library", "Caches", "Node Banana"));
     expect(result.location.configFile).toBe(path.posix.join(home, ".node-banana", "library.json"));
   });
@@ -90,11 +90,11 @@ describe("resolution order", () => {
 
 describe("first init", () => {
   it("creates the default root and persists it so both builds agree", async () => {
-    const c = ctx({ platform: process.platform === "win32" ? "win32" : "darwin", winPicturesDir: path.join(home, "Pictures") });
+    const c = ctx({ platform: process.platform === "win32" ? "win32" : "darwin", winDocumentsDir: path.join(home, "Documents") });
     const result = await initLibraryLocation(c);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const expected = path.join(home, "Pictures", "Node Banana");
+    const expected = path.join(home, "Documents", "Node Banana");
     expect(result.location.root).toBe(expected);
     expect(fs.existsSync(path.join(expected, ".nodebanana"))).toBe(true);
     const stored = await readLibraryConfig(userConfigFile(c), c);
@@ -108,9 +108,9 @@ describe("first init", () => {
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "falls back to ~/Node Banana when the default cannot be written, and remembers why",
     async () => {
-      const pictures = path.join(home, "Pictures");
-      fs.mkdirSync(pictures);
-      fs.chmodSync(pictures, 0o500);
+      const documents = path.join(home, "Documents");
+      fs.mkdirSync(documents);
+      fs.chmodSync(documents, 0o500);
       const c = ctx({ platform: "darwin" });
       const result = await initLibraryLocation(c);
       expect(result.ok).toBe(true);
@@ -145,38 +145,38 @@ describe("first init", () => {
 });
 
 describe("Windows defaults (simulated)", () => {
-  const win = (env: Record<string, string>, pictures?: string | null): PathContext => ({
+  const win = (env: Record<string, string>, documents?: string | null): PathContext => ({
     platform: "win32",
     homedir: "C:\\Users\\ada",
     env: { USERPROFILE: "C:\\Users\\ada", LOCALAPPDATA: "C:\\Users\\ada\\AppData\\Local", ...env },
-    winPicturesDir: pictures,
+    winDocumentsDir: documents,
   });
 
-  it("uses the Pictures known folder", async () => {
-    expect(await platformDefaultRoot(win({}, "D:\\Media\\Pictures"))).toBe("D:\\Media\\Pictures\\Node Banana");
+  it("uses the Documents known folder", async () => {
+    expect(await platformDefaultRoot(win({}, "D:\\Media\\Documents"))).toBe("D:\\Media\\Documents\\Node Banana");
   });
 
   it("expands %VAR% in the registry value", async () => {
-    expect(await platformDefaultRoot(win({}, "%USERPROFILE%\\Pictures"))).toBe("C:\\Users\\ada\\Pictures\\Node Banana");
+    expect(await platformDefaultRoot(win({}, "%USERPROFILE%\\Documents"))).toBe("C:\\Users\\ada\\Documents\\Node Banana");
   });
 
-  it("falls back to %USERPROFILE%\\Pictures when the registry has nothing", async () => {
-    expect(await platformDefaultRoot(win({}, null))).toBe("C:\\Users\\ada\\Pictures\\Node Banana");
+  it("falls back to %USERPROFILE%\\Documents when the registry has nothing", async () => {
+    expect(await platformDefaultRoot(win({}, null))).toBe("C:\\Users\\ada\\Documents\\Node Banana");
   });
 
-  it("skips a Pictures folder redirected into OneDrive", async () => {
+  it("skips a Documents folder redirected into OneDrive", async () => {
     const env = { OneDrive: "C:\\Users\\ada\\OneDrive" };
-    expect(await platformDefaultRoot(win(env, "C:\\Users\\ada\\OneDrive\\Pictures"))).toBe("C:\\Users\\ada\\Node Banana");
+    expect(await platformDefaultRoot(win(env, "C:\\Users\\ada\\OneDrive\\Documents"))).toBe("C:\\Users\\ada\\Node Banana");
     // Case differs from the env value: Windows paths compare case-insensitively.
     const commercial = { OneDriveCommercial: "C:\\Users\\ada\\OneDrive - Contoso" };
-    expect(await platformDefaultRoot(win(commercial, "c:\\users\\ADA\\onedrive - contoso\\Pictures"))).toBe(
+    expect(await platformDefaultRoot(win(commercial, "c:\\users\\ADA\\onedrive - contoso\\Documents"))).toBe(
       "C:\\Users\\ada\\Node Banana",
     );
   });
 
-  it("keeps Pictures when OneDrive is installed but Pictures is not inside it", async () => {
+  it("keeps Documents when OneDrive is installed but Documents is not inside it", async () => {
     const env = { OneDrive: "C:\\Users\\ada\\OneDrive" };
-    expect(await platformDefaultRoot(win(env, "C:\\Users\\ada\\Pictures"))).toBe("C:\\Users\\ada\\Pictures\\Node Banana");
+    expect(await platformDefaultRoot(win(env, "C:\\Users\\ada\\Documents"))).toBe("C:\\Users\\ada\\Documents\\Node Banana");
   });
 
   it("puts the cache in LOCALAPPDATA and the fallback in the profile", () => {
@@ -185,66 +185,66 @@ describe("Windows defaults (simulated)", () => {
   });
 
   it("reports a OneDrive root as synced", () => {
-    expect(detectSynced("C:\\Users\\ada\\OneDrive\\Pictures\\Node Banana", win({ OneDrive: "C:\\Users\\ada\\OneDrive" }))).toBe(
+    expect(detectSynced("C:\\Users\\ada\\OneDrive\\Documents\\Node Banana", win({ OneDrive: "C:\\Users\\ada\\OneDrive" }))).toBe(
       "onedrive",
     );
-    expect(detectSynced("C:\\Users\\ada\\Pictures\\Node Banana", win({ OneDrive: "C:\\Users\\ada\\OneDrive" }))).toBeNull();
+    expect(detectSynced("C:\\Users\\ada\\Documents\\Node Banana", win({ OneDrive: "C:\\Users\\ada\\OneDrive" }))).toBeNull();
   });
 
   it("parses reg query output and expands env references", () => {
     const output = [
       "",
       "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
-      "    My Pictures    REG_EXPAND_SZ    %USERPROFILE%\\OneDrive\\Pictures",
+      "    Personal    REG_EXPAND_SZ    %USERPROFILE%\\OneDrive\\Documents",
       "",
     ].join("\r\n");
-    const raw = parseRegistryPictures(output);
-    expect(raw).toBe("%USERPROFILE%\\OneDrive\\Pictures");
-    expect(expandWindowsEnv(raw!, win({}))).toBe("C:\\Users\\ada\\OneDrive\\Pictures");
-    expect(parseRegistryPictures("ERROR: The system was unable to find the specified registry key")).toBeNull();
+    const raw = parseRegistryDocuments(output);
+    expect(raw).toBe("%USERPROFILE%\\OneDrive\\Documents");
+    expect(expandWindowsEnv(raw!, win({}))).toBe("C:\\Users\\ada\\OneDrive\\Documents");
+    expect(parseRegistryDocuments("ERROR: The system was unable to find the specified registry key")).toBeNull();
   });
 
-  it("asks PowerShell for the Pictures folder in UTF-8, and falls back to reg query", async () => {
+  it("asks PowerShell for the Documents folder in UTF-8, and falls back to reg query", async () => {
     const calls: { command: string; args: string[] }[] = [];
-    const moved = await queryWindowsPictures(async (command, args) => {
+    const moved = await queryWindowsDocuments(async (command, args) => {
       calls.push({ command, args });
       return "\uFEFFD:\\Médias\\Images\r\n";
     });
     expect(moved).toBe("D:\\Médias\\Images");
     expect(calls.map((call) => call.command)).toEqual(["powershell.exe"]);
     expect(calls[0].args.join(" ")).toMatch(/OutputEncoding = \[Text\.Encoding\]::UTF8/);
-    expect(calls[0].args.join(" ")).toMatch(/GetFolderPath\('MyPictures'\)/);
+    expect(calls[0].args.join(" ")).toMatch(/GetFolderPath\('MyDocuments'\)/);
 
-    const reg = "    My Pictures    REG_EXPAND_SZ    %USERPROFILE%\\Pictures\r\n";
-    const viaRegistry = await queryWindowsPictures(async (command) => {
+    const reg = "    Personal    REG_EXPAND_SZ    %USERPROFILE%\\Documents\r\n";
+    const viaRegistry = await queryWindowsDocuments(async (command) => {
       if (command === "powershell.exe") throw Object.assign(new Error("spawn powershell.exe ENOENT"), { code: "ENOENT" });
       return reg;
     });
-    expect(viaRegistry).toBe("%USERPROFILE%\\Pictures");
+    expect(viaRegistry).toBe("%USERPROFILE%\\Documents");
   });
 
-  it("drops a Pictures path mangled in decoding rather than make it the library", async () => {
+  it("drops a Documents path mangled in decoding rather than make it the library", async () => {
     // reg.exe writes the OEM code page: 'é' arrives as U+FFFD.
-    const mangled = await queryWindowsPictures(async (command) =>
-      command === "powershell.exe" ? "" : "    My Pictures    REG_SZ    D:\\M\uFFFDdias\\Images\r\n",
+    const mangled = await queryWindowsDocuments(async (command) =>
+      command === "powershell.exe" ? "" : "    Personal    REG_SZ    D:\\M\uFFFDdias\\Images\r\n",
     );
     expect(mangled).toBeNull();
-    expect(await platformDefaultRoot(win({}, "D:\\M\uFFFDdias\\Images"))).toBe("C:\\Users\\ada\\Pictures\\Node Banana");
+    expect(await platformDefaultRoot(win({}, "D:\\M\uFFFDdias\\Images"))).toBe("C:\\Users\\ada\\Documents\\Node Banana");
   });
 });
 
 describe("other platforms", () => {
-  it("reads XDG_PICTURES_DIR like xdg-user-dir", () => {
-    expect(parseXdgPictures('XDG_PICTURES_DIR="$HOME/Bilder"\n', "/home/ada")).toBe("/home/ada/Bilder");
-    expect(parseXdgPictures('XDG_PICTURES_DIR="/data/pics"', "/home/ada")).toBe("/data/pics");
+  it("reads XDG_DOCUMENTS_DIR like xdg-user-dir", () => {
+    expect(parseXdgDocuments('XDG_DOCUMENTS_DIR="$HOME/Bilder"\n', "/home/ada")).toBe("/home/ada/Bilder");
+    expect(parseXdgDocuments('XDG_DOCUMENTS_DIR="/data/pics"', "/home/ada")).toBe("/data/pics");
     // Pointing at $HOME disables the folder.
-    expect(parseXdgPictures('XDG_PICTURES_DIR="$HOME/"', "/home/ada")).toBeNull();
+    expect(parseXdgDocuments('XDG_DOCUMENTS_DIR="$HOME/"', "/home/ada")).toBeNull();
   });
 
   it("uses the user-dirs file on Linux", async () => {
     const config = path.join(home, ".config");
     fs.mkdirSync(config);
-    fs.writeFileSync(path.join(config, "user-dirs.dirs"), 'XDG_PICTURES_DIR="$HOME/Fotos"\n');
+    fs.writeFileSync(path.join(config, "user-dirs.dirs"), 'XDG_DOCUMENTS_DIR="$HOME/Fotos"\n');
     expect(await platformDefaultRoot(ctx({ platform: "linux" }))).toBe(path.posix.join(home, "Fotos", "Node Banana"));
     expect(platformCacheDir(ctx({ platform: "linux", env: { XDG_CACHE_HOME: "/var/cache/ada" } }))).toBe(
       "/var/cache/ada/node-banana",
@@ -257,6 +257,6 @@ describe("other platforms", () => {
     expect(detectSynced("/Users/ada/Library/Mobile Documents/com~apple~CloudDocs/NB", mac)).toBe("icloud");
     expect(detectSynced("/Users/ada/Dropbox/Node Banana", mac)).toBe("dropbox");
     expect(detectSynced("/Users/ada/Library/CloudStorage/OneDrive-Personal/NB", mac)).toBe("onedrive");
-    expect(detectSynced("/Users/ada/Pictures/Node Banana", mac)).toBeNull();
+    expect(detectSynced("/Users/ada/Documents/Node Banana", mac)).toBeNull();
   });
 });
