@@ -35,6 +35,9 @@ import {
 } from "@/components/ui/Dialog";
 import { Field, Segmented, Select, Slider, Switch, TextInput, helpClass, labelClass, type SegmentedOption } from "@/components/ui/Controls";
 import { getRecorderLibraryStatus } from "@/lib/assets/client/recorder";
+import { fetchProjectFolderName } from "@/lib/assets/client/api";
+import type { ProjectFolderName } from "@/lib/assets/types";
+import { shortenHomePath } from "@/components/assets/projectsFormat";
 import { APP_VERSION } from "@/lib/appVersion";
 import { cn } from "@/components/nodes/ui/cn";
 import { ComfyMark } from "@/components/icons/ComfyMark";
@@ -93,7 +96,7 @@ export type SettingsTab = "project" | "library" | "providers" | "comfy" | "nodeD
 /** The rail's entries, with each page's heading and one-line subtitle. */
 const SETTINGS_PAGES: { id: SettingsTab; label: string; title: string; description: string }[] = [
   { id: "project", label: "Project", title: "Project", description: "Name, location and how the file is written." },
-  { id: "library", label: "Library", title: "Library", description: "Where generations are saved, on every workflow." },
+  { id: "library", label: "Storage", title: "Storage", description: "Where your projects and generations are saved." },
   { id: "providers", label: "Providers", title: "Providers", description: "API keys for the model providers this project can call." },
   { id: "comfy", label: "ComfyUI", title: "ComfyUI", description: "Where Comfy app nodes run." },
   { id: "nodeDefaults", label: "Node defaults", title: "Node defaults", description: "Applied when a node is added from the bar or a shortcut." },
@@ -218,6 +221,11 @@ export function ProjectSetupModal({
   const [isValidating, setIsValidating] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "Choose another location…": the project goes in a directory of the user's
+  // choosing instead of a folder of its own inside the Node Banana folder
+  const [customLocation, setCustomLocation] = useState(true);
+  // The folder the name gets inside the Node Banana folder, as the server numbers it
+  const [folderTarget, setFolderTarget] = useState<ProjectFolderName | null>(null);
   // The chosen folder already holds a different workflow: replace it, or save beside it
   const [folderConflict, setFolderConflict] = useState<{ path: string; existingName: string | null } | null>(null);
 
@@ -281,6 +289,11 @@ export function ProjectSetupModal({
         setDirectoryPath(getLastProjectBaseDir() || "");
         setExternalStorage(true);
       }
+      // A project goes in the Node Banana folder unless it already lives
+      // somewhere, or there is no Node Banana folder to put it in.
+      const openingStatus = getRecorderLibraryStatus();
+      setCustomLocation(!(openingStatus?.available && openingStatus.root) || (mode === "settings" && !!saveDirectoryPath));
+      setFolderTarget(null);
 
       // Sync local providers state
       editedProviderKeys.current.clear();
@@ -327,6 +340,40 @@ export function ProjectSetupModal({
     // Only a new request moves the page; the open effect above handles opening.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageRequest]);
+
+  // Where the name lands in the Node Banana folder, asked as it is typed
+  const recorderStatus = getRecorderLibraryStatus();
+  const libraryRoot = recorderStatus?.available ? recorderStatus.root : null;
+  const folderQuery = isOpen && activeTab === "project" && !customLocation && libraryRoot ? name.trim() || "my-project" : null;
+  useEffect(() => {
+    if (folderQuery === null) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetchProjectFolderName(folderQuery, controller.signal)
+        .then((target) => {
+          if (!controller.signal.aborted) setFolderTarget(target);
+        })
+        .catch(() => {
+          // The line falls back to the plain name; saving asks again
+        });
+    }, 150);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [folderQuery]);
+
+  /** "Choose another location…" and back: a chosen directory starts at the Node Banana folder. */
+  const toggleCustomLocation = () => {
+    if (customLocation) {
+      setCustomLocation(false);
+    } else {
+      if (!directoryPath.trim() && libraryRoot) setDirectoryPath(libraryRoot);
+      setCustomLocation(true);
+    }
+    setError(null);
+    setFolderConflict(null);
+  };
 
   const handleBrowse = async () => {
     setIsBrowsing(true);
@@ -386,12 +433,24 @@ export function ProjectSetupModal({
       return;
     }
 
-    if (!directoryPath.trim()) {
+    const inFolder = !customLocation && !!libraryRoot;
+    if (!inFolder && !directoryPath.trim()) {
       setError("Project directory is required");
       return;
     }
 
-    const fullProjectPath = ensureProjectSubfolderPath(directoryPath, projectName);
+    let fullProjectPath: string;
+    if (inFolder) {
+      // Asked afresh: a folder may have appeared since the name was typed
+      try {
+        fullProjectPath = (await fetchProjectFolderName(projectName.trim())).path;
+      } catch (err) {
+        setError(`Could not find a folder for the project: ${err instanceof Error ? err.message : "Unknown error"}`);
+        return;
+      }
+    } else {
+      fullProjectPath = ensureProjectSubfolderPath(directoryPath, projectName);
+    }
 
     if (!(fullProjectPath.startsWith("/") || /^[A-Za-z]:[\\\/]/.test(fullProjectPath) || fullProjectPath.startsWith("\\\\"))) {
       setError("Project directory must be an absolute path (starting with /, a drive letter, or a UNC path)");
@@ -435,8 +494,8 @@ export function ProjectSetupModal({
 
       // Update external storage setting
       setUseExternalImageStorage(externalStorage);
-      // Remember the base directory for next time
-      setLastProjectBaseDir(directoryPath);
+      // Remember a chosen base directory for next time
+      if (!inFolder) setLastProjectBaseDir(directoryPath);
       onSave(id, projectName.trim(), fullProjectPath);
       setIsValidating(false);
     } catch (err) {
@@ -512,7 +571,7 @@ export function ProjectSetupModal({
     if (activeTab === "project") {
       handleSaveProject();
     } else if (activeTab === "library") {
-      // Library actions apply as they are made; there is nothing to save.
+      // Storage actions apply as they are made; there is nothing to save.
       onClose();
     } else if (activeTab === "providers") {
       handleSaveProviders();
@@ -556,9 +615,11 @@ export function ProjectSetupModal({
   if (!isOpen) return null;
 
   const page = SETTINGS_PAGES.find((p) => p.id === activeTab) ?? SETTINGS_PAGES[0];
-  // Where generations go without a project, once the asset library has said
-  const libraryStatus = getRecorderLibraryStatus();
-  const libraryRoot = libraryStatus?.available ? libraryStatus.root : null;
+  // The folder the project is saved in, inside the Node Banana folder
+  const folderPath = libraryRoot
+    ? folderTarget?.path ?? joinPathForPlatform(libraryRoot, sanitizeProjectFolderName(name) || "my-project")
+    : null;
+  const takenFolder = folderTarget?.taken ? folderTarget.folder.replace(/ \d+$/, "") : null;
   const llmProvider = localNodeDefaults.llm?.provider || "google";
   const llmTemperature = localNodeDefaults.llm?.temperature ?? 0.7;
   const llmMaxTokens = localNodeDefaults.llm?.maxTokens ?? 8192;
@@ -610,13 +671,25 @@ export function ProjectSetupModal({
                 placeholder="my-project"
                 autoFocus
               />
+              {!customLocation && folderPath && (
+                <>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <p className="min-w-0 text-xs leading-4 text-neutral-500">
+                      Saves to <span className="font-mono text-[11px] text-neutral-400 break-all">{shortenHomePath(folderPath)}</span>
+                    </p>
+                    <DialogTextButton className="-mr-1.5 shrink-0 text-xs" onClick={toggleCustomLocation}>
+                      Choose another location…
+                    </DialogTextButton>
+                  </div>
+                  {takenFolder && (
+                    <p className={helpClass}>There’s already a “{takenFolder}” folder there, so this one gets a number.</p>
+                  )}
+                </>
+              )}
             </Field>
 
-            <Field
-              id="project-directory"
-              label="Project directory"
-              help="Workflow files and images will be saved here. Subfolders for inputs and generations will be auto-created."
-            >
+            {customLocation && (
+            <Field id="project-directory" label="Project directory">
               <div className="flex gap-2">
                 <TextInput
                   id="project-directory"
@@ -635,10 +708,18 @@ export function ProjectSetupModal({
                   {isBrowsing ? "..." : "Browse"}
                 </DialogButton>
               </div>
-              {libraryRoot && (
-                <p className={helpClass}>Generations are saved to {libraryRoot} even without a project.</p>
-              )}
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <p className="min-w-0 text-xs leading-4 text-neutral-500">
+                  Only this project is saved here. Its generations still show in Assets.
+                </p>
+                {libraryRoot && (
+                  <DialogTextButton className="-mr-1.5 shrink-0 text-xs" onClick={toggleCustomLocation}>
+                    Use the Node Banana folder
+                  </DialogTextButton>
+                )}
+              </div>
             </Field>
+            )}
 
             <DialogRow
               title="Embed images as base64"
@@ -674,8 +755,8 @@ export function ProjectSetupModal({
           </div>
         )}
 
-        {/* Library Tab Content */}
-        {activeTab === "library" && <LibrarySettingsTab />}
+        {/* Storage Tab Content */}
+        {activeTab === "library" && <LibrarySettingsTab onLeave={onClose} />}
 
         {/* Providers Tab Content */}
         {activeTab === "providers" && (

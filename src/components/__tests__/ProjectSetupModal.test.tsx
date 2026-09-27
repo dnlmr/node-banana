@@ -819,17 +819,99 @@ describe("ProjectSetupModal", () => {
       await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
       expect(screen.queryByText("Folder already has a workflow")).toBeNull();
     });
+  });
 
-    it("says where generations go without a project, once the library has answered", () => {
-      mockLibraryStatus.mockReturnValue({ available: true, root: "/Users/me/Pictures/Node Banana" });
-      const { unmount } = render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="new" />);
-      expect(screen.getByText("Generations are saved to /Users/me/Pictures/Node Banana even without a project.")).toBeInTheDocument();
-      unmount();
+  describe("Saving into the Node Banana folder", () => {
+    const ROOT = "/Users/me/Documents/Node Banana";
+    /** Folders already in the Node Banana folder, lower-cased, as the folder-name route numbers past them. */
+    let taken: string[] = [];
 
+    beforeEach(() => {
+      taken = [];
+      mockLibraryStatus.mockReturnValue({ available: true, root: ROOT });
+      mockFetch.mockImplementation((url: string) => {
+        if (url.startsWith("/api/assets/projects/folder-name?")) {
+          const name = new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("name") ?? "";
+          let folder = name;
+          for (let n = 2; taken.includes(folder.toLowerCase()); n++) folder = `${name} ${n}`;
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ folder, path: `${ROOT}/${folder}`, taken: folder !== name }),
+          });
+        }
+        if (url.startsWith("/api/workflow?")) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, exists: false }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      });
+    });
+
+    afterEach(() => {
+      mockLibraryStatus.mockReturnValue(null);
+    });
+
+    it("saves a new project in a folder of its own there, named after it", async () => {
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+      expect(screen.queryByLabelText("Project directory")).toBeNull();
+
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Lookbook" } });
+      expect(await screen.findByText("~/Documents/Node Banana/Lookbook")).toBeInTheDocument();
+      expect(screen.getByText(/Saves to/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Lookbook", `${ROOT}/Lookbook`));
+      // Only a chosen directory is remembered as the next one to offer
+      expect(localStorageMock.setItem).not.toHaveBeenCalledWith("node-banana-last-project-dir", expect.anything());
+    });
+
+    it("numbers the folder past one that is taken, and says why", async () => {
+      taken = ["lookbook"];
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Lookbook" } });
+      expect(await screen.findByText("~/Documents/Node Banana/Lookbook 2")).toBeInTheDocument();
+      expect(screen.getByText("There’s already a “Lookbook” folder there, so this one gets a number.")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Lookbook", `${ROOT}/Lookbook 2`));
+    });
+
+    it("chooses another location, starting at the Node Banana folder, and comes back", async () => {
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Fox" } });
+
+      fireEvent.click(screen.getByText("Choose another location…"));
+      expect(screen.getByLabelText("Project directory")).toHaveValue(ROOT);
+      expect(screen.getByText("Only this project is saved here. Its generations still show in Assets.")).toBeInTheDocument();
+      expect(screen.queryByText(/Saves to/)).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("Project directory"), { target: { value: "/projects" } });
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+
+      fireEvent.click(screen.getByText("Use the Node Banana folder"));
+      expect(screen.queryByLabelText("Project directory")).toBeNull();
+      expect(await screen.findByText("~/Documents/Node Banana/Fox")).toBeInTheDocument();
+    });
+
+    it("keeps a saved project's own directory in its settings", () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+      expect(screen.getByLabelText("Project directory")).toHaveValue("/projects/Fox");
+      expect(screen.getByText("Use the Node Banana folder")).toBeInTheDocument();
+    });
+
+    it("asks for a directory when there is no Node Banana folder", () => {
       mockLibraryStatus.mockReturnValue({ available: false, root: null });
       render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="new" />);
-      expect(screen.queryByText(/Generations are saved to/)).toBeNull();
-      mockLibraryStatus.mockReturnValue(null);
+      expect(screen.getByLabelText("Project directory")).toBeInTheDocument();
+      expect(screen.queryByText("Use the Node Banana folder")).toBeNull();
+      expect(screen.queryByText("Choose another location…")).toBeNull();
     });
   });
 
@@ -1353,7 +1435,7 @@ describe("Noodles tab", () => {
   });
 });
 
-describe("Library page", () => {
+describe("Storage page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // The env status plays no part here; left pending, it cannot update after a test ends.
@@ -1365,15 +1447,15 @@ describe("Library page", () => {
     render(<ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
     const rail = screen.getByRole("navigation", { name: "Settings pages" });
     const pages = Array.from(rail.querySelectorAll("button")).map((button) => button.textContent);
-    expect(pages.slice(0, 3)).toEqual(["Project", "Library", "Providers"]);
+    expect(pages.slice(0, 3)).toEqual(["Project", "Storage", "Providers"]);
   });
 
-  it("opens on the Library page when asked, with Done in place of Cancel and Save", () => {
+  it("opens on the Storage page when asked, with Done in place of Cancel and Save", () => {
     const onClose = vi.fn();
     render(<ProjectSetupModal isOpen={true} onClose={onClose} onSave={vi.fn()} mode="settings" initialTab="library" />);
-    expect(screen.getByRole("button", { name: "Library" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("heading", { name: "Library" })).toBeInTheDocument();
-    expect(screen.getByText("Where generations are saved, on every workflow.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
+    expect(screen.getByText("Where your projects and generations are saved.")).toBeInTheDocument();
     expect(screen.getByTestId("library-settings")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
@@ -1388,7 +1470,7 @@ describe("Library page", () => {
     expect(screen.getByRole("button", { name: "Project" })).toHaveAttribute("aria-current", "page");
 
     rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={2} />);
-    expect(screen.getByRole("button", { name: "Library" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("library-settings")).toBeInTheDocument();
 
     // The user moves on; a re-render without a new request leaves them there
@@ -1398,7 +1480,7 @@ describe("Library page", () => {
 
     // The same page asked for again
     rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={3} />);
-    expect(screen.getByRole("button", { name: "Library" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
   });
 
   it("renders into the body, so it opens while its host is hidden", () => {
