@@ -21,7 +21,7 @@ const shortcutGroups: ShortcutGroup[] = [
     title: "General",
     shortcuts: [
       { keys: [`${modKey}`, "Enter"], description: "Run workflow" },
-      { keys: ["⌥", "Enter"], description: "Run selected node only" },
+      { keys: ["⌥", "Enter"], description: "Run selected node only, not the rest" },
       { keys: [`${modKey}`, "C"], description: "Copy selected nodes" },
       { keys: [`${modKey}`, "V"], description: "Paste nodes / image / text" },
       { keys: [`${modKey}`, "Z"], description: "Undo" },
