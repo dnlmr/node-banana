@@ -586,7 +586,7 @@ export function FloatingActionBar() {
 
           {/* Dropdown menu */}
           {runMenuOpen && !isRunning && (
-            <MenuSurface floating={false} role="menu" data-tutorial="floating-run-menu" className="absolute bottom-full right-0 z-20 mb-2 min-w-[196px] py-1">
+            <MenuSurface floating={false} role="menu" data-tutorial="floating-run-menu" className="absolute bottom-full right-0 z-20 mb-2 min-w-[256px] py-1 [&_button]:whitespace-nowrap">
               <MenuItem
                 role="menuitem"
                 onClick={() => {
