@@ -10,18 +10,33 @@
  * reported as moved with leftovers, never as a failed job. Cancelling stops
  * between files and removes the copy of the project in progress; projects
  * already moved stay moved.
+ *
+ * The project in progress is named in `<root>/.nodebanana/project-move.json`
+ * (from, dest, phase), so a copy cut short by quitting is never listed or
+ * indexed, and is removed at the next start while its source is still there.
  */
 
 import { promises as fs, type Dirent } from "fs";
 import path from "path";
 import type { MovedProject } from "../types";
 import { errnoCode, LibraryError } from "./errors";
-import { isInsideRoot, pathKey } from "./fsutil";
+import { atomicWriteFile, isInsideRoot, pathKey } from "./fsutil";
 import type { JobContext } from "./jobs";
+import { DATA_DIR } from "./layout";
 import { moveRefusal, outermost, uniqueFolderName } from "./known";
 import type { AssetLibrary } from "./library";
 import type { ProjectRegistry } from "./registry";
 import { normaliseProjectDir } from "./validate";
+
+/** In the Node Banana folder's data folder: the project a move is copying or has just relocated. */
+export const PROJECT_MOVE_MARKER = "project-move.json";
+
+/** `copying`: the copy isn't whole and nothing points at it yet. `relocated`: the library follows the copy. */
+interface ProjectMoveMarker {
+  from: string;
+  dest: string;
+  phase: "copying" | "relocated";
+}
 
 /** Most folders one move takes. */
 export const MAX_MOVE_PROJECTS = 500;
@@ -145,6 +160,78 @@ async function copyEntry(source: string, dest: string, entry: Entry): Promise<vo
   if (copied.size !== original.size) {
     throw new LibraryError(`The copy of ${entry.rel} didn't come out the same size. Nothing more was moved.`, 500, "copy_mismatch");
   }
+  // Open sorts projects by their workflow files' times: the copy keeps the original's.
+  await fs.utimes(to, original.atime, original.mtime).catch(() => {});
+}
+
+/** Gives the copy's folders their originals' times, deepest first (copying into a folder changes its time). */
+async function copyFolderTimes(source: string, dest: string, entries: readonly Entry[]): Promise<void> {
+  const dirs = entries.filter((entry) => entry.kind === "dir").map((entry) => entry.rel);
+  dirs.sort((a, b) => b.length - a.length);
+  for (const rel of [...dirs, ""]) {
+    try {
+      const original = await fs.stat(path.join(source, rel));
+      await fs.utimes(path.join(dest, rel), original.atime, original.mtime);
+    } catch {
+      // Only the times: the copy is whole either way.
+    }
+  }
+}
+
+function markerFile(root: string): string {
+  return path.join(root, DATA_DIR, PROJECT_MOVE_MARKER);
+}
+
+async function writeMarker(root: string, marker: ProjectMoveMarker): Promise<void> {
+  await fs.mkdir(path.join(root, DATA_DIR), { recursive: true });
+  await atomicWriteFile(markerFile(root), `${JSON.stringify(marker)}\n`, { fsync: true });
+}
+
+async function clearMarker(root: string): Promise<void> {
+  await fs.rm(markerFile(root), { force: true }).catch(() => {});
+}
+
+/** The project a move in `root` is working on, or null. */
+export async function readProjectMoveMarker(root: string): Promise<ProjectMoveMarker | null> {
+  try {
+    const value: unknown = JSON.parse(await fs.readFile(markerFile(root), "utf8"));
+    if (!value || typeof value !== "object") return null;
+    const { from, dest, phase } = value as Record<string, unknown>;
+    if (typeof from !== "string" || typeof dest !== "string" || (phase !== "copying" && phase !== "relocated")) return null;
+    return { from, dest, phase };
+  } catch {
+    return null;
+  }
+}
+
+/** A folder in `root` holding an unfinished copy (never listed or indexed), or null. */
+export async function unfinishedProjectCopy(root: string): Promise<string | null> {
+  const marker = await readProjectMoveMarker(root);
+  return marker?.phase === "copying" && isInsideRoot(root, marker.dest) ? marker.dest : null;
+}
+
+/**
+ * At start, finishes with a move that quitting cut short: a copy still in
+ * progress is removed while its source is still there (the source is the
+ * project); a relocated one is kept (the library follows it) and whatever
+ * is left of the source stays, as after any move with leftovers.
+ */
+export async function recoverProjectMove(root: string): Promise<void> {
+  const marker = await readProjectMoveMarker(root);
+  if (!marker) {
+    await clearMarker(root);
+    return;
+  }
+  if (marker.phase === "copying" && isInsideRoot(root, marker.dest)) {
+    let sourceThere = false;
+    try {
+      sourceThere = (await fs.lstat(marker.from)).isDirectory();
+    } catch {
+      // Gone: the copy is all there is, so it stays.
+    }
+    if (sourceThere) await fs.rm(marker.dest, { recursive: true, force: true }).catch(() => {});
+  }
+  await clearMarker(root);
 }
 
 /** The folder a project moves to: its own name in `root`, numbered past a taken one, created now. */
@@ -193,7 +280,9 @@ export async function runProjectsMove(ctx: JobContext, deps: ProjectsMoveDeps, d
   for (const { dir, entries } of plans) {
     ctx.checkCancelled();
     const dest = await claimDestination(root, dir);
+    let listing: Entry[];
     try {
+      await writeMarker(root, { from: dir, dest, phase: "copying" });
       for (const entry of entries) {
         ctx.checkCancelled();
         await copyEntry(dir, dest, entry);
@@ -203,21 +292,34 @@ export async function runProjectsMove(ctx: JobContext, deps: ProjectsMoveDeps, d
         }
       }
       // What changed in the source while it was copied: a recording that landed, a save.
-      await copyChanges(ctx, dir, dest, entries);
+      listing = await copyChanges(ctx, dir, dest, entries);
     } catch (error) {
       await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
+      await clearMarker(root);
       throw error;
     }
 
     // The copy is whole: the library follows it before the source goes.
     // Published, so a move of the library in the other build waits for these records.
-    await library.writing(() => library.relocateExternal(dir, dest));
-    await registry.relocate(dir, dest);
-    // Anything that landed in the source during that, one last time. The project has moved
-    // now, so a cancel no longer stops it; a copy that fails keeps the source whole.
+    // Either both follow or neither does, and a failure leaves only the source.
+    try {
+      await library.writing(() => library.relocateExternal(dir, dest));
+      await registry.relocate(dir, dest);
+      await writeMarker(root, { from: dir, dest, phase: "relocated" });
+    } catch (error) {
+      await library.writing(() => library.relocateExternal(dest, dir)).catch(() => {});
+      await registry.relocate(dest, dir).catch(() => {});
+      await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
+      await clearMarker(root);
+      throw error;
+    }
+    // Anything that landed in the source during that, one last time, compared with the
+    // source as last copied (size and time: a save can keep a file's size). The project
+    // has moved now, so a cancel no longer stops it; a copy that fails keeps the source whole.
     let leftovers = false;
     try {
-      await copyChanges({ ...ctx, checkCancelled: () => {} }, dir, dest, await listTree(dest), true);
+      listing = await copyChanges({ ...ctx, checkCancelled: () => {} }, dir, dest, listing);
+      await copyFolderTimes(dir, dest, listing);
     } catch {
       leftovers = true;
     }
@@ -228,6 +330,7 @@ export async function runProjectsMove(ctx: JobContext, deps: ProjectsMoveDeps, d
         leftovers = true;
       }
     }
+    await clearMarker(root);
     moved.push({ from: dir, to: dest, ...(leftovers ? { leftovers: true } : {}) });
     ctx.update({ moved: [...moved] });
   }
@@ -242,12 +345,12 @@ export async function runProjectsMove(ctx: JobContext, deps: ProjectsMoveDeps, d
 
 /**
  * Copies what is new or changed in `dir` since `known` was listed (by size
- * and mtime), a few passes until nothing is. With `destKnown`, `known`
- * describes the destination, so every source file the destination lacks or
- * holds at another size is copied.
+ * and mtime), a few passes until nothing is. Returns the source's listing
+ * as last copied, for a later pass to compare against.
  */
-async function copyChanges(ctx: JobContext, dir: string, dest: string, known: Entry[], destKnown = false): Promise<void> {
+async function copyChanges(ctx: JobContext, dir: string, dest: string, known: Entry[]): Promise<Entry[]> {
   let before = new Map(known.map((entry) => [entry.rel, entry]));
+  let listing = known;
   for (let pass = 0; pass < RESCAN_PASSES; pass++) {
     ctx.checkCancelled();
     const now = await listTree(dir);
@@ -255,15 +358,15 @@ async function copyChanges(ctx: JobContext, dir: string, dest: string, known: En
       const seen = before.get(entry.rel);
       if (!seen || seen.kind !== entry.kind) return true;
       if (entry.kind !== "file") return false;
-      return destKnown ? seen.size !== entry.size : seen.size !== entry.size || seen.mtimeMs !== entry.mtimeMs;
+      return seen.size !== entry.size || seen.mtimeMs !== entry.mtimeMs;
     });
-    if (!changed.length) return;
+    listing = now;
+    if (!changed.length) return listing;
     for (const entry of changed) {
       ctx.checkCancelled();
       await copyEntry(dir, dest, entry);
     }
     before = new Map(now.map((entry) => [entry.rel, entry]));
-    destKnown = false;
   }
+  return listing;
 }
-

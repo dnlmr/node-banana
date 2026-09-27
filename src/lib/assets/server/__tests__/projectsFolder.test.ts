@@ -7,7 +7,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LibraryJobStatus, RecordAssetMeta, RecordAssetResult } from "../../types";
 import {
   __assetLibraryForTests,
@@ -27,7 +27,7 @@ import {
   upsertWorkflowEntry,
 } from "../index";
 import type { JobContext } from "../jobs";
-import { runProjectsMove } from "../projectMove";
+import { PROJECT_MOVE_MARKER, recoverProjectMove, runProjectsMove } from "../projectMove";
 import { ProjectRegistry, readRegistry } from "../registry";
 import { installBridge, makePng, meta, sha256, streamOf, tempDir } from "./helpers";
 
@@ -178,6 +178,91 @@ describe("the projects move", () => {
     expect(fs.readdirSync(path.join(defaultRoot, "First", "generations"))).toHaveLength(2);
     expect(fs.existsSync(path.join(defaultRoot, "Second"))).toBe(false);
     expect(fs.readdirSync(path.join(second, "generations"))).toHaveLength(3);
+  });
+
+  function quietCtx(status: Partial<LibraryJobStatus> = {}): JobContext {
+    return {
+      signal: new AbortController().signal,
+      update: (patch) => Object.assign(status, patch),
+      addBytes: () => {},
+      step: () => {},
+      checkCancelled: () => {},
+    };
+  }
+
+  it("keeps the files' and folders' times, so Open keeps its order", async () => {
+    await getLibraryStatus();
+    const source = project(path.join(base, "Old", "Dated"), "Dated", 1);
+    const when = new Date(Date.UTC(2024, 0, 2, 3, 4, 5));
+    fs.utimesSync(path.join(source, "Dated.json"), when, when);
+    fs.utimesSync(path.join(source, "generations"), when, when);
+    const job = await finished((await bringInProjects({ dirs: [source], mode: "move" })).job);
+    expect(job.state).toBe("done");
+    const dest = path.join(defaultRoot, "Dated");
+    expect(fs.statSync(path.join(dest, "Dated.json")).mtimeMs).toBe(when.getTime());
+    expect(fs.statSync(path.join(dest, "generations")).mtimeMs).toBe(when.getTime());
+  });
+
+  it("copies a file saved at the same size just before the source goes", async () => {
+    await getLibraryStatus();
+    const library = await __assetLibraryForTests();
+    const source = project(path.join(base, "Old", "Busy"), "Busy");
+    fs.mkdirSync(path.join(source, "inputs"));
+    const note = path.join(source, "inputs", "note.txt");
+    fs.writeFileSync(note, "aaaa");
+    const registry = new ProjectRegistry(registryFile);
+    const relocate = registry.relocate.bind(registry);
+    vi.spyOn(registry, "relocate").mockImplementation(async (from, to) => {
+      // A save lands while the library follows the copy: same size, later time.
+      fs.writeFileSync(note, "bbbb");
+      const later = new Date(Date.now() + 60_000);
+      fs.utimesSync(note, later, later);
+      await relocate(from, to);
+    });
+    await runProjectsMove(quietCtx(), { library, root: defaultRoot, registry }, [source]);
+    expect(fs.readFileSync(path.join(defaultRoot, "Busy", "inputs", "note.txt"), "utf8")).toBe("bbbb");
+    expect(fs.existsSync(source)).toBe(false);
+  });
+
+  it("puts everything back when the library can't follow the copy", async () => {
+    await getLibraryStatus();
+    const library = await __assetLibraryForTests();
+    const source = project(path.join(base, "Old", "Paused"), "Paused", 1);
+    const recorded = await record({ projectDir: source, workflowId: "wf_paused", workflowName: "Paused" });
+    const registry = new ProjectRegistry(registryFile);
+    await registry.add([{ dir: source }]);
+    vi.spyOn(registry, "relocate").mockRejectedValueOnce(new Error("paused"));
+    await expect(runProjectsMove(quietCtx(), { library, root: defaultRoot, registry }, [source])).rejects.toThrow("paused");
+    expect(fs.existsSync(path.join(defaultRoot, "Paused"))).toBe(false);
+    expect(fs.existsSync(path.join(source, "Paused.json"))).toBe(true);
+    expect((await getAsset(recorded.asset.id))?.file).toEqual({ root: "external", path: path.join(source, "generations", recorded.filename) });
+    expect((await readRegistry(registryFile)).projects.map((entry) => entry.dir)).toEqual([source]);
+    expect(fs.existsSync(path.join(defaultRoot, ".nodebanana", PROJECT_MOVE_MARKER))).toBe(false);
+  });
+
+  it("never lists a copy quitting cut short, and removes it at the next start", async () => {
+    await getLibraryStatus();
+    const source = project(path.join(base, "Old", "Half"), "Half", 2);
+    const dest = project(path.join(defaultRoot, "Half"), "Half", 1);
+    const marker = path.join(defaultRoot, ".nodebanana", PROJECT_MOVE_MARKER);
+    fs.writeFileSync(marker, JSON.stringify({ from: source, dest, phase: "copying" }));
+    expect((await listProjects()).projects.map((known) => known.dir)).not.toContain(dest);
+
+    await recoverProjectMove(defaultRoot);
+    expect(fs.existsSync(dest)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.readdirSync(path.join(source, "generations"))).toHaveLength(2);
+  });
+
+  it("keeps a copy the library already follows", async () => {
+    await getLibraryStatus();
+    const source = project(path.join(base, "Old", "Kept"), "Kept");
+    const dest = project(path.join(defaultRoot, "Kept"), "Kept");
+    const marker = path.join(defaultRoot, ".nodebanana", PROJECT_MOVE_MARKER);
+    fs.writeFileSync(marker, JSON.stringify({ from: source, dest, phase: "relocated" }));
+    await recoverProjectMove(defaultRoot);
+    expect(fs.existsSync(path.join(dest, "Kept.json"))).toBe(true);
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

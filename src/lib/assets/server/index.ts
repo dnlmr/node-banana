@@ -93,7 +93,7 @@ import {
   type PathContext,
   type ResolvedLocation,
 } from "./paths";
-import { normaliseMoveDirs, runProjectsMove } from "./projectMove";
+import { normaliseMoveDirs, recoverProjectMove, runProjectsMove, unfinishedProjectCopy } from "./projectMove";
 import { findProjects, resolveScanRoot } from "./projects";
 import { assessReadable, findUnreadable } from "./readable";
 import { ProjectRegistry, registryDir } from "./registry";
@@ -306,6 +306,8 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
     // Already marked.
   }
   await noteInterruptedMove(rt, library);
+  // A project move quitting cut short: its partial copy goes before anything lists it.
+  if (!rt.jobs.isRunning) await recoverProjectMove(layout.root);
   await library.ensureLoaded();
   track(rt, findUnreadable(library).then((ids) => markUnreadable(rt, library, ids)));
   const dirs = [layout.data, layout.assets, layout.runs, layout.media, layout.posters, layout.pendingReleases];
@@ -885,9 +887,11 @@ async function projectsContext(rt: Runtime): Promise<{ library: AssetLibrary; lo
 
 async function knownProjects(location: ResolvedLocation, library: AssetLibrary, registry: ProjectRegistry): Promise<KnownProject[]> {
   const layout = libraryLayout(location.root);
+  // A project a move is still copying in isn't one yet (nor something to index).
+  const copying = await unfinishedProjectCopy(location.root);
   return listKnownProjects({
     root: location.root,
-    exclude: [layout.generations, layout.data, location.cacheDir],
+    exclude: [layout.generations, layout.data, location.cacheDir, ...(copying ? [copying] : [])],
     registryDirs: (await registry.read()).projects.map((project) => project.dir),
     workflowDirs: library.workflowProjectPaths(),
   });
