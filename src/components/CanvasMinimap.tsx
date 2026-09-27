@@ -33,7 +33,7 @@ export const MINIMAP_GEOMETRY = {
 /** The control row beneath the minimap (h-10). */
 const CONTROL_ROW_HEIGHT = 40;
 
-/** The navigator card's outer height, for chrome stacked above it (the agent button). */
+/** The navigator card's outer height, for chrome stacked above it (the agent window). */
 export function getNavigatorHeight(minimapVisible: boolean): number {
   const border = 2;
   return minimapVisible

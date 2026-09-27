@@ -176,10 +176,26 @@ describe("AgentPanel", () => {
     expect(panel.className).toContain("nb-agent");
     expect(panel.className).toContain("nowheel");
     expect(panel.className).toContain("nokey");
-    // The window takes the button's place (the button hides while it is open).
     // Gap to the navigator (173 - 8) equals the right margin.
     expect(panel).toHaveStyle({ right: "15px", bottom: "180px", width: "400px" });
     await waitForComposer();
+  });
+
+  it("tells the button whose mark to show, marks the harness chosen on open, and flags a blocked login", async () => {
+    const onPresenceChange = vi.fn();
+    localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", models: {} }));
+    statuses.codex = harnessStatus("codex", { signedIn: false, billing: "none" });
+    renderPanel({ onPresenceChange });
+
+    await screen.findByRole("button", { name: "Sign in with ChatGPT" });
+    expect(onPresenceChange).toHaveBeenLastCalledWith({ harness: "codex", harnessChosen: true, attention: true });
+    expect(JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY) ?? "{}").harnessChosen).toBe(true);
+
+    // The user finishes signing in elsewhere; the next check clears the flag.
+    statuses.codex = harnessStatus("codex");
+    fireEvent.click(screen.getByRole("button", { name: /check again/i }));
+    await waitForComposer();
+    expect(onPresenceChange).toHaveBeenLastCalledWith({ harness: "codex", harnessChosen: true, attention: false });
   });
 
   it("shows the empty state with suggestions once the harness is ready", async () => {
