@@ -33,6 +33,7 @@ import {
   KeyedMutex,
   mapConcurrent,
   PARTIAL_SUFFIX,
+  rebasePath,
   renameWithRetry,
   streamToPartial,
   unlinkWithRetry,
@@ -538,6 +539,39 @@ export class RunStore {
     if (await this.mediaFile(sha256)) return;
     await fs.mkdir(this.layout.media, { recursive: true });
     await atomicWriteFile(this.refFile(sha256), JSON.stringify({ v: 1, path: file, bytes }), { fsync: false });
+  }
+
+  /**
+   * Points every `media/<sha256>.ref` at a file in `fromDir` (or under it)
+   * at the same file under `toDir`: the project folder moved. Returns the
+   * references changed.
+   */
+  async relocateReferences(fromDir: string, toDir: string, platform: NodeJS.Platform = process.platform): Promise<number> {
+    let names: string[];
+    try {
+      names = await fs.readdir(this.layout.media);
+    } catch {
+      return 0;
+    }
+    let changed = 0;
+    for (const name of names) {
+      const sha256 = name.slice(0, -REF_SUFFIX.length);
+      if (!name.endsWith(REF_SUFFIX) || !isSha256(sha256)) continue;
+      const file = path.join(this.layout.media, name);
+      let ref: { path?: unknown; bytes?: unknown };
+      try {
+        ref = JSON.parse(await fs.readFile(file, "utf8")) as { path?: unknown; bytes?: unknown };
+      } catch {
+        continue;
+      }
+      if (typeof ref.path !== "string" || !path.isAbsolute(ref.path)) continue;
+      const moved = rebasePath(fromDir, toDir, ref.path, platform);
+      if (!moved || moved === ref.path) continue;
+      await atomicWriteFile(file, JSON.stringify({ ...ref, v: 1, path: moved }), { fsync: false });
+      this.verifiedRefs.delete(sha256);
+      changed++;
+    }
+    return changed;
   }
 
   private async dropReference(sha256: string): Promise<void> {

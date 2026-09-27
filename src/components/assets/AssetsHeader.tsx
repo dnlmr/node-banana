@@ -35,6 +35,7 @@ const JOB_VERBS: Record<LibraryJobStatus["type"], string> = {
   import: "Importing",
   move: "Moving library",
   cleanup: "Cleaning up",
+  projects: "Moving projects",
 };
 
 const SORT_MENU_WIDTH = 176;

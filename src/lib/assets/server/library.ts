@@ -43,6 +43,7 @@ import {
   KeyedMutex,
   mapConcurrent,
   pathKey,
+  rebasePath,
   unlinkWithRetry,
   withFsRetry,
 } from "./fsutil";
@@ -222,6 +223,7 @@ export function parseRecord(value: unknown, expectedId: string, root: string, ra
 
 function sameMutableState(a: AssetRecord, b: AssetRecord): boolean {
   return (
+    sameLocation(a.file, b.file) &&
     a.favorite === b.favorite &&
     a.trashedAt === b.trashedAt &&
     a.hasPoster === b.hasPoster &&
@@ -229,6 +231,12 @@ function sameMutableState(a: AssetRecord, b: AssetRecord): boolean {
     a.tags.length === b.tags.length &&
     a.tags.every((tag, index) => tag === b.tags[index])
   );
+}
+
+/** A project file's location changes when its project folder moves (relocateExternal). */
+function sameLocation(a: AssetFileLocation, b: AssetFileLocation): boolean {
+  if (a.root === "library") return b.root === "library" && a.rel === b.rel;
+  return b.root === "external" && a.path === b.path;
 }
 
 /** How a bulk op changes one record (delete is handled separately). */
@@ -1252,6 +1260,15 @@ export class AssetLibrary {
     return this.workflowTable.get(id);
   }
 
+  /** The project folders the workflows table names, each once. */
+  workflowProjectPaths(): string[] {
+    const paths = new Map<string, string>();
+    for (const entry of this.workflowTable.all()) {
+      if (entry.projectPath) paths.set(this.projectKey(entry.projectPath), entry.projectPath);
+    }
+    return [...paths.values()];
+  }
+
   async upsertWorkflow(id: string, input: WorkflowEntryInput): Promise<LibraryWorkflowEntry> {
     const { entry, changed } = await this.workflowTable.upsert(id, input, this.now());
     if (changed) this.bump();
@@ -1348,6 +1365,34 @@ export class AssetLibrary {
     const { record, line } = await this.updateRecord(id, (current) => ({ ...current, hasPoster: true }));
     if (line) await this.publish([line]);
     return record;
+  }
+
+  /**
+   * A project folder moved from `fromDir` to `toDir`: every project file
+   * recorded in it (or under it) is recorded at the same place in the new
+   * folder, each sidecar rewritten under its lock like any edit, then the
+   * workflow rows' project folders and the snapshot references to its files
+   * follow. Returns the records changed.
+   */
+  async relocateExternal(fromDir: string, toDir: string): Promise<number> {
+    await this.ready();
+    const ids = this.sorted
+      .filter((record) => record.file.root === "external" && isInsideRoot(fromDir, record.file.path, { platform: this.platform }))
+      .map((record) => record.id);
+    const lines: string[] = [];
+    await mapConcurrent(ids, 8, async (id) => {
+      const { line } = await this.updateRecord(id, (current) => {
+        if (current.file.root !== "external") return current;
+        const moved = rebasePath(fromDir, toDir, current.file.path, this.platform);
+        return moved ? { ...current, file: { root: "external", path: moved } } : current;
+      });
+      if (line) lines.push(line);
+      this.missing.delete(id);
+    });
+    await this.publish(lines);
+    if (await this.workflowTable.relocate(fromDir, toDir, this.now())) this.bump();
+    await this.runs.relocateReferences(fromDir, toDir, this.platform);
+    return lines.length;
   }
 
   /**

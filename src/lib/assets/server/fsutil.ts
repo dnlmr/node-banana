@@ -47,6 +47,23 @@ export function isInsideRoot(
   return rel !== ".." && !rel.startsWith(`..${api.sep}`) && !api.isAbsolute(rel);
 }
 
+/**
+ * `candidate` moved along with `fromDir` to `toDir`: the same place under
+ * `toDir`, or null when it is not `fromDir` or inside it. The tail is cut by
+ * length, since on a disk that folds case the two may be spelled differently.
+ */
+export function rebasePath(
+  fromDir: string,
+  toDir: string,
+  candidate: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (!isInsideRoot(fromDir, candidate, { platform, allowEqual: true })) return null;
+  const api = apiFor(platform);
+  const rest = api.resolve(candidate).slice(api.resolve(fromDir).length).replace(/^[\\/]+/, "");
+  return rest ? api.join(api.resolve(toDir), rest) : api.resolve(toDir);
+}
+
 /** A map key for a path: resolved, and case-folded where the filesystem folds case. */
 export function pathKey(p: string, platform: NodeJS.Platform = process.platform): string {
   const resolved = apiFor(platform).resolve(p);

@@ -14,7 +14,7 @@
 
 import { promises as fs } from "fs";
 import path from "path";
-import { atomicWriteFile, isInsideRoot, KeyedMutex, pathKey } from "./fsutil";
+import { atomicWriteFile, KeyedMutex, pathKey, rebasePath } from "./fsutil";
 import { MAX_PROJECT_DIR_LENGTH } from "./validate";
 
 export interface RegistryProject {
@@ -152,14 +152,12 @@ export function relocateProjects(
   toDir: string,
   platform: NodeJS.Platform = process.platform,
 ): void {
-  const api = apiFor(platform);
   const moved: RegistryProject[] = [];
   const kept: RegistryProject[] = [];
   for (const project of registry.projects) {
-    if (isInsideRoot(fromDir, project.dir, { platform, allowEqual: true })) {
-      // By length, not api.relative: on a disk that folds case the two may be spelled differently.
-      const rel = api.resolve(project.dir).slice(api.resolve(fromDir).length).replace(/^[\\/]+/, "");
-      moved.push({ ...project, dir: rel ? api.join(toDir, rel) : api.resolve(toDir) });
+    const dir = rebasePath(fromDir, toDir, project.dir, platform);
+    if (dir) {
+      moved.push({ ...project, dir });
     } else {
       kept.push(project);
     }

@@ -7,7 +7,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { LibraryWorkflowEntry } from "../types";
-import { atomicWriteFile, KeyedMutex } from "./fsutil";
+import { atomicWriteFile, KeyedMutex, rebasePath } from "./fsutil";
 import { isWorkflowId, normaliseProjectDir, requireWorkflowId } from "./validate";
 import { LibraryError } from "./errors";
 
@@ -131,16 +131,41 @@ export class WorkflowTable {
       };
       const next = new Map(this.entries);
       next.set(id, entry);
-      await fs.mkdir(path.dirname(this.file), { recursive: true });
-      await atomicWriteFile(this.file, JSON.stringify(Object.fromEntries(next)), { fsync: false });
-      this.entries = next;
-      try {
-        const stat = await fs.stat(this.file);
-        this.stamp = `${stat.mtimeMs}:${stat.size}`;
-      } catch {
-        this.stamp = "";
-      }
+      await this.write(next);
       return { entry, changed: true };
     });
+  }
+
+  /**
+   * Points every row whose project folder is `fromDir` or inside it at the
+   * same place under `toDir` (the folder moved). Dated now, so a run's late
+   * upsert naming the old folder doesn't move it back. Returns the rows changed.
+   */
+  async relocate(fromDir: string, toDir: string, now: number = Date.now()): Promise<number> {
+    return this.writes.run("table", async () => {
+      await this.refresh();
+      const next = new Map(this.entries);
+      let changed = 0;
+      for (const [id, entry] of this.entries) {
+        const projectPath = entry.projectPath && rebasePath(fromDir, toDir, entry.projectPath, this.platform);
+        if (!projectPath || projectPath === entry.projectPath) continue;
+        next.set(id, { ...entry, projectPath, updatedAt: Math.max(now, entry.updatedAt) });
+        changed++;
+      }
+      if (changed) await this.write(next);
+      return changed;
+    });
+  }
+
+  private async write(next: Map<string, LibraryWorkflowEntry>): Promise<void> {
+    await fs.mkdir(path.dirname(this.file), { recursive: true });
+    await atomicWriteFile(this.file, JSON.stringify(Object.fromEntries(next)), { fsync: false });
+    this.entries = next;
+    try {
+      const stat = await fs.stat(this.file);
+      this.stamp = `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      this.stamp = "";
+    }
   }
 }

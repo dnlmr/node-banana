@@ -505,7 +505,7 @@ let listSince = 0;
 let statusSeq = 0;
 let appliedStatusSeq = 0;
 /** Jobs that change which assets exist, or where. */
-const LIST_JOBS: ReadonlySet<LibraryJobType> = new Set(["import", "cleanup", "move"]);
+const LIST_JOBS: ReadonlySet<LibraryJobType> = new Set(["import", "cleanup", "move", "projects"]);
 
 function plural(count: number, word: string): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? word : `${word}s`}`;
@@ -522,6 +522,8 @@ function jobDoneMessage(job: LibraryJobStatus): string {
       return "Library moved";
     case "cleanup":
       return job.message ?? "Cleaned up";
+    case "projects":
+      return job.message ?? "Projects moved";
   }
 }
 

@@ -35,7 +35,7 @@ import { extOf, isMediaExtension, isWorkflowId, mediaTypeForExt, normaliseProjec
 
 export interface JobContext {
   signal: AbortSignal;
-  update(patch: Partial<Pick<LibraryJobStatus, "done" | "total" | "bytesDone" | "bytesTotal" | "message">>): void;
+  update(patch: Partial<Pick<LibraryJobStatus, "done" | "total" | "bytesDone" | "bytesTotal" | "message" | "moved">>): void;
   addBytes(bytes: number): void;
   step(): void;
   /** Throws when the job was cancelled. */
@@ -46,6 +46,8 @@ interface JobEntry {
   status: LibraryJobStatus;
   controller: AbortController;
   promise: Promise<void>;
+  /** Started by the app itself (the auto-index): never shown in the library status. */
+  quiet: boolean;
 }
 
 /** Finished jobs stay visible in the library status this long. */
@@ -60,8 +62,12 @@ export class JobRunner {
   private readonly jobs = new Map<string, JobEntry>();
   private running: JobEntry | null = null;
 
-  /** Starts `work` as a job, or throws when another job is running. */
-  start(type: LibraryJobType, work: (ctx: JobContext) => Promise<string | void>): LibraryJobStatus {
+  /**
+   * Starts `work` as a job, or throws when another job is running. A
+   * `quiet` job is one the app started on its own: it holds the runner like
+   * any other, but the library status never shows it.
+   */
+  start(type: LibraryJobType, work: (ctx: JobContext) => Promise<string | void>, options: { quiet?: boolean } = {}): LibraryJobStatus {
     if (this.running) {
       throw new LibraryError("Another library task is running. Wait for it to finish or cancel it.", 409, "busy");
     }
@@ -89,7 +95,7 @@ export class JobRunner {
         if (controller.signal.aborted) throw cancelled();
       },
     };
-    const entry: JobEntry = { status, controller, promise: Promise.resolve() };
+    const entry: JobEntry = { status, controller, promise: Promise.resolve(), quiet: options.quiet === true };
     entry.promise = (async () => {
       try {
         const message = await work(ctx);
@@ -136,7 +142,7 @@ export class JobRunner {
       finishedAt: now,
       ...outcome,
     };
-    this.jobs.set(status.id, { status, controller: new AbortController(), promise: Promise.resolve() });
+    this.jobs.set(status.id, { status, controller: new AbortController(), promise: Promise.resolve(), quiet: false });
     return { ...status };
   }
 
@@ -156,16 +162,21 @@ export class JobRunner {
     return this.running !== null;
   }
 
-  /** The running job, else the most recent one if it finished in the last few minutes. */
+  /** The running job, else the most recent one if it finished in the last few minutes (quiet ones never). */
   visible(now: number = Date.now()): LibraryJobStatus | null {
-    if (this.running) return { ...this.running.status };
+    if (this.running && !this.running.quiet) return { ...this.running.status };
     let latest: LibraryJobStatus | null = null;
-    for (const { status } of this.jobs.values()) {
-      if (status.finishedAt && now - status.finishedAt < FINISHED_VISIBLE_MS && (!latest || status.finishedAt > latest.finishedAt!)) {
+    for (const { status, quiet } of this.jobs.values()) {
+      if (!quiet && status.finishedAt && now - status.finishedAt < FINISHED_VISIBLE_MS && (!latest || status.finishedAt > latest.finishedAt!)) {
         latest = status;
       }
     }
     return latest ? { ...latest } : null;
+  }
+
+  /** Resolves when the job has ended, however it ended. */
+  async wait(id: string): Promise<void> {
+    await this.jobs.get(id)?.promise;
   }
 
   async drain(): Promise<void> {
