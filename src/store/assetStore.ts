@@ -332,6 +332,8 @@ function projectKey(projectPath: string, platform: string | undefined): string {
  * filters hide. Records the server returned are never dropped by it.
  */
 export function matchesAssetQuery(asset: AssetView, query: AssetQuery, platform?: string): boolean {
+  // Never listed by the server either: its bytes are not a readable file.
+  if (asset.unreadable) return false;
   const scope = query.scope ?? "library";
   if (scope === "trash" ? !asset.trashedAt : !!asset.trashedAt) return false;
   if (scope === "missing" && !asset.missing) return false;

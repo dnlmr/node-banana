@@ -13,11 +13,21 @@ import type {
   NanoBananaNodeData,
   OutputNodeData,
 } from "@/types";
+import { parseDataUrl } from "@/utils/dataUrl";
+import { sniffExtension } from "@/utils/mediaSniff";
 import { getNodeSize } from "@/utils/nodeDimensions";
 import { ModelSearchDialog } from "@/components/modals/ModelSearchDialog";
 import { GENERATE_NODE_LABEL, capabilityForGenerateNode, sharedGenerateType } from "@/store/utils/modelSelection";
 
 const STACK_GAP = 20;
+/** A zipped image's extension when its bytes don't prove one. */
+const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+};
 type Arrangement = "horizontal" | "vertical" | "grid";
 
 // Memoised: rendered by the canvas, which re-renders on every drag frame
@@ -206,7 +216,7 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
 
   const handleDownloadImages = useCallback(async () => {
     // Extract images from selected nodes based on node type
-    const images: { data: string; name: string }[] = [];
+    const images: { bytes: Uint8Array; name: string }[] = [];
 
     selectedNodes.forEach((node, index) => {
       let imageData: string | null = null;
@@ -226,11 +236,12 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
           break;
       }
 
-      if (imageData) {
-        images.push({
-          data: imageData,
-          name: `image-${index + 1}.png`,
-        });
+      // Only the payload is decoded (any declared type, or none); anything else — a URL — is left out
+      // rather than written into the zip as noise.
+      const parsed = imageData ? parseDataUrl(imageData) : null;
+      if (parsed) {
+        const ext = sniffExtension(parsed.bytes, "image") ?? IMAGE_MIME_EXTENSIONS[parsed.mime] ?? "png";
+        images.push({ bytes: parsed.bytes, name: `image-${index + 1}.${ext}` });
       }
     });
 
@@ -238,10 +249,8 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
 
     // Create ZIP file
     const zip = new JSZip();
-    images.forEach(({ data, name }) => {
-      // Remove data URL prefix to get raw base64
-      const base64Data = data.replace(/^data:image\/\w+;base64,/, "");
-      zip.file(name, base64Data, { base64: true });
+    images.forEach(({ bytes, name }) => {
+      zip.file(name, bytes);
     });
 
     // Generate and download

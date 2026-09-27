@@ -11,12 +11,16 @@
  *
  * Video and 3D thumbnails come from a poster the browser captures and
  * uploads (`.nodebanana/posters/<sha256>.webp`): Node has no video decoder.
+ *
+ * An image asset's file sharp can't decode at all is reported through
+ * `onUndecodable`, and the facade checks whether its records are unreadable
+ * (then they are no longer listed, nor thumbnailed).
  */
 
 import { promises as fs } from "fs";
 import path from "path";
 import { THUMB_WIDTHS, type AssetRecord } from "../types";
-import { LibraryError } from "./errors";
+import { errnoCode, LibraryError } from "./errors";
 import { atomicWriteFile, mapConcurrent, Semaphore, unlinkWithRetry } from "./fsutil";
 import type { AssetLibrary } from "./library";
 import { sniffFamily } from "./media";
@@ -61,6 +65,33 @@ export function isThumbWidth(value: number): value is ThumbWidth {
   return (THUMB_WIDTHS as readonly number[]).includes(value);
 }
 
+/**
+ * A failure of the decoder itself — the bytes — as opposed to the file
+ * system (an errno code: ENOENT, EACCES, EMFILE…), memory, or time.
+ */
+export function isDecodeError(error: unknown): boolean {
+  if (!(error instanceof Error) || errnoCode(error)) return false;
+  return !/time(d)?\s?out|memory|cancel|abort|EMFILE|ENOENT|EACCES|EBUSY/i.test(error.message);
+}
+
+/** What rendering thumbnails from a source came to. */
+type RenderOutcome = "ok" | "failed" | "undecodable";
+
+/** The bytes a hash's thumbnails come from, and the asset file they were read from (not for a poster). */
+interface ThumbSource {
+  bytes: Buffer;
+  file?: string;
+}
+
+export interface ThumbnailerOptions {
+  /**
+   * sharp could not decode an image asset's file (a decode error, not a
+   * missing file or a timeout). The library decides whether its records are
+   * unreadable.
+   */
+  onUndecodable?: (sha256: string, file: string) => void;
+}
+
 export class Thumbnailer {
   readonly dir: string;
   private readonly onDemand = new Semaphore(2);
@@ -71,6 +102,7 @@ export class Thumbnailer {
   constructor(
     cacheDir: string,
     private readonly library: () => AssetLibrary | null,
+    private readonly options: ThumbnailerOptions = {},
   ) {
     this.dir = path.join(cacheDir, "thumbs");
   }
@@ -84,33 +116,43 @@ export class Thumbnailer {
     return library ? path.join(library.layout.posters, `${sha256}.webp`) : null;
   }
 
-  /** Renders every width from one decoded source; true when all were written. */
-  private async render(sha256: string, source: Buffer, widths: readonly ThumbWidth[]): Promise<boolean> {
+  /**
+   * Renders every width from one decoded source. `undecodable` when sharp
+   * could not decode the bytes at all (the other widths are not tried).
+   */
+  private async render(sha256: string, source: Buffer, widths: readonly ThumbWidth[]): Promise<RenderOutcome> {
     const sharp = await loadSharp();
-    if (!sharp) return false;
+    if (!sharp) return "failed";
     await fs.mkdir(this.dir, { recursive: true });
-    let ok = true;
+    let outcome: RenderOutcome = "ok";
     for (const width of widths) {
+      let output: Buffer;
       try {
-        const output = await sharp(source, { animated: false, failOn: "none" })
+        output = await sharp(source, { animated: false, failOn: "none" })
           .rotate()
           .resize({ width, withoutEnlargement: true })
           .webp({ quality: 78 })
           .toBuffer();
+      } catch (error) {
+        if (isDecodeError(error)) return "undecodable";
+        outcome = "failed";
+        continue;
+      }
+      try {
         await atomicWriteFile(this.thumbPath(sha256, width), output, { fsync: false });
       } catch {
-        ok = false;
+        outcome = "failed";
       }
     }
-    return ok;
+    return outcome;
   }
 
-  /** The bytes thumbnails of this hash are made from: a poster, else an image asset's file. */
-  private async sourceFor(sha256: string): Promise<Buffer | null> {
+  /** The bytes thumbnails of this hash are made from: a poster, else a readable image asset's file. */
+  private async sourceFor(sha256: string): Promise<ThumbSource | null> {
     const poster = this.posterPath(sha256);
     if (poster) {
       try {
-        return await fs.readFile(poster);
+        return { bytes: await fs.readFile(poster) };
       } catch {
         // No poster; try the file itself.
       }
@@ -118,11 +160,11 @@ export class Thumbnailer {
     const library = this.library();
     if (!library) return null;
     for (const record of library.recordsWithHash(sha256)) {
-      if (record.kind !== "image" || record.bytes > MAX_SOURCE_BYTES) continue;
+      if (record.kind !== "image" || record.unreadable || record.bytes > MAX_SOURCE_BYTES) continue;
       const file = library.filePath(record);
       if (!file) continue;
       try {
-        return await fs.readFile(file);
+        return { bytes: await fs.readFile(file), file };
       } catch (error) {
         library.noteFileError(record.id, error);
       }
@@ -130,12 +172,16 @@ export class Thumbnailer {
     return null;
   }
 
-  private renderOnce(sha256: string, source: () => Promise<Buffer | null>): Promise<boolean> {
+  private renderOnce(sha256: string, source: () => Promise<ThumbSource | null>): Promise<boolean> {
     let job = this.inFlight.get(sha256);
     if (!job) {
       job = (async () => {
-        const bytes = await source();
-        return bytes ? this.render(sha256, bytes, THUMB_WIDTHS) : false;
+        const found = await source();
+        if (!found) return false;
+        const outcome = await this.render(sha256, found.bytes, THUMB_WIDTHS);
+        // Only an asset's own file says something about the asset; a broken poster doesn't.
+        if (outcome === "undecodable" && found.file) this.options.onUndecodable?.(sha256, found.file);
+        return outcome === "ok";
       })().finally(() => this.inFlight.delete(sha256));
       this.inFlight.set(sha256, job);
     }
@@ -144,12 +190,15 @@ export class Thumbnailer {
 
   /** Queues thumbnails for a just-recorded image (background, one at a time). */
   enqueue(record: AssetRecord, file: string): void {
-    if (record.kind !== "image" || record.bytes > MAX_SOURCE_BYTES) return;
+    if (record.kind !== "image" || record.unreadable || record.bytes > MAX_SOURCE_BYTES) return;
     this.pending++;
     this.queue = this.queue
       .then(async () => {
         if (await this.hasAll(record.sha256)) return;
-        await this.renderOnce(record.sha256, () => fs.readFile(file).catch(() => null));
+        await this.renderOnce(record.sha256, async () => {
+          const bytes = await fs.readFile(file).catch(() => null);
+          return bytes ? { bytes, file } : null;
+        });
       })
       .catch(() => {})
       .finally(() => {
@@ -193,7 +242,7 @@ export class Thumbnailer {
     const cached = await this.served(sha256, width);
     if (cached) return cached;
     const library = this.library();
-    if (!library || library.recordsWithHash(sha256).length === 0) return null;
+    if (!library || !library.recordsWithHash(sha256).some((record) => !record.unreadable)) return null;
     const rendered = await this.onDemand.run(() => this.renderOnce(sha256, () => this.sourceFor(sha256)));
     return rendered || (await this.hasAll(sha256)) ? this.served(sha256, width) : null;
   }

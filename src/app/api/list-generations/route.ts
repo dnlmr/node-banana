@@ -5,7 +5,7 @@ import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 
 /** The media /api/load-generation can serve, so the two routes agree on what counts. */
-const SUPPORTED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif", "mp4", "webm", "mov", "mp3", "wav", "ogg", "flac", "aac"]);
+const SUPPORTED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "mp4", "webm", "mov", "mp3", "wav", "ogg", "flac", "aac", "m4a"]);
 
 /**
  * The generation ids present in a folder: every supported media file, by its

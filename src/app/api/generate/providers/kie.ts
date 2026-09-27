@@ -6,6 +6,7 @@
  */
 
 import { GenerationInput, GenerationOutput } from "@/lib/providers/types";
+import { parseDataUrl } from "@/utils/dataUrl";
 import { validateMediaUrl } from "@/utils/urlValidation";
 
 const MAX_MEDIA_SIZE = 500 * 1024 * 1024; // 500MB
@@ -314,20 +315,22 @@ export async function uploadMediaToKie(
   apiKey: string,
   base64Media: string
 ): Promise<string> {
-  // Extract mime type and data from data URL
+  // Extract mime type and data from data URL (any declared type, parameters, or none).
+  // Only the payload is decoded: decoding the whole string would upload noise.
   let declaredMimeType = "image/png";
   let mediaData = base64Media;
+  let binaryData: Buffer;
 
   if (base64Media.startsWith("data:")) {
-    const matches = base64Media.match(/^data:([^;]+);base64,(.+)$/);
-    if (matches) {
-      declaredMimeType = matches[1];
-      mediaData = matches[2];
-    }
+    const parsed = parseDataUrl(base64Media);
+    if (!parsed) throw new Error(`[API:${requestId}] The media to upload is not a readable data URL`);
+    declaredMimeType = parsed.mime || declaredMimeType;
+    binaryData = Buffer.from(parsed.bytes.buffer, parsed.bytes.byteOffset, parsed.bytes.byteLength);
+    mediaData = binaryData.toString("base64");
+  } else {
+    // Convert base64 to binary to detect actual type
+    binaryData = Buffer.from(mediaData, "base64");
   }
-
-  // Convert base64 to binary to detect actual type
-  const binaryData = Buffer.from(mediaData, "base64");
 
   if (binaryData.length > MAX_UPLOAD_SIZE) {
     throw new Error(`[API:${requestId}] File too large to upload (${(binaryData.length / (1024 * 1024)).toFixed(1)}MB, max ${MAX_UPLOAD_SIZE / (1024 * 1024)}MB)`);

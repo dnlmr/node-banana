@@ -73,6 +73,42 @@ to `/api/save-generation` for project workflows otherwise.
   with at least one shape), and canvas split-to-nodes. An edited output
   identical to the previous one is not recorded again.
 
+## Files nothing can read
+
+A file whose bytes are not a readable image, video or audio file is kept,
+file and record, but never shown. Its record says `unreadable`, and no
+scope, arrival poll, facet, library count or "select all" includes it. Its
+id still answers (`getAsset`, `exists`), since a carousel may hold it.
+Being unreadable never changes, moves or deletes the file.
+
+The test is careful, so a valid file is never hidden (`readable.ts`):
+
+- **Image**: the first bytes name no format, and sharp reads no size either.
+- **Video or audio**: the first bytes name no container, and mediabunny
+  recognises none either.
+- **3D**: never.
+
+"Name a format" is wider than what the library keeps or mediabunny opens:
+QuickTime and MP4 files that open with `moov`, `mdat`, `wide` or `free`
+instead of `ftyp`, any RIFF or IFF form (AVI, RF64), ASF, FLV, MPEG program
+streams, BMP, TIFF, JPEG 2000, an SVG after a long comment or in UTF-16, and
+any of these after zero padding all count, since a player may still open
+them.
+
+When the answer can't be sure (the file can't be read right now, a probe
+timed out, sharp won't load, or an existing record's file is no longer the
+size the record says), nothing is marked. A mark is never undone.
+
+It is checked when a recording arrives (the file and record are still
+written), during "Import existing projects" (such files are skipped, and the
+message says how many), once per start for the records that may be affected
+(images with no size, video and audio with no duration; in the background, a
+few at a time), and when sharp can't decode an image's file for a thumbnail.
+
+Such files came from older save routes. They decoded a whole data URL,
+header included, when its media type was empty. `src/utils/dataUrl.ts` now
+decodes only the payload, and the routes name a file by what its bytes are.
+
 ## Opening the original workflow
 
 Each run brackets its recordings (`beginRun` / `endRun`). The run's starting
@@ -143,6 +179,8 @@ agent routes, so run the app with `npm run dev` / `npm start` / Electron.
 | Upload/URL ingest, dedupe, downloads (SSRF-guarded) | `src/lib/assets/server/ingest.ts`, `download.ts` |
 | Location resolution, platform defaults | `src/lib/assets/server/paths.ts` |
 | Thumbnails (sharp), jobs (move, import, cleanup, export) | `src/lib/assets/server/thumbs.ts`, `jobs.ts` |
+| Unreadable files (what can't be opened, the load-time look) | `src/lib/assets/server/readable.ts` |
+| data: URLs and magic-byte sniffing (shared with the save routes) | `src/utils/dataUrl.ts`, `src/utils/mediaSniff.ts` |
 | Reveal / OS Trash (Electron bridge or OS tools) | `src/lib/assets/server/desktop.ts`, `electron/lib/bridge.cjs` |
 | Request guard | `src/lib/assets/server/guard.ts` |
 | Routes | `src/app/api/assets/**` |
