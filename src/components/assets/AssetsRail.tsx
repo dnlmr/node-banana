@@ -321,7 +321,7 @@ export function AssetsRail() {
       <div className="flex min-h-0 flex-1 flex-col">
         <DialogSearchField
           aria-label="Search assets"
-          placeholder="Search prompts, tags, models…"
+          placeholder="Search assets"
           value={filters.q}
           onChange={(event) => setSearch(event.target.value)}
         />
