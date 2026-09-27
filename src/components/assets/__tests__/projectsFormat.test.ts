@@ -22,6 +22,7 @@ describe("projectsFormat", () => {
   it("says how many projects live elsewhere and where", () => {
     const elsewhere = {
       count: 14,
+      dirs: [],
       bytes: 3.3e9,
       groups: [
         { label: "~/test-files/test workflows", count: 13 },
