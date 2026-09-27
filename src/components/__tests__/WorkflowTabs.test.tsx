@@ -214,13 +214,13 @@ describe("WorkflowTabs", () => {
       expect(useAssetStore.getState().appView).toBe("canvas");
     });
 
-    it("takes the shown look from the live tab while Assets shows, without changing which tab is live", () => {
+    it("takes the shown look, in the rail's colour, from the live tab while Assets shows, without changing which tab is live", () => {
       useAssetStore.setState({ appView: "assets" });
       render(<WorkflowTabs />);
       const [, live] = screen.getAllByRole("tab");
       expect(live).toHaveAttribute("aria-selected", "true");
       expect(live!.className).not.toContain("bg-canvas-bg");
-      expect(screen.getByRole("button", { name: "Assets" }).className).toContain("bg-canvas-bg");
+      expect(screen.getByRole("button", { name: "Assets" }).className).toContain("bg-pane");
     });
 
     it("goes back to the canvas from the live tab without switching", () => {

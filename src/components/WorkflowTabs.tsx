@@ -8,9 +8,15 @@ import { useAssetStore } from "@/store/assetStore";
 import { useShallow } from "zustand/shallow";
 import { summarizeWorkflowTabs } from "@/store/utils/workflowTabs";
 
-/** The shown tab: canvas-coloured, hanging over the frame's top border. */
-const SHOWN_TAB_CLASS =
-  "-mb-0.5 h-[32px] bg-canvas-bg text-neutral-100 shadow-[inset_1px_0_0_rgba(64,64,64,0.6),inset_-1px_0_0_rgba(64,64,64,0.6),inset_0_1px_0_rgba(64,64,64,0.6)]";
+/** The shown tab's shape: hanging over the frame's top border, outlined on three sides. */
+const SHOWN_TAB_SHAPE =
+  "-mb-0.5 h-[32px] text-neutral-100 shadow-[inset_1px_0_0_rgba(64,64,64,0.6),inset_-1px_0_0_rgba(64,64,64,0.6),inset_0_1px_0_rgba(64,64,64,0.6)]";
+
+/** The shown tab: canvas-coloured, so it reads as part of the canvas. */
+const SHOWN_TAB_CLASS = `${SHOWN_TAB_SHAPE} bg-canvas-bg`;
+
+/** The shown Assets entry: the colour of the Assets rail it sits over. */
+const SHOWN_ASSETS_CLASS = `${SHOWN_TAB_SHAPE} bg-pane`;
 
 /**
  * Open workflows as browser-style tabs across the top of the window. The bar
@@ -106,13 +112,13 @@ export function WorkflowTabs() {
         aria-label="Assets"
         title={assetsShown ? "Back to the canvas (A)" : "Assets (A)"}
         className={`relative flex h-[30px] shrink-0 items-center gap-1.5 rounded-t-lg text-xs whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
-          assetsShown ? `${SHOWN_TAB_CLASS} px-3` : "w-[34px] justify-center text-neutral-400 hover:bg-white/[0.04] hover:text-neutral-200"
+          assetsShown ? `${SHOWN_ASSETS_CLASS} px-3` : "w-[34px] justify-center text-neutral-400 hover:bg-white/[0.04] hover:text-neutral-200"
         }`}
       >
         {assetsShown && (
           <>
-            <TabEar side="left" />
-            <TabEar side="right" />
+            <TabEar side="left" fill="var(--color-pane)" />
+            <TabEar side="right" fill="var(--color-pane)" />
           </>
         )}
         <LibraryBig size={14} strokeWidth={1.75} />
@@ -215,7 +221,7 @@ export function WorkflowTabs() {
  * outside the tab's foot on one side. Canvas-coloured, with the frame's border
  * running along its curve, so the tab and the canvas read as one sheet.
  */
-function TabEar({ side }: { side: "left" | "right" }) {
+function TabEar({ side, fill = "var(--color-canvas-bg)" }: { side: "left" | "right"; fill?: string }) {
   return (
     // 9px square, one column into the tab so the curve starts on the tab's own
     // 1px side border and ends on the centre of the frame's top border row.
@@ -227,7 +233,7 @@ function TabEar({ side }: { side: "left" | "right" }) {
       viewBox="0 0 9 9"
       fill="none"
     >
-      <path d="M8.5 0 A8 8.5 0 0 1 0.5 8.5 L0.5 9 L9 9 L9 0 Z" fill="var(--color-canvas-bg)" />
+      <path d="M8.5 0 A8 8.5 0 0 1 0.5 8.5 L0.5 9 L9 9 L9 0 Z" fill={fill} />
       <path d="M8.5 0 A8 8.5 0 0 1 0.5 8.5" stroke="var(--color-card-border)" strokeWidth="1" />
     </svg>
   );
