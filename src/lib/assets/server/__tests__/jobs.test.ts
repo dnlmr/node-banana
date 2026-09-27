@@ -42,7 +42,7 @@ beforeEach(async () => {
   delete process.env.NODE_BANANA_ASSET_LIBRARY;
   // No env override: resolve the default under a fake home, so the library can be moved.
   await __resetAssetLibraryForTests({
-    pathContext: { platform: process.platform, env: {}, homedir: home, winPicturesDir: path.join(home, "Pictures") },
+    pathContext: { platform: process.platform, env: {}, homedir: home, winDocumentsDir: path.join(home, "Documents") },
   });
 });
 
@@ -85,7 +85,7 @@ function walk(dir: string): string[] {
 describe("move", () => {
   it("copies the library, verifies it, switches, and removes only what it copied", async () => {
     const status = await getLibraryStatus();
-    const oldRoot = path.join(home, "Pictures", "Node Banana");
+    const oldRoot = path.join(home, "Documents", "Node Banana");
     expect(status).toMatchObject({ available: true, root: oldRoot, source: "default" });
 
     const project = path.join(base, "Project");
@@ -254,7 +254,7 @@ describe("move", () => {
 
   it("undoes a move that stopped part-way at the next start, and moves to that folder again", async () => {
     await getLibraryStatus();
-    const oldRoot = path.join(home, "Pictures", "Node Banana");
+    const oldRoot = path.join(home, "Documents", "Node Banana");
     const kept = await record({ prompt: "still here" });
     const keptRel = kept.asset.file.root === "library" ? kept.asset.file.rel : "";
     const target = path.join(base, "Half Copied");
@@ -278,7 +278,7 @@ describe("move", () => {
 
     // The next start.
     await __resetAssetLibraryForTests({
-      pathContext: { platform: process.platform, env: {}, homedir: home, winPicturesDir: path.join(home, "Pictures") },
+      pathContext: { platform: process.platform, env: {}, homedir: home, winDocumentsDir: path.join(home, "Documents") },
     });
     await getLibraryStatus();
     await __drainAssetLibraryForTests();
