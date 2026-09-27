@@ -20,7 +20,8 @@ const SHOWN_TAB_CLASS =
  * in flight, because the store holds only the live workflow's execution state.
  * Each tab also remembers its pan and zoom.
  *
- * The Assets entry leads the strip. It is a toggle button, not a tab (it is
+ * The Assets entry leads the strip, as an icon until Assets is shown, when
+ * it takes its label. It is a toggle button, not a tab (it is
  * a view over every workflow, not one of them), and takes the shown-tab look
  * while the Assets view is up. That look is styling only: which workflow
  * tab is live, and what the busy state blocks, never changes with it. Any
@@ -102,9 +103,10 @@ export function WorkflowTabs() {
         type="button"
         aria-pressed={assetsShown}
         onClick={() => setAppView(assetsShown ? "canvas" : "assets")}
+        aria-label="Assets"
         title={assetsShown ? "Back to the canvas (A)" : "Assets (A)"}
-        className={`relative flex h-[30px] shrink-0 items-center gap-1.5 rounded-t-lg px-3 text-xs whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
-          assetsShown ? SHOWN_TAB_CLASS : "text-neutral-400 hover:bg-white/[0.04] hover:text-neutral-200"
+        className={`relative flex h-[30px] shrink-0 items-center gap-1.5 rounded-t-lg text-xs whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+          assetsShown ? `${SHOWN_TAB_CLASS} px-3` : "w-[34px] justify-center text-neutral-400 hover:bg-white/[0.04] hover:text-neutral-200"
         }`}
       >
         {assetsShown && (
@@ -114,12 +116,14 @@ export function WorkflowTabs() {
           </>
         )}
         <LibraryBig size={14} strokeWidth={1.75} />
-        Assets
+        {/* Closed, the entry is just its icon; the label shows while Assets is up */}
+        {assetsShown && "Assets"}
       </button>
       {summaries.map((tab, index) => {
         const name = tab.name ?? "Untitled";
         const shown = index === shownIndex;
-        // The entry before this one: the previous tab, or the Assets button
+        // The entry before this one: the previous tab, or the Assets button.
+        // The first tab never draws a hairline: nothing divides it from the Assets icon.
         const previousShown = index > 0 ? index - 1 === shownIndex : assetsShown;
         return (
           <div
@@ -145,7 +149,7 @@ export function WorkflowTabs() {
               </>
             )}
             {/* Hairline between two neighbours neither of which is shown */}
-            {!shown && !previousShown && (
+            {!shown && !previousShown && index > 0 && (
               <span aria-hidden className="absolute top-[7px] bottom-[7px] -left-px w-px bg-neutral-800" />
             )}
             <button

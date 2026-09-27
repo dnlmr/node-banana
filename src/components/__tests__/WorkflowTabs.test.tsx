@@ -1,6 +1,6 @@
 import { useLayoutEffect } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { WorkflowTabs } from "@/components/WorkflowTabs";
 import type { WorkflowTab } from "@/store/utils/workflowTabs";
 import { useAssetStore } from "@/store/assetStore";
@@ -186,6 +186,23 @@ describe("WorkflowTabs", () => {
       // Before the first workflow tab, and the tabs are still only the workflows
       expect(assets.compareDocumentPosition(screen.getAllByRole("tab")[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.getAllByRole("tab")).toHaveLength(2);
+    });
+
+    it("is only its icon until Assets shows, then takes its label", () => {
+      const { rerender } = render(<WorkflowTabs />);
+      const assets = screen.getByRole("button", { name: "Assets" });
+      expect(assets).not.toHaveTextContent("Assets");
+      expect(assets.querySelector("svg")).not.toBeNull();
+      act(() => useAssetStore.setState({ appView: "assets" }));
+      rerender(<WorkflowTabs />);
+      expect(screen.getByRole("button", { name: "Assets" })).toHaveTextContent("Assets");
+    });
+
+    it("draws no divider between the Assets icon and the first tab", () => {
+      useAssetStore.setState({ appView: "assets" });
+      render(<WorkflowTabs />);
+      const [first] = screen.getAllByRole("tab");
+      expect(first!.querySelector("span.w-px")).toBeNull();
     });
 
     it("shows Assets, and a second click goes back to the canvas", () => {
