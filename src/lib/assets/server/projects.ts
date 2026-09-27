@@ -9,9 +9,9 @@
  * early rather than hanging. It never follows a symbolic link or a Windows
  * junction, which also rules out loops, and it skips what can't hold a
  * project: hidden folders, package and build folders, the library's own
- * data, system folders an import would refuse, and a project's own media
- * folders. A project's other subfolders are still searched, since projects
- * can nest.
+ * data, system folders and paths too long for an import to take, and a
+ * project's own media folders. A project's other subfolders are still
+ * searched, since projects can nest.
  */
 
 import { promises as fs, type Dirent } from "fs";
@@ -21,7 +21,7 @@ import { FOUND_MEDIA_COUNT_CAP, MAX_IMPORT_PROJECTS, type FoundProject, type Sca
 import { errnoCode, LibraryError } from "./errors";
 import { foldsCase, isInsideRoot, mapConcurrent, pathKey } from "./fsutil";
 import { readHead } from "./media";
-import { extOf, isMediaExtension, normaliseProjectDir } from "./validate";
+import { extOf, isMediaExtension, MAX_PROJECT_DIR_LENGTH, normaliseProjectDir } from "./validate";
 
 export interface ScanLimits {
   /** Levels below the root that are searched (the root is level 0). */
@@ -33,6 +33,8 @@ export interface ScanLimits {
   timeoutMs: number;
   /** A project's media count stops here. */
   maxMediaCount: number;
+  /** Longer folder paths are not searched: the import refuses them. */
+  maxPathLength: number;
 }
 
 export const SCAN_LIMITS: Readonly<ScanLimits> = {
@@ -41,6 +43,7 @@ export const SCAN_LIMITS: Readonly<ScanLimits> = {
   maxProjects: MAX_IMPORT_PROJECTS,
   timeoutMs: 15_000,
   maxMediaCount: FOUND_MEDIA_COUNT_CAP,
+  maxPathLength: MAX_PROJECT_DIR_LENGTH,
 };
 
 export interface ScanOptions {
@@ -111,7 +114,9 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
     if (entry.name.startsWith(".") || SKIPPED_NAMES.has(entry.name)) return false;
     if (inProject && PROJECT_MEDIA_DIRS.has(nameKey(entry.name))) return false;
     const child = path.join(dir, entry.name);
-    // The import route refuses system folders, so a project there could never be imported.
+    // The import refuses system folders and over-long paths, so a project there could never be imported
+    // (and one such folder would refuse the whole import).
+    if (child.length > limits.maxPathLength) return false;
     return !excluded.has(pathKey(child)) && validateWorkflowPath(child).valid;
   };
 

@@ -18,7 +18,9 @@ vi.mock("@/utils/pathValidation", async (importOriginal) => {
 
 import { FOUND_MEDIA_COUNT_CAP, MAX_IMPORT_PROJECTS } from "../../types";
 import { __resetAssetLibraryForTests, getLibraryStatus, LibraryError, scanProjects } from "../index";
+import { normaliseImportDirs } from "../jobs";
 import { findProjects, resolveScanRoot, SCAN_LIMITS } from "../projects";
+import { MAX_PROJECT_DIR_LENGTH } from "../validate";
 import { makePng, tempDir } from "./helpers";
 
 let base: string;
@@ -131,6 +133,21 @@ describe("findProjects", () => {
     project(path.join(root, "SystemFolder", "Project"));
     project(path.join(root, "Mine"));
     expect(dirs((await findProjects(root)).projects)).toEqual(["Mine"]);
+  });
+
+  it("does not search a folder whose path is too long for the import, which would refuse the whole batch", async () => {
+    const long = project(path.join(root, "x".repeat(40), "Project"));
+    const short = project(path.join(root, "Short"));
+    const limit = long.length - 1;
+
+    const result = await findProjects(root, { limits: { maxPathLength: limit } });
+
+    expect(result.projects.map((found) => found.dir)).toEqual([short]);
+    expect(result).toMatchObject({ truncated: false, unreadable: 0 });
+    // What it does report, an import takes.
+    expect(normaliseImportDirs(result.projects.map((found) => found.dir))).toEqual([short]);
+    expect(SCAN_LIMITS.maxPathLength).toBe(MAX_PROJECT_DIR_LENGTH);
+    expect(() => normaliseImportDirs([`/${"x".repeat(MAX_PROJECT_DIR_LENGTH)}`])).toThrow("Invalid project folder");
   });
 
   it("never follows a symbolic link, so a loop ends and a linked project is found once", async () => {

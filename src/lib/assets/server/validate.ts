@@ -257,6 +257,9 @@ export function libraryFileName(
 /* Paths from the client                                               */
 /* ------------------------------------------------------------------ */
 
+/** The longest project folder path the client may send. */
+export const MAX_PROJECT_DIR_LENGTH = 1024;
+
 /**
  * Normalises a project folder sent by the client. `path.resolve` fixes the
  * mixed separators the store builds on Windows (`C:\p/x`), a trailing
@@ -269,7 +272,7 @@ export function normaliseProjectDir(
   what = "project folder",
 ): string {
   const api = platform === "win32" ? path.win32 : path.posix;
-  if (typeof value !== "string" || value.trim() === "" || value.length > 1024 || value.includes("\0")) {
+  if (typeof value !== "string" || value.trim() === "" || value.length > MAX_PROJECT_DIR_LENGTH || value.includes("\0")) {
     throw new LibraryError(`Invalid ${what}`, 400, "bad_request");
   }
   if (value.split(/[\\/]/).some((segment) => segment === "..")) {
