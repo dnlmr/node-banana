@@ -198,7 +198,7 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
         </div>
 
         {/* Strip */}
-        <div className={cn(CHROME_SURFACE, "flex h-[84px] w-full shrink-0 items-center justify-center overflow-hidden rounded-xl")} data-testid="media-viewer-strip">
+        <div className="flex h-[84px] w-full shrink-0 items-center justify-center overflow-hidden" data-testid="media-viewer-strip">
           <div
             className="flex items-center gap-1 transition-transform duration-[240ms] motion-reduce:transition-none"
             style={{ transform: `translateX(${stripShift(count, index)}px)`, transitionTimingFunction: EASE }}
