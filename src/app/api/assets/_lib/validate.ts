@@ -26,12 +26,15 @@ import {
   type AssetProducer,
   type AssetQuery,
   type AssetSelection,
+  type BringInProjectsRequest,
   type CleanupRequest,
   type ExportAssetsRequest,
   type ImportProjectsRequest,
+  type ProjectsOfferRequest,
   type PutRunRequest,
   type RecordAssetMeta,
   type RecordAssetRequest,
+  type ReportProjectsRequest,
   type RevealRequest,
   type ScanProjectsRequest,
   type SetLibraryRootRequest,
@@ -52,6 +55,10 @@ export const MAX_TAGS = 200;
 export const MAX_TAG_LENGTH = 200;
 /** Project folders in one import. */
 export const MAX_IMPORT_DIRS = MAX_IMPORT_PROJECTS;
+/** Projects one page load reports (its localStorage's project folders). */
+export const MAX_REPORTED_PROJECTS = 2000;
+/** The longest project name a folder name is asked for. */
+export const MAX_PROJECT_NAME = 512;
 /** Hashes referenced by one stored run. */
 export const MAX_RUN_MEDIA_HASHES = 50_000;
 
@@ -430,4 +437,56 @@ export function parseCleanupRequest(body: unknown): CleanupRequest {
 export function parseExportRequest(body: unknown): ExportAssetsRequest {
   const request = object(body, "The request");
   return { selection: parseSelection(request.selection), dest: folder(request.dest, "dest") };
+}
+
+/* Projects ----------------------------------------------------------- */
+
+/**
+ * What a page load remembers is whatever its localStorage held, so a
+ * folder that fails the checks (a relative path, a system folder) is left
+ * out rather than refusing the rest.
+ */
+export function parseReportProjects(body: unknown): ReportProjectsRequest {
+  const request = object(body, "The request");
+  const projects: ReportProjectsRequest["projects"] = [];
+  array(request.projects ?? [], "projects", MAX_REPORTED_PROJECTS).forEach((value) => {
+    if (!isObject(value) || typeof value.dir !== "string") return;
+    const checked = validateWorkflowPath(value.dir);
+    if (!checked.valid) return;
+    projects.push({
+      dir: checked.resolved,
+      name: typeof value.name === "string" ? value.name.slice(0, MAX_PROJECT_NAME) : null,
+      lastOpenedAt: typeof value.lastOpenedAt === "number" && Number.isFinite(value.lastOpenedAt) ? value.lastOpenedAt : null,
+    });
+  });
+  let workflowsDir: string | null = null;
+  if (typeof request.workflowsDir === "string" && request.workflowsDir.trim()) {
+    const checked = validateWorkflowPath(request.workflowsDir);
+    if (checked.valid) workflowsDir = checked.resolved;
+  }
+  return { workflowsDir, projects };
+}
+
+export function parseBringInProjects(body: unknown): BringInProjectsRequest {
+  const request = object(body, "The request");
+  const mode = oneOf(request.mode, ["use", "move", "leave"] as const, "mode");
+  const dirs = array(request.dirs ?? [], "dirs", MAX_IMPORT_DIRS).map((dir, i) => folder(dir, `dirs[${i}]`));
+  if (mode === "use") {
+    return { dirs: [...new Set(dirs)], mode, folder: folder(request.folder, "folder") };
+  }
+  if (dirs.length === 0) throw badRequest("Choose at least one project folder.");
+  return { dirs: [...new Set(dirs)], mode };
+}
+
+export function parseProjectsOffer(body: unknown): ProjectsOfferRequest {
+  const request = object(body, "The request");
+  if (request.dismissed !== true) throw badRequest("dismissed must be true.");
+  return { dismissed: true };
+}
+
+/** `?name=` of GET /projects/folder-name. */
+export function parseProjectName(value: string | null): string {
+  if (value === null) throw badRequest("name is required.");
+  if (value.length > MAX_PROJECT_NAME) throw badRequest(`name is longer than ${MAX_PROJECT_NAME} characters.`);
+  return value;
 }

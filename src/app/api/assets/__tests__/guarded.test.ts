@@ -29,6 +29,11 @@ import * as job from "../jobs/[jobId]/route";
 import * as library from "../library/route";
 import * as media from "../media/[sha256]/route";
 import * as mediaHas from "../media/has/route";
+import * as projects from "../projects/route";
+import * as projectsBringIn from "../projects/bring-in/route";
+import * as projectsFolderName from "../projects/folder-name/route";
+import * as projectsOffer from "../projects/offer/route";
+import * as projectsReport from "../projects/report/route";
 import * as reveal from "../reveal/route";
 import * as root from "../route";
 import * as run from "../runs/[runId]/route";
@@ -61,6 +66,11 @@ const ROUTES: { path: string; module: Record<string, unknown>; params: Record<st
   { path: "/api/assets/import/scan", module: scanProjects, params: {} },
   { path: "/api/assets/cleanup", module: cleanup, params: {} },
   { path: "/api/assets/export", module: exportAssets, params: {} },
+  { path: "/api/assets/projects", module: projects, params: {} },
+  { path: "/api/assets/projects/report", module: projectsReport, params: {} },
+  { path: "/api/assets/projects/bring-in", module: projectsBringIn, params: {} },
+  { path: "/api/assets/projects/offer", module: projectsOffer, params: {} },
+  { path: "/api/assets/projects/folder-name?name=x", module: projectsFolderName, params: {} },
 ];
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
