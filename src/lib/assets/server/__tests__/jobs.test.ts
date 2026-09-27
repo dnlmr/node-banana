@@ -856,3 +856,29 @@ describe("export", () => {
     expect(fs.readdirSync(dest)).toEqual([a.filename]);
   });
 });
+
+describe("JobRunner", () => {
+  /** Work that runs until its job is cancelled. */
+  const untilCancelled = (ctx: JobContext) =>
+    new Promise<string>((_, reject) => {
+      ctx.signal.addEventListener("abort", () => reject(new Error("aborted")));
+    });
+
+  it("stops a quiet job so the job a user asked for starts, and still refuses a visible one", async () => {
+    const runner = new JobRunner();
+    const quiet = runner.start("import", untilCancelled, { quiet: true });
+    expect(runner.visible()).toBeNull();
+    // A plain start still meets it
+    expect(() => runner.start("cleanup", async () => "done")).toThrow("Another library task is running");
+
+    const started = await runner.startOverQuiet("projects", async () => "moved");
+    expect(runner.get(quiet.id)?.state).toBe("cancelled");
+    await runner.drain();
+    expect(runner.get(started.id)).toMatchObject({ type: "projects", state: "done", message: "moved" });
+
+    runner.start("export", untilCancelled);
+    await expect(runner.startOverQuiet("cleanup", async () => "done")).rejects.toMatchObject({ code: "busy" });
+    await runner.yieldQuiet();
+    expect(runner.isRunning).toBe(true);
+  });
+});

@@ -124,6 +124,25 @@ export class JobRunner {
   }
 
   /**
+   * Stops a quiet job holding the runner and waits for it to end, so a job
+   * the user asked for never meets a task they can't see (the app starts
+   * the quiet one again later).
+   */
+  async yieldQuiet(): Promise<void> {
+    while (this.running?.quiet) {
+      const entry = this.running;
+      entry.controller.abort();
+      await entry.promise;
+    }
+  }
+
+  /** {@link start} for a job the user asked for: a quiet job holding the runner makes way first. */
+  async startOverQuiet(type: LibraryJobType, work: (ctx: JobContext) => Promise<string | void>): Promise<LibraryJobStatus> {
+    await this.yieldQuiet();
+    return this.start(type, work);
+  }
+
+  /**
    * Records a job that ended outside this runner — a move stopped by the
    * app quitting, found at the next start — so the library status reports
    * it like any finished job.

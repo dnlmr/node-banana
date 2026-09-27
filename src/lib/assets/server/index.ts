@@ -532,6 +532,8 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
       "forbidden",
     );
   }
+  // The auto-index makes way: the user never sees it, so it must never refuse them.
+  await rt.jobs.yieldQuiet();
   if (rt.jobs.isRunning) {
     throw new LibraryError("Another library task is running. Wait for it to finish or cancel it.", 409, "busy");
   }
@@ -578,7 +580,7 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
   const failure = await probeWritable(toRoot);
   if (failure) throw new LibraryError(`Node Banana can't write to "${toRoot}" (${failure.code}).`, 400, "bad_request");
   // The probe leaves an empty data folder behind; the move copies into it.
-  rt.jobs.start("move", (job) =>
+  await rt.jobs.startOverQuiet("move", (job) =>
     runMove(job, {
       library,
       waitForWrites: (timeoutMs) => waitForWrites(rt, timeoutMs),
@@ -804,7 +806,7 @@ export async function startImport(request: ImportProjectsRequest): Promise<Libra
   assertWritable(rt);
   const library = await readyLibrary();
   await assertNoMoveElsewhere(library);
-  return rt.jobs.start("import", (job) => runImport(job, { library, thumbs: rt.thumbs }, dirs));
+  return rt.jobs.startOverQuiet("import", (job) => runImport(job, { library, thumbs: rt.thumbs }, dirs));
 }
 
 /**
@@ -844,7 +846,7 @@ export async function startCleanup(request: CleanupRequest): Promise<LibraryJobS
   assertWritable(rt);
   const library = await readyLibrary();
   await assertNoMoveElsewhere(library);
-  return rt.jobs.start("cleanup", (job) => runCleanup(job, { library, thumbs: rt.thumbs }, { unusedMedia, thumbnails }));
+  return rt.jobs.startOverQuiet("cleanup", (job) => runCleanup(job, { library, thumbs: rt.thumbs }, { unusedMedia, thumbnails }));
 }
 
 export async function startExport(request: ExportAssetsRequest): Promise<LibraryJobStatus> {
@@ -854,7 +856,7 @@ export async function startExport(request: ExportAssetsRequest): Promise<Library
   const ids = library.resolveSelection(request.selection);
   if (!ids.length) throw new LibraryError("Nothing is selected", 400, "bad_request");
   const dest = await prepareExportDest(request.dest, library);
-  return rt.jobs.start("export", (job) => runExport(job, library, ids, dest));
+  return rt.jobs.startOverQuiet("export", (job) => runExport(job, library, ids, dest));
 }
 
 export function getJob(id: string): LibraryJobStatus | null {
@@ -989,7 +991,7 @@ async function startProjectsMove(
   await assertNoMoveElsewhere(library);
   const dirs = await normaliseMoveDirs(value, location.root, { home: pathContext(rt).homedir });
   if (!dirs.length) throw new LibraryError("Those projects are already in the Node Banana folder.", 400, "bad_request");
-  return rt.jobs.start("projects", (job) => runProjectsMove(job, { library, root: location.root, registry }, dirs));
+  return rt.jobs.startOverQuiet("projects", (job) => runProjectsMove(job, { library, root: location.root, registry }, dirs));
 }
 
 /**
@@ -1121,7 +1123,8 @@ async function autoIndexPass(rt: Runtime): Promise<void> {
   await rt.jobs.wait(job.id);
   const finished = rt.jobs.get(job.id);
   if (finished?.state === "done") await registry.setIndexed(due);
-  else if (finished?.state === "failed") retryAutoIndex(rt);
+  // Failed, or stopped to make way for a job the user started: look again later.
+  else retryAutoIndex(rt);
 }
 
 /* Test hooks --------------------------------------------------------- */
