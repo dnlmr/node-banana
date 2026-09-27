@@ -141,6 +141,17 @@ describe("the projects move", () => {
     await expect(bringInProjects({ dirs: [path.join(base, "nope")], mode: "move" })).rejects.toMatchObject({ status: 404 });
   });
 
+  it("refuses a personal folder, or one holding more than a project, and leaves it alone", async () => {
+    await getLibraryStatus();
+    const downloads = project(path.join(home, "Downloads"), "Loose");
+    await expect(bringInProjects({ dirs: [downloads], mode: "move" })).rejects.toMatchObject({ status: 400 });
+    const mixed = project(path.join(base, "Mixed"), "Mixed");
+    fs.writeFileSync(path.join(mixed, "taxes.pdf"), "private");
+    await expect(bringInProjects({ dirs: [mixed], mode: "move" })).rejects.toMatchObject({ status: 400 });
+    expect(fs.existsSync(path.join(downloads, "Loose.json"))).toBe(true);
+    expect(fs.existsSync(path.join(mixed, "taxes.pdf"))).toBe(true);
+  });
+
   it("stops between files when cancelled, removing only the project it was copying", async () => {
     await getLibraryStatus();
     const library = await __assetLibraryForTests();
@@ -292,7 +303,7 @@ describe("the offer and folder names", () => {
   it("summarises projects elsewhere until the offer is dismissed", async () => {
     const one = project(path.join(home, "Old", "One"), "One");
     const two = project(path.join(home, "Old", "Two"), "Two");
-    fs.writeFileSync(path.join(two, "big.bin"), Buffer.alloc(2048));
+    fs.writeFileSync(path.join(two, "generations", "big.bin"), Buffer.alloc(2048));
     await reportProjects({ projects: [{ dir: one }, { dir: two }] });
     const overview = await listProjects();
     expect(overview.offerDismissed).toBe(false);

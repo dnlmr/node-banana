@@ -556,6 +556,7 @@ describe("AssetsView", () => {
       ],
       elsewhere: {
         count: 2,
+        dirs: outside,
         bytes: 0,
         groups: [
           { label: "~/test-files/test workflows", count: 1 },

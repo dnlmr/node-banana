@@ -18,7 +18,7 @@ import type { MovedProject } from "../types";
 import { errnoCode, LibraryError } from "./errors";
 import { isInsideRoot, pathKey } from "./fsutil";
 import type { JobContext } from "./jobs";
-import { outermost, uniqueFolderName } from "./known";
+import { moveRefusal, outermost, uniqueFolderName } from "./known";
 import type { AssetLibrary } from "./library";
 import type { ProjectRegistry } from "./registry";
 import { normaliseProjectDir } from "./validate";
@@ -46,10 +46,17 @@ interface Entry {
 
 /**
  * Checks and normalises the folders of a move: absolute, existing folders,
- * outside the Node Banana folder and not holding it; a folder inside
- * another in the list moves with it, so only the outermost are kept.
+ * outside the Node Banana folder and not holding it, and nothing but a
+ * project (never a personal folder such as Downloads, or one holding other
+ * files: the move deletes the original); a folder inside another in the
+ * list moves with it, so only the outermost are kept.
  */
-export async function normaliseMoveDirs(value: unknown, root: string, platform: NodeJS.Platform = process.platform): Promise<string[]> {
+export async function normaliseMoveDirs(
+  value: unknown,
+  root: string,
+  options: { platform?: NodeJS.Platform; home?: string } = {},
+): Promise<string[]> {
+  const platform = options.platform ?? process.platform;
   if (!Array.isArray(value) || value.length === 0) {
     throw new LibraryError("Choose at least one project folder", 400, "bad_request");
   }
@@ -73,6 +80,8 @@ export async function normaliseMoveDirs(value: unknown, root: string, platform: 
       throw new LibraryError(`"${dir}" doesn't exist.`, 404, "not_found");
     }
     if (!stat.isDirectory()) throw new LibraryError(`"${dir}" isn't a folder.`, 400, "bad_request");
+    const refusal = await moveRefusal(dir, { home: options.home, platform });
+    if (refusal) throw new LibraryError(refusal, 400, "bad_request");
     dirs.push(dir);
   }
   return outermost(dirs, platform);

@@ -308,7 +308,7 @@ describe("asset api", () => {
             { dir: "/old/B", name: "B" },
             { name: "no dir" },
           ],
-          elsewhere: { count: 1, bytes: 10, groups: [{ label: "~/old", count: 1 }, { label: 3 }] },
+          elsewhere: { count: 1, dirs: ["/old/B", 4], bytes: 10, groups: [{ label: "~/old", count: 1 }, { label: 3 }] },
           offerDismissed: true,
         }),
       );
@@ -318,7 +318,7 @@ describe("asset api", () => {
           { dir: "/nb/A", name: "A", relativePath: "A", inRoot: true, lastModified: 5, mediaCount: 2 },
           { dir: "/old/B", name: "B", relativePath: null, inRoot: false, lastModified: 0, mediaCount: 0 },
         ],
-        elsewhere: { count: 1, bytes: 10, groups: [{ label: "~/old", count: 1 }] },
+        elsewhere: { count: 1, dirs: ["/old/B"], bytes: 10, groups: [{ label: "~/old", count: 1 }] },
         offerDismissed: true,
       });
       expect(calls[0]).toMatchObject({ url: "/api/assets/projects", method: "GET" });

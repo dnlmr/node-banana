@@ -531,6 +531,8 @@ export interface KnownProject {
 export interface ProjectsElsewhere {
   /** Outermost folders only: a project inside another moves with it. */
   count: number;
+  /** Those folders: what "Move them in" sends. */
+  dirs: string[];
   bytes: number;
   /** By parent folder (`~`-shortened), largest first. */
   groups: { label: string; count: number }[];

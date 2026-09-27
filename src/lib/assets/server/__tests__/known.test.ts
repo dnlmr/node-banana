@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   folderBytes,
   generationsStamp,
+  holdsOnlyProjectContent,
+  isPersonalFolder,
   listKnownProjects,
   outermost,
   projectFolderName,
@@ -171,7 +173,8 @@ describe("summariseElsewhere", () => {
     const home = path.join(base, "home");
     const a = project(path.join(home, "Old", "A"), { name: "A" });
     const b = project(path.join(home, "Old", "B"), { name: "B" });
-    fs.writeFileSync(path.join(b, "big.bin"), Buffer.alloc(1000));
+    fs.mkdirSync(path.join(b, "inputs"));
+    fs.writeFileSync(path.join(b, "inputs", "big.bin"), Buffer.alloc(1000));
     const nested = project(path.join(b, "Nested"), { name: "N" });
     const c = project(path.join(base, "Other", "C"), { name: "C" });
     const known: KnownProject[] = [a, b, nested, c].map((dir) => ({
@@ -193,6 +196,28 @@ describe("summariseElsewhere", () => {
     });
     expect(summary!.bytes).toBeGreaterThan(1000);
     expect(await summariseElsewhere(known.slice(4), { home })).toBeNull();
+  });
+
+  it("never offers a personal folder or one holding more than a project", async () => {
+    const home = path.join(base, "home");
+    const downloads = project(path.join(home, "Downloads"), { name: "Loose" });
+    const mixed = project(path.join(base, "Mixed"), { name: "Mixed" });
+    fs.writeFileSync(path.join(mixed, "taxes.pdf"), "private");
+    const inner = project(path.join(mixed, "Inner"), { name: "Inner" });
+    const clean = project(path.join(base, "Clean"), { name: "Clean", media: 1 });
+    fs.mkdirSync(path.join(clean, "inputs"));
+    fs.mkdirSync(path.join(clean, ".images"));
+    fs.writeFileSync(path.join(clean, ".DS_Store"), "");
+    const known: KnownProject[] = [downloads, mixed, inner, clean].map((dir) => ({
+      dir,
+      name: path.basename(dir),
+      relativePath: null,
+      inRoot: false,
+      lastModified: 0,
+      mediaCount: 0,
+    }));
+    // The project inside the mixed folder can still move on its own
+    expect(await summariseElsewhere(known, { home })).toMatchObject({ count: 2, dirs: [inner, clean] });
   });
 
   it("shortens the home folder to ~", () => {
@@ -224,5 +249,34 @@ describe("project folder names", () => {
     expect(await uniqueFolderName(root, "Generations")).toEqual({ folder: "Generations 2", taken: true });
     expect(await projectFolderName(root, "cats")).toEqual({ folder: "cats 3", path: path.join(root, "cats 3"), taken: true });
     expect(await projectFolderName(path.join(base, "missing"), "New")).toMatchObject({ folder: "New", taken: false });
+  });
+});
+
+describe("isPersonalFolder", () => {
+  it("is the home folder, a folder holding it, its standard folders and drive roots", () => {
+    const home = "/Users/me";
+    for (const dir of ["/", "/Users", home, `${home}/Desktop`, `${home}/downloads`, `${home}/Pictures`, `${home}/OneDrive`, `${home}/OneDrive - Acme/Documents`]) {
+      expect(isPersonalFolder(dir, home, "darwin"), dir).toBe(true);
+    }
+    for (const dir of [`${home}/Documents/Cats`, `${home}/Projects`, "/Volumes/Work/Cats"]) {
+      expect(isPersonalFolder(dir, home, "darwin"), dir).toBe(false);
+    }
+    expect(isPersonalFolder("D:\\", "C:\\Users\\me", "win32")).toBe(true);
+    expect(isPersonalFolder("C:\\Users\\me\\Videos", "C:\\Users\\me", "win32")).toBe(true);
+    expect(isPersonalFolder("D:\\Work\\Cats", "C:\\Users\\me", "win32")).toBe(false);
+  });
+});
+
+describe("holdsOnlyProjectContent", () => {
+  it("allows workflows, the project's folders and nested projects, nothing else", async () => {
+    const dir = project(path.join(base, "P"), { name: "P", media: 1 });
+    fs.mkdirSync(path.join(dir, "outputs"));
+    project(path.join(dir, "Sub"), { name: "Sub" });
+    expect(await holdsOnlyProjectContent(dir)).toBe(true);
+    fs.writeFileSync(path.join(dir, "notes.json"), "{}");
+    expect(await holdsOnlyProjectContent(dir)).toBe(false);
+    fs.rmSync(path.join(dir, "notes.json"));
+    fs.mkdirSync(path.join(dir, "Holiday photos"));
+    expect(await holdsOnlyProjectContent(dir)).toBe(false);
   });
 });

@@ -182,14 +182,113 @@ export function shortenHome(dir: string, home: string = os.homedir(), platform: 
   return `~/${rel}`;
 }
 
-/** The known projects outside the Node Banana folder, summed for the offer; null when there are none. */
+/**
+ * Folders in a home folder that hold a person's own files (and cloud
+ * drives' folders of the same name), compared case-insensitively. A
+ * workflow opened from one of them makes it look like a project, but a
+ * move must never take it whole.
+ */
+const PERSONAL_FOLDERS = new Set([
+  "desktop",
+  "documents",
+  "downloads",
+  "pictures",
+  "movies",
+  "music",
+  "videos",
+  "public",
+  "library",
+  "applications",
+  "appdata",
+  "favorites",
+  "contacts",
+  "links",
+  "saved games",
+  "searches",
+  "3d objects",
+  "onedrive",
+  "dropbox",
+  "icloud drive",
+  "google drive",
+  "creative cloud files",
+]);
+/** Cloud drives synced into the home folder, whose own Documents, Desktop, … are just as personal. */
+const CLOUD_DRIVE = /^(onedrive|dropbox|icloud drive|google drive)\b/i;
+/** What the OS leaves in any folder, not the user's. */
+const OS_CLUTTER = new Set(["desktop.ini", "thumbs.db", "icon\r"]);
+/** What a project folder holds besides its workflow files. */
+const PROJECT_FOLDERS = new Set(["generations", "inputs", "outputs", ".images"]);
+
+/** A drive root, the home folder, a folder holding it, or one of its standard folders (Desktop, Documents, …). */
+export function isPersonalFolder(dir: string, home: string = os.homedir(), platform: NodeJS.Platform = process.platform): boolean {
+  const api = platform === "win32" ? path.win32 : path.posix;
+  const resolved = api.resolve(dir);
+  if (api.parse(resolved).root === resolved || api.dirname(resolved) === resolved) return true;
+  if (isInsideRoot(resolved, home, { platform, allowEqual: true })) return true;
+  const rel = relativeToRoot(home, resolved, platform);
+  if (rel === null) return false;
+  const parts = rel.split("/").map((part) => part.toLowerCase());
+  if (parts.length === 1) return PERSONAL_FOLDERS.has(parts[0]) || CLOUD_DRIVE.test(parts[0]);
+  return parts.length === 2 && CLOUD_DRIVE.test(parts[0]) && PERSONAL_FOLDERS.has(parts[1]);
+}
+
+/**
+ * Whether the top of `dir` holds only what a project does: workflow files,
+ * its generations, inputs, outputs and legacy .images folders, and projects
+ * of its own. Hidden files and what the OS leaves are ignored; anything else
+ * (a photo, a document, another folder) means it is more than a project.
+ */
+export async function holdsOnlyProjectContent(dir: string): Promise<boolean> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    const lower = entry.name.toLowerCase();
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (PROJECT_FOLDERS.has(lower)) continue;
+      if (!entry.name.startsWith(".") && (await inspectProject(full, { requireWorkflow: true }))) continue;
+      return false;
+    }
+    if (entry.name.startsWith(".") || OS_CLUTTER.has(lower)) continue;
+    if (entry.isFile() && lower.endsWith(".json") && (await isWorkflowFile(full))) continue;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Why `dir` can't move into the Node Banana folder as a project, or null
+ * when it can. A move copies the whole folder and deletes the original, so
+ * only a folder that is nothing but a project may go.
+ */
+export async function moveRefusal(dir: string, options: { home?: string; platform?: NodeJS.Platform } = {}): Promise<string | null> {
+  if (isPersonalFolder(dir, options.home, options.platform)) {
+    return `"${dir}" is one of your own folders, not a project folder, so it can't be moved.`;
+  }
+  if (!(await holdsOnlyProjectContent(dir))) {
+    return `"${dir}" holds more than a project, so it can't be moved. Move the project into a folder of its own first.`;
+  }
+  return null;
+}
+
+/**
+ * The known projects outside the Node Banana folder, summed for the offer;
+ * null when there are none. Only folders a move would take count: never a
+ * personal folder or one holding more than a project.
+ */
 export async function summariseElsewhere(
   projects: readonly KnownProject[],
   options: { home?: string; platform?: NodeJS.Platform; budget?: SizeBudget } = {},
 ): Promise<ProjectsElsewhere | null> {
   const platform = options.platform ?? process.platform;
+  const outside = projects.filter((project) => !project.inRoot).map((project) => project.dir);
+  const refused = await mapConcurrent(outside, DESCRIBE_CONCURRENCY, (dir) => moveRefusal(dir, { home: options.home, platform }));
   const dirs = outermost(
-    projects.filter((project) => !project.inRoot).map((project) => project.dir),
+    outside.filter((_, index) => refused[index] === null),
     platform,
   );
   if (!dirs.length) return null;
@@ -206,13 +305,11 @@ export async function summariseElsewhere(
   }
   return {
     count: dirs.length,
+    dirs,
     bytes: sizes.reduce((sum, size) => sum + size, 0),
     groups: [...groups.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
   };
 }
-
-/** What the OS leaves in any folder, not the user's. */
-const OS_CLUTTER = new Set(["desktop.ini", "thumbs.db", "icon\r"]);
 
 /**
  * Whether `folder` looks like a Node Banana folder already: it holds

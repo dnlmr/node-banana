@@ -387,6 +387,7 @@ function projectsElsewhere(value: unknown): ProjectsElsewhere | null {
     : [];
   return {
     count: value.count,
+    dirs: Array.isArray(value.dirs) ? value.dirs.filter((dir): dir is string => typeof dir === "string") : [],
     bytes: typeof value.bytes === "number" ? value.bytes : 0,
     groups: groups.map(({ label, count }) => ({ label, count })),
   };

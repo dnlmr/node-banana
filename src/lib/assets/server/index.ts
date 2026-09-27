@@ -983,7 +983,7 @@ async function startProjectsMove(
 ): Promise<LibraryJobStatus> {
   assertWritable(rt);
   await assertNoMoveElsewhere(library);
-  const dirs = await normaliseMoveDirs(value, location.root);
+  const dirs = await normaliseMoveDirs(value, location.root, { home: pathContext(rt).homedir });
   if (!dirs.length) throw new LibraryError("Those projects are already in the Node Banana folder.", 400, "bad_request");
   return rt.jobs.start("projects", (job) => runProjectsMove(job, { library, root: location.root, registry }, dirs));
 }

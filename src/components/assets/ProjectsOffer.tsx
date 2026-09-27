@@ -54,10 +54,8 @@ export function ProjectsOffer() {
     const store = useAssetStore.getState();
     setAnswered(true);
     try {
-      const dirs = overview.projects
-        .filter((project) => !project.inRoot)
-        .map((project) => project.dir)
-        .slice(0, MAX_IMPORT_PROJECTS);
+      // The folders the offer counted: never one that holds more than a project
+      const dirs = elsewhere.dirs.slice(0, MAX_IMPORT_PROJECTS);
       const result = await bringInProjects({ dirs, mode: "move" });
       if (result.job) store.trackJob(result.job);
     } catch (error) {

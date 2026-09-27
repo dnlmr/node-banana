@@ -541,15 +541,16 @@ describe("LibrarySettingsTab", () => {
   });
 
   describe("projects in other folders", () => {
+    const outside = ["/Users/me/test-files/test workflows/A", "/Users/me/pet-hype"];
     const elsewhere = {
       count: 2,
+      dirs: outside,
       bytes: 3.3 * 1000 ** 3,
       groups: [
         { label: "~/test-files/test workflows", count: 1 },
         { label: "~/pet-hype", count: 1 },
       ],
     };
-    const outside = ["/Users/me/test-files/test workflows/A", "/Users/me/pet-hype"];
     const withElsewhere = (overrides: Partial<ProjectsOverview> = {}) =>
       makeOverview({
         projects: [makeProject(`${ROOT}/Fox`, true), ...outside.map((dir) => makeProject(dir, false))],

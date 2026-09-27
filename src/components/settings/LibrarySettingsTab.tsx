@@ -733,7 +733,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
                 className="h-8"
                 disabled={busy}
                 title={busy ? BUSY_REASON : undefined}
-                onClick={() => void moveProjects(projectDirs(overview, false), elsewhere.count)}
+                onClick={() => void moveProjects(elsewhere.dirs.slice(0, MAX_IMPORT_PROJECTS), elsewhere.count)}
               >
                 Move them in
               </DialogButton>
