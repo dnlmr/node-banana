@@ -6,16 +6,18 @@
 const BRIDGE_REQUESTS = new Set(['reveal', 'trash', 'choose-directory']);
 const LIBRARY_PICKER_TITLE = 'Choose where Node Banana saves your media';
 const EXPORT_PICKER_TITLE = 'Choose a folder to export to';
+const IMPORT_PICKER_TITLE = 'Choose a folder of Node Banana projects';
 const REQUEST_TIMEOUT_MS = 30_000;
 // A folder picker waits on the user, not on main; this only bounds a lost reply
 // (it matches the server's own request timeout).
 const PICKER_TIMEOUT_MS = 600_000;
 
 // The same titles as PICKER_TITLES in src/app/api/browse-directory/route.ts.
-const PICKER_TITLES = { library: LIBRARY_PICKER_TITLE, export: EXPORT_PICKER_TITLE };
+const PICKER_TITLES = { library: LIBRARY_PICKER_TITLE, export: EXPORT_PICKER_TITLE, import: IMPORT_PICKER_TITLE };
 
 // GET /api/browse-directory?purpose=library picks the library folder,
-// ?purpose=export an export destination (Export, "Save a copy…"); any other
+// ?purpose=export an export destination (Export, "Save a copy…"),
+// ?purpose=import a folder to search for projects to import; any other
 // purpose keeps main's default title.
 function browseDirectoryTitle(searchParams) {
   const purpose = searchParams.get('purpose');
@@ -90,4 +92,11 @@ function createBridgeClient({ post, timeoutMs = REQUEST_TIMEOUT_MS, pickerTimeou
   return { request, pickDirectory, receive, pending: () => pending.size };
 }
 
-module.exports = { BRIDGE_REQUESTS, EXPORT_PICKER_TITLE, LIBRARY_PICKER_TITLE, browseDirectoryTitle, createBridgeClient };
+module.exports = {
+  BRIDGE_REQUESTS,
+  EXPORT_PICKER_TITLE,
+  IMPORT_PICKER_TITLE,
+  LIBRARY_PICKER_TITLE,
+  browseDirectoryTitle,
+  createBridgeClient,
+};

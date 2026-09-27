@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { EXPORT_PICKER_TITLE, LIBRARY_PICKER_TITLE, browseDirectoryTitle, createBridgeClient } = require('../lib/bridge.cjs');
+const { EXPORT_PICKER_TITLE, IMPORT_PICKER_TITLE, LIBRARY_PICKER_TITLE, browseDirectoryTitle, createBridgeClient } = require('../lib/bridge.cjs');
 const { DEFAULT_PICKER_TITLE, createServerMessageHandler } = require('../lib/bridge-main.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -94,6 +94,9 @@ test('the browse-directory picker keeps its reply shape and is cancelled by a cl
   // Export and "Save a copy…" ask for a destination, not a workflow folder.
   assert.equal(EXPORT_PICKER_TITLE, 'Choose a folder to export to');
   assert.equal(browseDirectoryTitle(new URLSearchParams('purpose=export')), EXPORT_PICKER_TITLE);
+  // "Find projects in a folder…" asks for a folder of projects, as the web route does.
+  assert.equal(IMPORT_PICKER_TITLE, 'Choose a folder of Node Banana projects');
+  assert.equal(browseDirectoryTitle(new URLSearchParams('purpose=import')), IMPORT_PICKER_TITLE);
   // The user may browse for as long as the request stays open.
   await delay(20);
   bridge.receive({ id: 1, result: { success: true, cancelled: false, path: '/library' } });
