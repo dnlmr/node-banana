@@ -56,6 +56,20 @@ function getExtensionFromMime(mimeType: string): string {
   return "bin";
 }
 
+/**
+ * The extensions a saved generation is loaded back from, per kind: images by
+ * /api/workflow-images and /api/load-generation, video and audio by
+ * /api/load-generation, which tells the two apart by extension alone. A
+ * sniffed extension outside its kind's set (webm audio, which would come back
+ * as video; AVIF, which neither loader looks for) would save a file its node
+ * can't load again, so the declared type names those, as it always has.
+ */
+const LOADABLE_EXTENSIONS: Record<"image" | "video" | "audio", ReadonlySet<string>> = {
+  image: new Set(["png", "jpg", "gif", "webp", "svg"]),
+  video: new Set(["mp4", "webm", "mov"]),
+  audio: new Set(["mp3", "wav", "ogg", "flac", "aac", "m4a"]),
+};
+
 /** The bytes and declared media type of a data: URL, or of raw base64 (no type); null when it is neither. */
 function decodeInlineMedia(content: string): { bytes: Uint8Array; mime: string } | null {
   if (content.slice(0, 5).toLowerCase() === "data:") {
@@ -273,8 +287,11 @@ export async function POST(request: NextRequest) {
       extension = decoded.mime ? getExtensionFromMime(decoded.mime) : "bin";
     }
 
-    // The bytes decide the extension when they prove a format; the declared type is only a label.
-    extension = sniffExtension(buffer, isModel ? "3d" : isAudio ? "audio" : isVideo ? "video" : "image") ?? extension;
+    // The bytes decide the extension when they prove a format the node can load back as the same
+    // kind; otherwise the declared type (or the kind's default) names it, as before.
+    const kind = isModel ? "3d" : isAudio ? "audio" : isVideo ? "video" : "image";
+    const sniffed = sniffExtension(buffer, kind);
+    if (sniffed && (kind === "3d" || LOADABLE_EXTENSIONS[kind].has(sniffed))) extension = sniffed;
 
     // Safety net: if extension resolved to "bin" but we know the media type, use correct extension
     if (extension === "bin") {

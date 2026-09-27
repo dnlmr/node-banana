@@ -586,6 +586,29 @@ describe("/api/save-generation route", () => {
       expect(wav.filePath?.endsWith(".wav")).toBe(true);
     });
 
+    it("keeps a name its node can load back when the bytes prove a format the loaders don't serve as that kind", async () => {
+      // WebM audio: /api/load-generation serves .webm as video, so an audio node would get nothing back.
+      const webm = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81, 0x01, 0x42, 0x82, 0x84]);
+      const audio = await save({ audio: `data:audio/webm;base64,${webm.toString("base64")}` });
+      expect(audio.filePath?.endsWith(".mp3")).toBe(true);
+      expect(Buffer.from(audio.bytes!).equals(webm)).toBe(true);
+      mockWriteFile.mockClear();
+      const untyped = await save({ audio: `data:;base64,${webm.toString("base64")}` });
+      expect(untyped.filePath?.endsWith(".mp3")).toBe(true);
+      mockWriteFile.mockClear();
+      // AVIF: neither /api/workflow-images nor /api/load-generation looks for .avif.
+      const avif = Buffer.alloc(32);
+      avif.writeUInt32BE(32, 0);
+      avif.write("ftypavif", 4, "latin1");
+      const image = await save({ image: `data:image/avif;base64,${avif.toString("base64")}` });
+      expect(image.filePath?.endsWith(".png")).toBe(true);
+      expect(Buffer.from(image.bytes!).equals(avif)).toBe(true);
+      mockWriteFile.mockClear();
+      // WebM video still names itself.
+      const video = await save({ video: `data:;base64,${webm.toString("base64")}` });
+      expect(video.filePath?.endsWith(".webm")).toBe(true);
+    });
+
     it("refuses what it can't decode instead of writing noise", async () => {
       const { status, data } = await save({ image: "data:image/png;base64,!!not base64!!" });
       expect(status).toBe(400);
