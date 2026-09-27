@@ -55,8 +55,10 @@ export const STRIP_ACTIVE = 72;
 export const STRIP_NEAR = 52;
 export const STRIP_FAR = 40;
 const STRIP_GAP = 4;
-/** How long the outgoing image is kept for its exit animation. */
-const LEAVE_MS = 260;
+/** How long the outgoing image is kept for its exit animation once the swap starts. */
+const LEAVE_MS = 300;
+/** The swap starts when the incoming media has loaded, or after this, whichever is first. */
+const READY_FALLBACK_MS = 400;
 
 export function stripTileSize(index: number, active: number): number {
   if (index === active) return STRIP_ACTIVE;
@@ -88,42 +90,79 @@ const ACTION_TONE: Record<NonNullable<MediaViewerAction["tone"]>, string> = {
   danger: "border border-red-500/35 bg-white/[0.03] text-red-400 hover:bg-red-500/10",
 };
 
-function StageVideo({ src, className }: { src: string; className: string }) {
+function StageVideo({ src, className, onReady }: { src: string; className: string; onReady?: () => void }) {
   const blobUrl = useVideoBlobUrl(src);
-  return <video src={blobUrl ?? undefined} className={className} controls autoPlay playsInline />;
+  return <video src={blobUrl ?? undefined} className={className} controls autoPlay playsInline onLoadedData={onReady} />;
 }
 
-function StageMedia({ item, className, hidden }: { item: MediaViewerItem; className?: string; hidden?: boolean }) {
+/**
+ * One layer of the stage. The same element serves the item while it is
+ * current and then while it leaves, so the browser never decodes it twice;
+ * `onReady` says when an incoming image has loaded and the swap can start.
+ */
+function StageMedia({ item, className, hidden, onReady }: { item: MediaViewerItem; className?: string; hidden?: boolean; onReady?: () => void }) {
   const base = cn("absolute inset-0 m-auto max-h-full max-w-full rounded-md object-contain", className);
   if (item.kind === "video") {
     // An outgoing video is a still: a second decoder for a quarter second is not worth it.
     return hidden ? (
       <div aria-hidden="true" className={cn(base, "h-full w-full bg-neutral-900")} />
     ) : (
-      <StageVideo src={item.src} className={base} />
+      <StageVideo src={item.src} className={base} onReady={onReady} />
     );
   }
-  return <img src={item.src} alt={hidden ? "" : item.title ?? ""} aria-hidden={hidden || undefined} className={base} draggable={false} />;
+  return (
+    <img
+      src={item.src}
+      alt={hidden ? "" : item.title ?? ""}
+      aria-hidden={hidden || undefined}
+      className={base}
+      draggable={false}
+      onLoad={onReady}
+      ref={(img) => {
+        // Already decoded (a cached src): there is nothing to wait for.
+        if (img && img.complete && img.naturalWidth > 0) onReady?.();
+      }}
+    />
+  );
+}
+
+interface StageState {
+  current: MediaViewerItem | undefined;
+  /** The item on its way out, kept for the crossfade. */
+  leaving: MediaViewerItem | null;
+  dir: 1 | -1;
+  /** The incoming media has loaded, so both layers may move. */
+  ready: boolean;
 }
 
 export function MediaViewer({ open, items, index, onIndexChange, onClose, actions, footer, label }: MediaViewerProps) {
   const count = items.length;
   const current = items[index];
-  // The image on its way out, kept for the crossfade.
-  const [leaving, setLeaving] = useState<{ item: MediaViewerItem; dir: 1 | -1 } | null>(null);
-  const [dir, setDir] = useState<1 | -1>(1);
-  const shownRef = useRef<{ index: number; item: MediaViewerItem | undefined }>({ index, item: current });
+  const [stage, setStage] = useState<StageState>({ current, leaving: null, dir: 1, ready: true });
+  const shownIndex = useRef(index);
+  // Derived during render, so the old layer is never dropped for a frame before the swap is set up.
+  if (stage.current?.id !== current?.id) {
+    const dir: 1 | -1 = index >= shownIndex.current ? 1 : -1;
+    setStage({ current, leaving: open && stage.current && current ? stage.current : null, dir, ready: !open || !stage.current });
+  }
+  shownIndex.current = index;
+  const { leaving, dir, ready } = stage;
 
+  const markReady = useCallback(() => setStage((s) => (s.ready ? s : { ...s, ready: true })), []);
+  const clearLeaving = useCallback(() => setStage((s) => (s.leaving ? { ...s, leaving: null } : s)), []);
+
+  // A source that never loads (or a video that starts late) must not hold the swap up.
   useEffect(() => {
-    const prev = shownRef.current;
-    shownRef.current = { index, item: current };
-    if (!open || !prev.item || !current || prev.item.id === current.id) return;
-    const direction: 1 | -1 = index >= prev.index ? 1 : -1;
-    setDir(direction);
-    setLeaving({ item: prev.item, dir: direction });
-    const timer = window.setTimeout(() => setLeaving(null), LEAVE_MS);
+    if (ready) return;
+    const timer = window.setTimeout(markReady, READY_FALLBACK_MS);
     return () => window.clearTimeout(timer);
-  }, [open, index, current]);
+  }, [ready, markReady]);
+  // The exit animation's end normally clears the old layer; this covers a skipped animation.
+  useEffect(() => {
+    if (!leaving || !ready) return;
+    const timer = window.setTimeout(clearLeaving, LEAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [leaving, ready, clearLeaving]);
 
   const go = useCallback(
     (next: number) => {
@@ -185,13 +224,23 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
       <div className="flex min-w-0 flex-1 flex-col items-center gap-3">
         {/* Stage */}
         <div data-testid="media-viewer-stage" className="relative min-h-0 w-full flex-1 overflow-hidden">
+          {/* Keyed by item, so the outgoing layer keeps its element (and decoded image) as it moves to the back. */}
           {leaving && (
-            <div data-testid="media-viewer-leaving" className="pointer-events-none absolute inset-0">
-              <StageMedia item={leaving.item} hidden className={leaving.dir > 0 ? "animate-viewer-out-left" : "animate-viewer-out-right"} />
+            <div
+              key={leaving.id}
+              data-testid="media-viewer-leaving"
+              className={cn("pointer-events-none absolute inset-0", ready && (dir > 0 ? "animate-viewer-out-left" : "animate-viewer-out-right"))}
+              onAnimationEnd={clearLeaving}
+            >
+              <StageMedia item={leaving} hidden />
             </div>
           )}
-          <div key={current.id} className={cn("absolute inset-0", leaving && (dir > 0 ? "animate-viewer-in-right" : "animate-viewer-in-left"))}>
-            <StageMedia item={current} />
+          <div
+            key={current.id}
+            data-testid="media-viewer-current"
+            className={cn("absolute inset-0", leaving && (ready ? (dir > 0 ? "animate-viewer-in-right" : "animate-viewer-in-left") : "opacity-0"))}
+          >
+            <StageMedia item={current} onReady={leaving && !ready ? markReady : undefined} />
           </div>
           {arrow("prev")}
           {arrow("next")}

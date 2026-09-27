@@ -109,22 +109,39 @@ describe("MediaViewer", () => {
     input.remove();
   });
 
-  it("keeps the outgoing image for its exit animation, then lets it go", () => {
+  it("holds the old image until the new one has loaded, then crossfades and lets the old one go", () => {
     const { props, rerender } = renderViewer({ index: 0 });
     expect(screen.queryByTestId("media-viewer-leaving")).toBeNull();
     rerender(<MediaViewer {...props} index={1} />);
+
+    // Same element for the outgoing image: it moved to the back, it was not remounted
     const leaving = screen.getByTestId("media-viewer-leaving");
-    expect(leaving.querySelector("img")).toHaveAttribute("src", items[0].src);
-    expect(leaving.firstElementChild).toHaveClass("animate-viewer-out-left");
-    expect(screen.getByRole("img", { name: "A watch" }).parentElement).toHaveClass("animate-viewer-in-right");
-    act(() => {
-      vi.advanceTimersByTime(300);
-    });
+    const oldImg = leaving.querySelector("img")!;
+    expect(oldImg).toHaveAttribute("src", items[0].src);
+    // Nothing moves until the incoming image has loaded: the old one stays opaque, the new one is held invisible
+    expect(leaving).not.toHaveClass("animate-viewer-out-left");
+    const incoming = screen.getByTestId("media-viewer-current");
+    expect(incoming).toHaveClass("opacity-0");
+
+    fireEvent.load(incoming.querySelector("img")!);
+    expect(leaving).toHaveClass("animate-viewer-out-left");
+    expect(incoming).toHaveClass("animate-viewer-in-right");
+    expect(incoming).not.toHaveClass("opacity-0");
+
+    fireEvent.animationEnd(leaving);
     expect(screen.queryByTestId("media-viewer-leaving")).toBeNull();
 
-    // Going back, the motion reverses
+    // Going back, the motion reverses; a source that never loads is not waited on forever
     rerender(<MediaViewer {...props} index={0} />);
-    expect(screen.getByTestId("media-viewer-leaving").firstElementChild).toHaveClass("animate-viewer-out-right");
+    expect(screen.getByTestId("media-viewer-leaving")).not.toHaveClass("animate-viewer-out-right");
+    act(() => {
+      vi.advanceTimersByTime(450);
+    });
+    expect(screen.getByTestId("media-viewer-leaving")).toHaveClass("animate-viewer-out-right");
+    act(() => {
+      vi.advanceTimersByTime(350);
+    });
+    expect(screen.queryByTestId("media-viewer-leaving")).toBeNull();
   });
 
   it("plays a video on the stage", () => {
