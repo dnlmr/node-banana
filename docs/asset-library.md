@@ -88,6 +88,13 @@ The test is careful, so a valid file is never hidden (`readable.ts`):
   recognises none either.
 - **3D**: never.
 
+"Name a format" is wider than what the library keeps or mediabunny opens:
+QuickTime and MP4 files that open with `moov`, `mdat`, `wide` or `free`
+instead of `ftyp`, any RIFF or IFF form (AVI, RF64), ASF, FLV, MPEG program
+streams, BMP, TIFF, JPEG 2000, an SVG after a long comment or in UTF-16, and
+any of these after zero padding all count, since a player may still open
+them.
+
 When the answer can't be sure (the file can't be read right now, a probe
 timed out, sharp won't load), nothing is marked.
 

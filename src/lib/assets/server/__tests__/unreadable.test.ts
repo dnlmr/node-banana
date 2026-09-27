@@ -64,6 +64,33 @@ const webp = (() => {
 const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3"><rect width="4" height="3"/></svg>');
 const glb = Buffer.concat([Buffer.from("glTF", "latin1"), Buffer.from([2, 0, 0, 0, 12, 0, 0, 0])]);
 
+/**
+ * Valid files players open that neither the shared sniffer nor mediabunny
+ * recognise as they are: mediabunny wants `ftyp` first and a first MP3 frame
+ * within 4 KB, and the sniffer knows only the formats the library keeps.
+ */
+function openingWith(box: string): Buffer {
+  // Classic QuickTime opens with `moov`, `mdat` or `wide`; some muxers lead with `free`.
+  const bytes = Buffer.from(TINY_MP4);
+  bytes.write(box, 4, "latin1");
+  return bytes;
+}
+const mp3Frames = Buffer.concat(Array.from({ length: 12 }, () => Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x64]), Buffer.alloc(413)])));
+const paddedMp3 = Buffer.concat([Buffer.alloc(8192), mp3Frames]);
+const avi = (() => {
+  const buffer = Buffer.alloc(64);
+  buffer.write("RIFF", 0, "latin1");
+  buffer.writeUInt32LE(56, 4);
+  buffer.write("AVI LIST", 8, "latin1");
+  return buffer;
+})();
+const rf64 = (() => {
+  const wav = Buffer.from(makeWav());
+  wav.write("RF64", 0, "latin1");
+  wav.writeUInt32LE(0xffffffff, 4);
+  return wav;
+})();
+
 let hasSharp = false;
 beforeAll(async () => {
   hasSharp = (await loadSharp()) !== null;
@@ -155,6 +182,41 @@ describe("assessReadable", () => {
     ] as const) {
       expect([name, await assessReadable(write(name, bytes), "image")]).toEqual([name, "readable"]);
     }
+  });
+
+  it("never calls video or audio unreadable that players open though mediabunny doesn't recognise it", async () => {
+    const cases: [string, Buffer, AssetKind][] = [
+      ["moov.mov", openingWith("moov"), "video"],
+      ["wide.mov", openingWith("wide"), "video"],
+      ["mdat.mov", openingWith("mdat"), "video"],
+      ["free.mp4", openingWith("free"), "video"],
+      ["free.m4a", openingWith("free"), "audio"],
+      ["avi.mp4", avi, "video"],
+      ["rf64.wav", rf64, "audio"],
+      ["padded.mp3", paddedMp3, "audio"],
+    ];
+    for (const [name, bytes, kind] of cases) {
+      expect([name, await assessReadable(write(name, bytes), kind)]).toEqual([name, "readable"]);
+    }
+  });
+
+  it("never calls an SVG unreadable whose <svg> comes after a long comment, or that is UTF-16", async () => {
+    const body = '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3"><rect width="4" height="3"/></svg>';
+    const cases: [string, Buffer][] = [
+      ["comment.svg", Buffer.from(`<!-- ${"licence text ".repeat(500)} -->\n${body}`)],
+      ["doctype.svg", Buffer.from(`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n${body}`)],
+      ["le.svg", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`<?xml version="1.0" encoding="UTF-16"?>${body}`, "utf16le")])],
+      ["be.svg", Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(`<?xml version="1.0" encoding="UTF-16"?>${body}`, "utf16le").swap16()])],
+    ];
+    for (const [name, bytes] of cases) {
+      expect([name, await assessReadable(write(name, bytes), "image")]).not.toEqual([name, "unreadable"]);
+    }
+  });
+
+  it("still calls those shapes unreadable once decoded together with a data: header", async () => {
+    expect(await assessReadable(write("dm.mov", damage(openingWith("moov"))), "video")).toBe("unreadable");
+    expect(await assessReadable(write("dp.mp3", damage(paddedMp3)), "audio")).toBe("unreadable");
+    expect(await assessReadable(write("da.mp4", damage(avi)), "video")).toBe("unreadable");
   });
 
   it("calls a PNG decoded together with its data: header unreadable", async () => {
@@ -266,6 +328,9 @@ describe("live recordings", () => {
       await record(TINY_MP4, { kind: "video" }, "video/mp4"),
       await record(makeWav(), { kind: "audio" }, "audio/wav"),
       await record(glb, { kind: "3d" }, "model/gltf-binary"),
+      // Players open these; mediabunny finds no duration in them.
+      await record(openingWith("moov"), { kind: "video" }, "video/quicktime"),
+      await record(paddedMp3, { kind: "audio" }, "audio/mpeg"),
     ];
     expect(results.map((result) => result.asset.unreadable)).toEqual(results.map(() => undefined));
     expect((await listAssets({})).total).toBe(results.length);

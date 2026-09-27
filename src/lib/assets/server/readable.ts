@@ -41,8 +41,28 @@ function ascii(head: Buffer, start: number, end: number): string {
 }
 
 /**
- * Formats the library doesn't store but a browser (or another app) may still
- * open, so a file that starts like one is never called unreadable.
+ * ISO-BMFF / QuickTime boxes a valid file may open with instead of `ftyp`:
+ * classic QuickTime movies start with `moov`, `mdat` or `wide`, and some
+ * muxers lead with `free` or `skip`. Players open them; mediabunny (and the
+ * shared sniffer) recognise only a leading `ftyp`.
+ */
+const LEADING_BOXES = new Set(["moov", "mdat", "wide", "free", "skip", "pnot", "uuid", "styp", "sidx", "moof", "junk", "pdin"]);
+const ASF_GUID = Buffer.from([0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11]);
+
+/** An SVG whose `<svg` the shared sniffer doesn't reach: after a long comment or a DOCTYPE, or in UTF-16. */
+function svgText(head: Buffer): boolean {
+  let text: string;
+  if (head[0] === 0xff && head[1] === 0xfe) text = head.toString("utf16le", 2);
+  else if (head[0] === 0xfe && head[1] === 0xff) text = Buffer.from(head.subarray(2, head.length - (head.length % 2))).swap16().toString("utf16le");
+  else text = head.toString("utf8");
+  text = text.replace(/^﻿/, "").trimStart();
+  return text.startsWith("<") && /<svg[\s>]/i.test(text);
+}
+
+/**
+ * Formats the library doesn't store (or that the shared sniffer and
+ * mediabunny don't recognise in this shape) but a browser or another app may
+ * still open, so a file that starts like one is never called unreadable.
  */
 function otherKnownFormat(head: Buffer): boolean {
   if (ascii(head, 0, 2) === "BM" && head.length >= 26) return true; // BMP
@@ -50,11 +70,38 @@ function otherKnownFormat(head: Buffer): boolean {
   if (four === "II*\0" || four === "MM\0*") return true; // TIFF
   if (four === "\0\0\x01\0") return true; // ICO
   if ((head[0] === 0xff && head[1] === 0x0a) || ascii(head, 4, 8) === "JXL ") return true; // JPEG XL
+  if (ascii(head, 4, 12) === "jP  \r\n\x87\n" || four === "\xffO\xffQ") return true; // JPEG 2000
   if (four === "8BPS") return true; // Photoshop
-  if (four === "FORM" && /^AIF[FC]$/.test(ascii(head, 8, 12))) return true; // AIFF
+  // RIFF and IFF containers of any form (AVI, WAVE as RF64/BW64, RIFF MP3, AIFF…).
+  if (/^(RIFF|RIFX|RF64|BW64|FORM)$/.test(four) && /^[\x20-\x7e]{4}$/.test(ascii(head, 8, 12))) return true;
+  if (four === "riff" && head.length >= 16) return true; // Sony Wave64
+  if (head.length >= 8 && LEADING_BOXES.has(ascii(head, 4, 8))) {
+    const size = head.readUInt32BE(0);
+    if (size === 0 || size === 1 || size >= 8) return true; // ISO-BMFF / QuickTime without a leading ftyp
+  }
+  if (head.length >= 8 && head.subarray(0, 8).equals(ASF_GUID)) return true; // ASF (WMV, WMA)
+  if (ascii(head, 0, 3) === "FLV" && head[3] === 1) return true; // Flash video
+  if (head[0] === 0 && head[1] === 0 && head[2] === 1 && (head[3] === 0xba || head[3] === 0xb3)) return true; // MPEG-PS, MPEG video
   if (ascii(head, 0, 5) === "#!AMR" || four === "caff") return true; // AMR, Core Audio
   if (head.length > 188 && head[0] === 0x47 && head[188] === 0x47) return true; // MPEG-TS
-  return false;
+  if (head.length > 196 && head[4] === 0x47 && head[196] === 0x47) return true; // M2TS (192-byte packets)
+  return svgText(head);
+}
+
+/**
+ * Whether the first bytes prove a format: at the start, or after zero
+ * padding (which noise from a misread data URL never begins with, but some
+ * writers leave before an MP3 or AAC stream, further than mediabunny's 4 KB
+ * look for a first frame).
+ */
+function knownFormat(head: Buffer): { family: string[] | null } | null {
+  const family = sniffFamily(head);
+  if (family || otherKnownFormat(head)) return { family };
+  let start = 0;
+  while (start < head.length && head[start] === 0) start++;
+  if (start === 0 || start + 4 > head.length) return null;
+  const rest = head.subarray(start);
+  return sniffFamily(rest) || otherKnownFormat(rest) ? { family: null } : null;
 }
 
 /** Whether sharp reads a size from the file: `unreadable` only when its decoder refused the bytes. */
@@ -87,11 +134,11 @@ export async function assessReadable(file: string, kind: AssetKind): Promise<Rea
   } catch {
     return "unknown";
   }
-  const family = sniffFamily(head);
-  if (family || otherKnownFormat(head)) {
+  const known = knownFormat(head);
+  if (known) {
     // The first bytes prove a format: whatever else may be wrong, this is not noise.
     if (kind !== "image") return "readable";
-    const image = family?.find((ext) => mediaTypeForExt(ext, "image")?.kind === "image");
+    const image = known.family?.find((ext) => mediaTypeForExt(ext, "image")?.kind === "image");
     return image && (await imageDimensionsFromFile(file, image, head)) ? "readable" : "unknown";
   }
   if (head.length === 0) return "unreadable";
