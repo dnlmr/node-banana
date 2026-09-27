@@ -143,6 +143,32 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
     return { project, children, unreadableGenerations };
   };
 
+  // A folder that never answers (a network drive that went away, a file the
+  // cloud is still fetching) is given up on when time runs out, so the
+  // search answers on time with what it has.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"late">((resolve) => {
+    // setTimeout fires at once past its 32-bit limit.
+    timer = setTimeout(() => resolve("late"), Math.min(limits.timeoutMs, 2 ** 31 - 1));
+    timer.unref?.();
+  });
+  try {
+    await walk(root, limits, result, (dir, descend) => Promise.race([visit(dir, descend), expired]));
+  } finally {
+    clearTimeout(timer);
+  }
+
+  result.projects.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
+  return result;
+}
+
+/** Level by level from `root`, within the folder and project bounds, filling `result`. */
+async function walk(
+  root: string,
+  limits: ScanLimits,
+  result: ScanProjectsResult,
+  visit: (dir: string, descend: boolean) => Promise<Visit | "late" | "unreadable">,
+): Promise<void> {
   let level = [root];
   let visited = 0;
   for (let depth = 0; level.length > 0; depth++) {
@@ -180,9 +206,6 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
     if (result.truncated) break;
     level = next;
   }
-
-  result.projects.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
-  return result;
 }
 
 /** Media files directly in `dir`, up to `cap`; null when the folder can't be read. */

@@ -291,6 +291,28 @@ describe("findProjects", () => {
       expect(result.truncated).toBe(true);
       expect(SCAN_LIMITS.timeoutMs).toBe(15_000);
     });
+
+    it("answers on time when a folder never does (a network drive gone away)", async () => {
+      project(path.join(root, "A"));
+      project(path.join(root, "Stuck", "Inside"));
+      const stuck = path.join(root, "Stuck");
+      const readdir = fs.promises.readdir;
+      const hang = vi
+        .spyOn(fs.promises, "readdir")
+        .mockImplementation(((dir: fs.PathLike, options?: unknown) =>
+          String(dir) === stuck ? new Promise(() => {}) : Reflect.apply(readdir, fs.promises, [dir, options])) as typeof readdir);
+      try {
+        const started = Date.now();
+        const result = await findProjects(root, { limits: { timeoutMs: 200 } });
+
+        expect(Date.now() - started).toBeLessThan(2_000);
+        expect(dirs(result.projects)).toEqual(["A"]);
+        expect(result).toMatchObject({ truncated: true, unreadable: 0 });
+        expect(hang).toHaveBeenCalledWith(stuck, { withFileTypes: true });
+      } finally {
+        hang.mockRestore();
+      }
+    });
   });
 });
 
