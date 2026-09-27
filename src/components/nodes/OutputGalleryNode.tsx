@@ -1,18 +1,17 @@
 "use client";
 
-import { LIGHTBOX_BUTTON } from "../chromeStyles";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { NodeProps, Node, useReactFlow } from "@xyflow/react";
-import { Dialog } from "@/components/ui/Dialog";
+import { MediaViewer, type MediaViewerAction, type MediaViewerItem } from "@/components/MediaViewer";
 import { NodeShell } from "./NodeShell";
 import { ControlsCard, CornerGrip, EmptyState, type SocketSpec, HeightGrip } from "./ui";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { OutputGalleryNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
-import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
+import { useAddMediaNode } from "@/hooks/useAddMediaNode";
 import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { downloadMedia as downloadMediaUtil } from "@/utils/downloadMedia";
-import { ChevronLeft, ChevronRight, Download, Menu, Play, Trash2, X } from "lucide-react";
+import { Download, ImagePlus, Menu, Play, Trash2 } from "lucide-react";
 
 const INPUT_SOCKETS: SocketSpec[] = [
   { id: "image", type: "image", label: "Image" },
@@ -36,19 +35,6 @@ function AdaptiveGalleryThumbnail({ src, alt, nodeId }: { src: string; alt: stri
   );
 }
 
-function LightboxVideo({ src }: { src: string }) {
-  const blobUrl = useVideoBlobUrl(src);
-  return (
-    <video
-      src={blobUrl ?? undefined}
-      className="max-w-full max-h-[90vh] object-contain rounded"
-      controls
-      autoPlay
-      playsInline
-    />
-  );
-}
-
 type OutputGalleryNodeType = Node<OutputGalleryNodeData, "outputGallery">;
 
 export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGalleryNodeType>) {
@@ -56,6 +42,7 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const addNode = useWorkflowStore((state) => state.addNode);
   const { getNodes, setNodes } = useReactFlow();
+  const addMediaNode = useAddMediaNode();
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   // Display stored media only — items are accumulated during workflow execution
@@ -190,19 +177,6 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
     setLightboxIndex(null);
   }, []);
 
-  const navigateLightbox = useCallback(
-    (direction: "prev" | "next") => {
-      if (lightboxIndex === null) return;
-
-      if (direction === "prev" && lightboxIndex > 0) {
-        setLightboxIndex(lightboxIndex - 1);
-      } else if (direction === "next" && lightboxIndex < displayMedia.length - 1) {
-        setLightboxIndex(lightboxIndex + 1);
-      }
-    },
-    [lightboxIndex, displayMedia.length]
-  );
-
   const downloadMedia = useCallback(() => {
     if (lightboxIndex === null) return;
 
@@ -295,30 +269,40 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
     }
   }, [id, nodeData.images, nodeData.videos, getNodes, addNode, setNodes]);
 
-  // Keyboard navigation for lightbox
-  useEffect(() => {
-    if (lightboxIndex === null) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      switch (e.key) {
-        case "Escape":
-          closeLightbox();
-          break;
-        case "ArrowLeft":
-          navigateLightbox("prev");
-          break;
-        case "ArrowRight":
-          navigateLightbox("next");
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [lightboxIndex, closeLightbox, navigateLightbox]);
-
   const currentItem = lightboxIndex !== null ? displayMedia[lightboxIndex] : null;
   const gridHeight = nodeData.mediaHeight ?? GRID_HEIGHT;
+
+  // The viewer's items: images then videos, as the grid shows them.
+  const viewerItems = useMemo<MediaViewerItem[]>(
+    () =>
+      displayMedia.map((item, idx) => ({
+        id: `${item.type}-${idx}`,
+        src: item.src,
+        kind: item.type,
+        thumb: item.type === "video" ? videoThumbnails.get(item.src) : undefined,
+        title: `${item.type === "video" ? "Video" : "Image"} ${idx + 1}`,
+        details: [["Type", item.type === "video" ? "Video" : "Image"], ["Node", "Output gallery"]],
+      })),
+    [displayMedia, videoThumbnails],
+  );
+  const viewerActions = useMemo<MediaViewerAction[]>(() => {
+    if (lightboxIndex === null || !currentItem) return [];
+    return [
+      { label: "Download", icon: Download, tone: "primary", shortcut: "d", onClick: downloadMedia },
+      {
+        label: "Add to graph as input",
+        icon: ImagePlus,
+        shortcut: "Enter",
+        onClick: () =>
+          addMediaNode({
+            kind: currentItem.type,
+            src: currentItem.src,
+            filename: currentItem.type === "video" ? `gallery-video-${lightboxIndex + 1}.mp4` : `gallery-image-${lightboxIndex + 1}.png`,
+          }),
+      },
+      { label: "Remove from gallery", icon: Trash2, tone: "danger", onClick: () => removeMedia(lightboxIndex) },
+    ];
+  }, [lightboxIndex, currentItem, downloadMedia, addMediaNode, removeMedia]);
 
   return (
     <>
@@ -409,74 +393,16 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
         )}
       </NodeShell>
 
-      {/* Lightbox */}
-      {lightboxIndex !== null && currentItem && (
-        <Dialog open onClose={closeLightbox} variant="lightbox" portal label={`Gallery image ${lightboxIndex + 1}`}>
-              {currentItem.type === "video" ? (
-                <LightboxVideo src={currentItem.src} />
-              ) : (
-                <img
-                  src={currentItem.src}
-                  alt={`Gallery image ${lightboxIndex + 1}`}
-                  className="max-w-full max-h-[90vh] object-contain rounded"
-                />
-              )}
-
-              {/* Close button */}
-              <button
-                onClick={closeLightbox}
-                aria-label="Close"
-                className={`absolute top-4 right-4 w-8 h-8 ${LIGHTBOX_BUTTON} rounded-lg text-sm transition-colors flex items-center justify-center`}
-              >
-                <X size={16} strokeWidth={2} />
-              </button>
-
-              {/* Download + Remove buttons */}
-              <div className="absolute top-4 left-4 flex gap-1.5">
-                <button
-                  onClick={downloadMedia}
-                  className={`px-3 py-1.5 ${LIGHTBOX_BUTTON} rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5`}
-                >
-                  <Download size={14} strokeWidth={2} />
-                  Download
-                </button>
-                <button
-                  onClick={() => removeMedia(lightboxIndex)}
-                  className={`px-3 py-1.5 ${LIGHTBOX_BUTTON} hover:bg-red-600/80 hover:border-red-500/40 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5`}
-                >
-                  <Trash2 size={14} strokeWidth={2} />
-                  Remove
-                </button>
-              </div>
-
-              {/* Left arrow */}
-              {lightboxIndex > 0 && (
-                <button
-                  onClick={() => navigateLightbox("prev")}
-                  aria-label="Previous"
-                  className={`absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 ${LIGHTBOX_BUTTON} rounded-full transition-colors flex items-center justify-center`}
-                >
-                  <ChevronLeft size={20} strokeWidth={2} />
-                </button>
-              )}
-
-              {/* Right arrow */}
-              {lightboxIndex < displayMedia.length - 1 && (
-                <button
-                  onClick={() => navigateLightbox("next")}
-                  aria-label="Next"
-                  className={`absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 ${LIGHTBOX_BUTTON} rounded-full transition-colors flex items-center justify-center`}
-                >
-                  <ChevronRight size={20} strokeWidth={2} />
-                </button>
-              )}
-
-              {/* Media counter */}
-              <div className={`absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 ${LIGHTBOX_BUTTON} rounded-lg text-xs font-medium`}>
-                {lightboxIndex + 1} / {displayMedia.length}
-              </div>
-        </Dialog>
-      )}
+      {/* Full-screen viewer, shared with the recent-generations drop-down */}
+      <MediaViewer
+        open={lightboxIndex !== null && currentItem !== null}
+        items={viewerItems}
+        index={lightboxIndex ?? 0}
+        onIndexChange={setLightboxIndex}
+        onClose={closeLightbox}
+        actions={viewerActions}
+        label="Gallery"
+      />
     </>
   );
 }

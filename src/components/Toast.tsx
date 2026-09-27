@@ -13,12 +13,12 @@ import { create } from "zustand";
 export const STACK_TOP = 38 + 1 + 16 + 42 + 8;
 export const STACK_RIGHT = 4 + 1 + 16;
 /**
- * The history button's distance from the canvas's right edge, published by
- * the button while it is moved (the agent window covers the corner), so the
- * notifications keep hanging beneath it.
+ * Where the notifications hang, as a distance from the canvas's right edge:
+ * the window's edge, or the history button's inset while the agent window
+ * covers the corner. Published by the history button (GlobalImageHistory).
  */
 export const HISTORY_RIGHT_VAR = "--nb-history-right";
-/** STACK_RIGHT as CSS, following the history button when it moves. */
+/** STACK_RIGHT as CSS, following that anchor. */
 export const STACK_RIGHT_CSS = `calc(${STACK_RIGHT - 16}px + var(${HISTORY_RIGHT_VAR}, 16px))`;
 
 /** A text button on the toast ("Show", "Change…"); choosing it also dismisses the toast. */

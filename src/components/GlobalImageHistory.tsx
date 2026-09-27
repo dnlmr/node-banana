@@ -1,14 +1,17 @@
 "use client";
 
-import { Images, LayoutGrid, LibraryBig, X } from "lucide-react";
-import { memo, useState, useRef, useEffect, useCallback } from "react";
+import { Download, ImagePlus, Images, LayoutGrid, LibraryBig, Maximize2, X, Check } from "lucide-react";
+import { memo, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useAssetStore } from "@/store/assetStore";
 import { getRecorderLibraryStatus } from "@/lib/assets/client/recorder";
+import { useAddMediaNode } from "@/hooks/useAddMediaNode";
+import { downloadMedia } from "@/utils/downloadMedia";
 import { ImageHistoryItem } from "@/types";
 import { ChromeIconButton } from "./ChromeIconButton";
 import { CHROME_SURFACE } from "./chromeStyles";
+import { MediaViewer, type MediaViewerAction, type MediaViewerItem } from "./MediaViewer";
 import { HISTORY_RIGHT_VAR } from "./Toast";
 
 /** Inset of the history button from the canvas edges (matches the navigator). */
@@ -17,6 +20,10 @@ export const HISTORY_MARGIN = 16;
 export const HISTORY_BUTTON_SIZE = 42;
 /** Recent thumbnails shown in the drop-down before "Show all". */
 const RECENT_COUNT = 12;
+/** The drop-down: four 80px thumbnails across, 6px padding, 4px gaps. */
+const DROPDOWN_WIDTH = 344;
+/** How long "Add to graph" reads "Added" before it resets. */
+const ADDED_MS = 1400;
 
 /** Drag payload a history thumbnail carries; the canvas turns it into an image node. */
 export const HISTORY_DRAG_TYPE = "application/history-image";
@@ -58,13 +65,31 @@ export function producerName(model: string): string {
   }
 }
 
+function generationCost(item: ImageHistoryItem): string | null {
+  const metadata = item.generation;
+  if (!metadata) return null;
+  return metadata.cost
+    ? `${metadata.cost.estimated ? "Est. " : ""}$${metadata.cost.amount.toFixed(4)} USD`
+    : "Cost unavailable";
+}
+
 function generationDetails(item: ImageHistoryItem): string {
   const metadata = item.generation;
   if (!metadata) return "";
-  const cost = metadata.cost
-    ? `${metadata.cost.estimated ? "Est. " : ""}$${metadata.cost.amount.toFixed(4)} USD`
-    : "Cost unavailable";
-  return [metadata.size, metadata.outputFormat?.toUpperCase(), cost].filter(Boolean).join(" · ");
+  return [metadata.size, metadata.outputFormat?.toUpperCase(), generationCost(item)].filter(Boolean).join(" · ");
+}
+
+/** A history item as the viewer shows it: the prompt on top, what made it underneath. */
+export function historyViewerItem(item: ImageHistoryItem): MediaViewerItem {
+  const details: [string, string][] = [
+    ["Created", formatRelativeTime(item.timestamp)],
+    ["Model", producerName(item.model)],
+  ];
+  if (item.generation?.size) details.push(["Size", item.generation.size]);
+  if (item.generation?.outputFormat) details.push(["Format", item.generation.outputFormat.toUpperCase()]);
+  const cost = generationCost(item);
+  if (cost) details.push(["Cost", cost]);
+  return { id: item.id, src: item.image, kind: "image", title: item.prompt || "No prompt", details };
 }
 
 export function formatRelativeTime(timestamp: number): string {
@@ -86,22 +111,26 @@ const GridIcon = () => (
   <LayoutGrid size={14} strokeWidth={1.75} />
 );
 
-/** One thumbnail in the drop-down grid. */
+/** One thumbnail in the drop-down grid: click to view, drag to place. */
 function RecentThumb({
   item,
   index,
+  onOpen,
   onDragStart,
 }: {
   item: ImageHistoryItem;
   index: number;
+  onOpen: (index: number) => void;
   onDragStart: (e: React.DragEvent, item: ImageHistoryItem) => void;
 }) {
   return (
     <button
       type="button"
       draggable
+      onClick={() => onOpen(index)}
       onDragStart={(e) => onDragStart(e, item)}
-      className="relative h-[52px] cursor-grab overflow-hidden rounded-lg squircle bg-well shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)] transition-[box-shadow,transform] duration-[120ms] ease-out hover:shadow-[inset_0_0_0_2px_#3b82f6] hover:scale-[1.04] active:cursor-grabbing focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_2px_#3b82f6]"
+      aria-label={`View ${item.prompt?.substring(0, 60) || `history image ${index + 1}`}`}
+      className="group relative h-20 cursor-pointer overflow-hidden rounded-lg squircle bg-well shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)] transition-[box-shadow,transform] duration-[120ms] ease-out hover:shadow-[inset_0_0_0_2px_#3b82f6] hover:scale-[1.04] active:cursor-grabbing focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_2px_#3b82f6]"
       title={`${formatRelativeTime(item.timestamp)} · ${describeProducer(item.model)}\n${item.prompt?.substring(0, 80) || "No prompt"}${item.generation ? `\n${generationDetails(item)}` : ""}`}
     >
       <img
@@ -110,6 +139,12 @@ function RecentThumb({
         className="pointer-events-none h-full w-full object-cover"
         draggable={false}
       />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute bottom-1 right-1 flex h-[22px] w-[22px] items-center justify-center rounded-md bg-neutral-950/80 text-white opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 group-focus-visible:opacity-100"
+      >
+        <Maximize2 size={12} strokeWidth={2} />
+      </span>
     </button>
   );
 }
@@ -119,12 +154,14 @@ function HistorySidebar({
   history,
   onClear,
   onClose,
+  onOpen,
   onDragStart,
   triggerRect,
 }: {
   history: ImageHistoryItem[];
   onClear: () => void;
   onClose: () => void;
+  onOpen: (index: number) => void;
   onDragStart: (e: React.DragEvent, item: ImageHistoryItem) => void;
   triggerRect: DOMRect | null;
 }) {
@@ -205,8 +242,17 @@ function HistorySidebar({
           <div
             key={item.id}
             draggable
+            role="button"
+            tabIndex={0}
+            onClick={() => onOpen(index)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(index);
+              }
+            }}
             onDragStart={(e) => onDragStart(e, item)}
-            className="group flex cursor-grab gap-3 rounded-lg p-2 transition-colors hover:bg-white/5 active:cursor-grabbing"
+            className="group flex cursor-pointer gap-3 rounded-lg p-2 transition-colors hover:bg-white/5 active:cursor-grabbing"
           >
             {/* Thumbnail */}
             <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg squircle shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)] transition-shadow group-hover:shadow-[inset_0_0_0_2px_#3b82f6]">
@@ -234,7 +280,7 @@ function HistorySidebar({
 
       {/* Footer */}
       <div className="shrink-0 border-t border-white/8 px-4 py-2">
-        <span className="text-[10px] text-neutral-500">Drag images to canvas to create nodes</span>
+        <span className="text-[10px] text-neutral-500">Click to view · drag onto the canvas</span>
       </div>
     </div>,
     document.body
@@ -243,13 +289,25 @@ function HistorySidebar({
 
 // Memoised: rendered by the canvas, which re-renders on every drag frame
 interface GlobalImageHistoryProps {
-  /** Distance from the canvas's right edge; larger while the agent window covers the corner. */
+  /** The button's distance from the canvas's right edge; larger while the agent window covers the corner. */
   rightInset?: number;
+  /**
+   * Where the drop-down and the notifications align, from the right edge:
+   * the window's edge while the agent window is closed (the button sits
+   * beside the agent pill), the button's own inset while it is open.
+   */
+  anchorRight?: number;
 }
 
-export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset = HISTORY_MARGIN }: GlobalImageHistoryProps) {
+export const GlobalImageHistory = memo(function GlobalImageHistory({
+  rightInset = HISTORY_MARGIN,
+  anchorRight = HISTORY_MARGIN,
+}: GlobalImageHistoryProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
+  /** Index into the whole history, while the viewer is up. */
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [addedId, setAddedId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -257,22 +315,31 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
   const clearGlobalHistory = useWorkflowStore((state) => state.clearGlobalHistory);
   const appView = useAssetStore((state) => state.appView);
   const setAppView = useAssetStore((state) => state.setAppView);
+  const addMediaNode = useAddMediaNode();
 
   // Nothing of this stays open over the Assets view (the sidebar is portaled above it)
   useEffect(() => {
     setIsOpen(false);
     setShowSidebar(false);
+    setViewerIndex(null);
   }, [appView]);
 
-  // Notifications hang beneath this button (Toast.tsx); tell them where it went.
+  // Notifications hang where the drop-down does (Toast.tsx); tell them where that is.
   useEffect(() => {
     const root = document.documentElement;
-    if (rightInset === HISTORY_MARGIN) root.style.removeProperty(HISTORY_RIGHT_VAR);
-    else root.style.setProperty(HISTORY_RIGHT_VAR, `${rightInset}px`);
+    if (anchorRight === HISTORY_MARGIN) root.style.removeProperty(HISTORY_RIGHT_VAR);
+    else root.style.setProperty(HISTORY_RIGHT_VAR, `${anchorRight}px`);
     return () => {
       root.style.removeProperty(HISTORY_RIGHT_VAR);
     };
-  }, [rightInset]);
+  }, [anchorRight]);
+
+  // "Added" reads for a moment, then the button is ready for the next one.
+  useEffect(() => {
+    if (addedId === null) return;
+    const timer = window.setTimeout(() => setAddedId(null), ADDED_MS);
+    return () => window.clearTimeout(timer);
+  }, [addedId]);
 
   const recent = history.slice(0, RECENT_COUNT);
   const hasOverflow = history.length > RECENT_COUNT;
@@ -343,7 +410,44 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
     clearGlobalHistory();
     setIsOpen(false);
     setShowSidebar(false);
+    setViewerIndex(null);
   }, [clearGlobalHistory]);
+
+  // The viewer walks the whole history, not just the recent slice.
+  const openViewer = useCallback((index: number) => {
+    setIsOpen(false);
+    setShowSidebar(false);
+    setAddedId(null);
+    setViewerIndex(index);
+  }, []);
+  const closeViewer = useCallback(() => setViewerIndex(null), []);
+
+  const viewerItems = useMemo(() => history.map(historyViewerItem), [history]);
+  const viewed = viewerIndex !== null ? history[viewerIndex] : undefined;
+  const viewerActions = useMemo<MediaViewerAction[]>(() => {
+    if (!viewed) return [];
+    const added = addedId === viewed.id;
+    return [
+      {
+        label: added ? "Added" : "Add to graph",
+        icon: added ? Check : ImagePlus,
+        tone: added ? "success" : "primary",
+        shortcut: "Enter",
+        onClick: () => {
+          addMediaNode({ kind: "image", src: viewed.image, filename: `history-${viewed.timestamp}.png` });
+          setAddedId(viewed.id);
+        },
+      },
+      {
+        label: "Download",
+        icon: Download,
+        shortcut: "d",
+        onClick: () => {
+          downloadMedia(viewed.image, "image").catch((err) => console.error("History download failed:", err));
+        },
+      },
+    ];
+  }, [viewed, addedId, addMediaNode]);
 
   if (history.length === 0) return null;
 
@@ -378,12 +482,14 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
         </ChromeIconButton>
       </div>
 
-      {/* Recent drop-down */}
+      {/* Recent drop-down: right-aligned to the anchor, not to the button */}
       {isOpen && (
         <div
-          className={`${CHROME_SURFACE} animate-drop-in nodrag nopan nowheel mt-2 flex w-[236px] flex-col gap-1.5 rounded-xl p-1.5`}
+          className={`${CHROME_SURFACE} animate-drop-in nodrag nopan nowheel absolute flex flex-col gap-1.5 rounded-xl p-1.5`}
+          style={{ top: HISTORY_BUTTON_SIZE + 8, right: anchorRight - rightInset, width: DROPDOWN_WIDTH }}
           role="dialog"
           aria-label="Recent generations"
+          data-testid="history-dropdown"
         >
           <div className="flex items-center justify-between px-1.5 pt-1">
             <span className="text-[10px] uppercase tracking-[0.06em] text-neutral-500">Recent</span>
@@ -398,28 +504,31 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
           </div>
           <div className="grid grid-cols-4 gap-1">
             {recent.map((item, index) => (
-              <RecentThumb key={item.id} item={item} index={index} onDragStart={handleDragStart} />
+              <RecentThumb key={item.id} item={item} index={index} onOpen={openViewer} onDragStart={handleDragStart} />
             ))}
           </div>
-          {hasOverflow && (
+          <span className="px-1.5 text-[10px] leading-[13px] text-neutral-500">Click to view · drag onto the canvas</span>
+          <div className="flex gap-1">
+            {hasOverflow && (
+              <button
+                type="button"
+                onClick={handleShowAll}
+                className="flex h-7 flex-1 items-center justify-center gap-2 rounded-md squircle bg-white/4 text-[11px] font-medium text-neutral-300 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
+              >
+                <GridIcon />
+                <span>Show all · {history.length}</span>
+              </button>
+            )}
             <button
               type="button"
-              onClick={handleShowAll}
-              className="flex h-7 items-center justify-center gap-2 rounded-md squircle bg-white/4 text-[11px] font-medium text-neutral-300 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
+              onClick={openAssets}
+              className="flex h-7 flex-1 items-center justify-center gap-2 rounded-md squircle text-[11px] font-medium text-neutral-400 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
+              title="Every generation, from every workflow (A)"
             >
-              <GridIcon />
-              <span>Show all · {history.length}</span>
+              <LibraryBig size={14} strokeWidth={1.75} />
+              <span>Open Assets</span>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={openAssets}
-            className="flex h-7 items-center justify-center gap-2 rounded-md squircle text-[11px] font-medium text-neutral-400 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
-            title="Every generation, from every workflow (A)"
-          >
-            <LibraryBig size={14} strokeWidth={1.75} />
-            <span>Open Assets</span>
-          </button>
+          </div>
         </div>
       )}
 
@@ -429,10 +538,38 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({ rightInset 
           history={history}
           onClear={handleClear}
           onClose={handleCloseSidebar}
+          onOpen={openViewer}
           onDragStart={handleDragStart}
           triggerRect={triggerRef.current?.getBoundingClientRect() || null}
         />
       )}
+
+      {/* Full-screen viewer over the whole history */}
+      <MediaViewer
+        open={viewerIndex !== null && viewed !== undefined}
+        items={viewerItems}
+        index={viewerIndex ?? 0}
+        onIndexChange={(index) => {
+          setAddedId(null);
+          setViewerIndex(index);
+        }}
+        onClose={closeViewer}
+        actions={viewerActions}
+        label="Recent generation"
+        footer={
+          <button
+            type="button"
+            onClick={() => {
+              closeViewer();
+              openAssets();
+            }}
+            className="flex h-7 items-center justify-center gap-2 rounded-md text-[11px] font-medium text-neutral-400 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
+          >
+            <LibraryBig size={14} strokeWidth={1.75} />
+            <span>Open in Assets</span>
+          </button>
+        }
+      />
     </div>
   );
 });
