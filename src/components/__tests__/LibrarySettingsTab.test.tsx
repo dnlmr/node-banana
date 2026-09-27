@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
-import type { LibraryJobStatus, LibraryStatus, ScanProjectsResult } from "@/lib/assets/types";
+import type { KnownProject, LibraryJobStatus, LibraryStatus, ProjectsOverview } from "@/lib/assets/types";
+import { useBringInStore } from "@/store/bringInStore";
 import {
   COUNT_POLL_MS,
   JOB_POLL_MS,
@@ -8,8 +9,6 @@ import {
   describeScan,
   formatBytes,
   formatFileCount,
-  listProjectFolders,
-  mergeFoundProjects,
   revealLabel,
 } from "@/components/settings/LibrarySettingsTab";
 
@@ -17,8 +16,9 @@ const api = vi.hoisted(() => ({
   fetchLibraryStatus: vi.fn(),
   setLibraryRoot: vi.fn(),
   revealLibraryRoot: vi.fn(),
-  startImport: vi.fn(),
-  scanProjects: vi.fn(),
+  fetchProjects: vi.fn(),
+  bringInProjects: vi.fn(),
+  dismissProjectsOffer: vi.fn(),
   startCleanup: vi.fn(),
   fetchJob: vi.fn(),
   cancelJob: vi.fn(),
@@ -37,7 +37,23 @@ vi.mock("@/store/workflowStore", () => ({
 }));
 
 const ROOT = "/Users/me/Pictures/Node Banana";
-const CONFIGS_KEY = "node-banana-workflow-configs";
+
+const makeProject = (dir: string, inRoot: boolean): KnownProject => ({
+  dir,
+  name: dir.split("/").pop() ?? dir,
+  relativePath: inRoot ? dir.slice(ROOT.length + 1) : null,
+  inRoot,
+  lastModified: 1,
+  mediaCount: 0,
+});
+
+const makeOverview = (overrides: Partial<ProjectsOverview> = {}): ProjectsOverview => ({
+  root: ROOT,
+  projects: [],
+  elsewhere: null,
+  offerDismissed: false,
+  ...overrides,
+});
 
 const makeStatus = (overrides: Partial<LibraryStatus> = {}): LibraryStatus => ({
   available: true,
@@ -100,6 +116,10 @@ describe("LibrarySettingsTab", () => {
     vi.stubGlobal("fetch", mockFetch);
     api.revealLibraryRoot.mockResolvedValue(undefined);
     api.cancelJob.mockResolvedValue(undefined);
+    api.fetchProjects.mockResolvedValue(makeOverview());
+    api.bringInProjects.mockResolvedValue({ root: ROOT, job: null });
+    api.dismissProjectsOffer.mockResolvedValue(undefined);
+    useBringInStore.setState({ request: null });
   });
 
   afterEach(() => {
@@ -114,14 +134,21 @@ describe("LibrarySettingsTab", () => {
       expect(screen.getByText("Reading the library…")).toBeInTheDocument();
     });
 
-    it("shows the folder, where it came from and what the library holds", async () => {
+    it("shows the folder, where it came from and what it holds", async () => {
+      api.fetchProjects.mockResolvedValue(
+        makeOverview({
+          projects: [makeProject(`${ROOT}/Fox`, true), makeProject(`${ROOT}/Owl`, true), makeProject("/work/Elsewhere", false)],
+        })
+      );
       await renderTab();
       expect(screen.getByText(ROOT)).toBeInTheDocument();
       expect(screen.getByText("Default")).toBeInTheDocument();
-      const stats = screen.getByLabelText("Library contents");
+      expect(screen.getByText(/New projects are saved here/)).toBeInTheDocument();
+      const stats = screen.getByLabelText("What the folder holds");
+      // Projects in other folders are not in it
+      expect(within(stats).getByText("2")).toBeInTheDocument();
       expect(within(stats).getByText("12")).toBeInTheDocument();
       expect(within(stats).getByText("5 MB")).toBeInTheDocument();
-      expect(within(stats).getByText("3")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Show in Finder" })).toBeEnabled();
       expect(screen.getByRole("button", { name: "Change…" })).toBeEnabled();
     });
@@ -172,8 +199,8 @@ describe("LibrarySettingsTab", () => {
         makeStatus({ available: false, reason: "The folder is read-only.", counts: { assets: 0, trashed: 0, bytes: 0 } })
       );
       expect(screen.getByRole("alert")).toHaveTextContent("The folder is read-only.");
-      expect(screen.queryByLabelText("Library contents")).not.toBeInTheDocument();
-      expect(screen.queryByText("Import generations from existing projects")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("What the folder holds")).not.toBeInTheDocument();
+      expect(screen.queryByText("Bring in projects from another folder")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Show in Finder" })).toBeDisabled();
       // A different folder may work
       expect(screen.getByRole("button", { name: "Change…" })).toBeEnabled();
@@ -200,20 +227,20 @@ describe("LibrarySettingsTab", () => {
       vi.useFakeTimers();
       await renderTab(makeStatus({ counting: true, counts: { assets: 0, trashed: 0, bytes: 0 } }));
 
-      const stats = screen.getByLabelText("Library contents");
-      expect(within(stats).getAllByText("Counting…")).toHaveLength(3);
-      expect(within(stats).queryByText("0")).not.toBeInTheDocument();
+      const stats = screen.getByLabelText("What the folder holds");
+      // Projects are counted apart from the assets
+      expect(within(stats).getAllByText("Counting…")).toHaveLength(2);
       expect(within(stats).queryByText("0 B")).not.toBeInTheDocument();
       expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(1);
 
       await advance(COUNT_POLL_MS);
       expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(2);
-      expect(within(screen.getByLabelText("Library contents")).getAllByText("Counting…")).toHaveLength(3);
+      expect(within(screen.getByLabelText("What the folder holds")).getAllByText("Counting…")).toHaveLength(2);
 
       api.fetchLibraryStatus.mockResolvedValue(makeStatus());
       await advance(COUNT_POLL_MS);
       expect(api.fetchLibraryStatus).toHaveBeenCalledTimes(3);
-      const counted = screen.getByLabelText("Library contents");
+      const counted = screen.getByLabelText("What the folder holds");
       expect(within(counted).queryByText("Counting…")).not.toBeInTheDocument();
       expect(within(counted).getByText("12")).toBeInTheDocument();
 
@@ -255,7 +282,7 @@ describe("LibrarySettingsTab", () => {
 
       const dialog = screen.getByRole("dialog");
       expect(within(dialog).getByText(NEW_ROOT)).toBeInTheDocument();
-      fireEvent.click(within(dialog).getByRole("button", { name: /Move my library there/ }));
+      fireEvent.click(within(dialog).getByRole("button", { name: /Move everything there/ }));
       await flush();
 
       expect(api.setLibraryRoot).toHaveBeenCalledWith({ root: NEW_ROOT, mode: "move" });
@@ -273,7 +300,7 @@ describe("LibrarySettingsTab", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
-      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move my library there/ }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ }));
       await flush();
 
       expect(screen.getByText("Moving the library")).toBeInTheDocument();
@@ -282,7 +309,7 @@ describe("LibrarySettingsTab", () => {
       expect(api.fetchJob).not.toHaveBeenCalled();
     });
 
-    it("switches to the folder as it is and says the old library stays", async () => {
+    it("switches to the folder as it is and says the old one stays", async () => {
       mockBrowse({ success: true, path: NEW_ROOT });
       api.setLibraryRoot.mockResolvedValue(makeStatus({ root: NEW_ROOT, source: "config" }));
       await renderTab();
@@ -290,13 +317,17 @@ describe("LibrarySettingsTab", () => {
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
       const dialog = screen.getByRole("dialog");
-      expect(within(dialog).getByText(new RegExp(`current library stays on disk at ${ROOT}`))).toBeInTheDocument();
+      expect(
+        within(dialog).getByText(
+          "New projects and generations are saved there from now on. ~/Pictures/Node Banana stays as it is, and its projects stay in Open and Assets."
+        )
+      ).toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole("button", { name: /Use that folder/ }));
       await flush();
 
       expect(api.setLibraryRoot).toHaveBeenCalledWith({ root: NEW_ROOT, mode: "switch" });
       expect(screen.getByRole("status")).toHaveTextContent(
-        `Now saving to ${NEW_ROOT}. Your previous library is still at ${ROOT}.`
+        `Now saving to ${NEW_ROOT}. ${ROOT} stays as it is.`
       );
       expect(screen.getByText("Chosen")).toBeInTheDocument();
     });
@@ -316,25 +347,84 @@ describe("LibrarySettingsTab", () => {
       await flush();
 
       const dialog = screen.getByRole("dialog");
-      const move = within(dialog).getByRole("button", { name: /Move my library there/ });
+      const move = within(dialog).getByRole("button", { name: /Move everything there/ });
       expect(move).toBeDisabled();
-      expect(move).toHaveTextContent("The current library isn't available, so there is nothing to move.");
-      expect(dialog).not.toHaveTextContent(/Copies your 0 assets/);
+      expect(move).toHaveTextContent("The current folder isn't available, so there is nothing to move.");
       expect(within(dialog).getByRole("button", { name: /Use that folder/ })).toBeEnabled();
     });
 
-    it("does not quote provisional counts in the move", async () => {
+    it("names the projects that move along, or only the unsaved generations", async () => {
       mockBrowse({ success: true, path: NEW_ROOT });
-      api.fetchLibraryStatus.mockResolvedValue(makeStatus({ counting: true, counts: { assets: 0, trashed: 0, bytes: 0 } }));
-      render(<LibrarySettingsTab />);
-      await flush();
+      api.fetchProjects.mockResolvedValue(
+        makeOverview({ projects: [makeProject(`${ROOT}/Fox`, true), makeProject(`${ROOT}/Owl`, true)] })
+      );
+      const { unmount } = await renderTab();
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
+      expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ })).toHaveTextContent(
+        "Moves the 2 projects in your folder and your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are."
+      );
+      unmount();
 
-      const move = within(screen.getByRole("dialog")).getByRole("button", { name: /Move my library there/ });
-      expect(move).toBeEnabled();
-      expect(move).toHaveTextContent("Copies your library there, checks every file");
-      expect(move).not.toHaveTextContent(/0 assets|0 B/);
+      api.fetchProjects.mockResolvedValue(makeOverview());
+      await renderTab();
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ })).toHaveTextContent(
+        "Moves your unsaved generations, checks every file"
+      );
+    });
+
+    it("moves the folder's projects after the library, keeping them listed meanwhile", async () => {
+      vi.useFakeTimers();
+      mockBrowse({ success: true, path: NEW_ROOT });
+      const inRoot = [`${ROOT}/Fox`, `${ROOT}/Owl`];
+      api.fetchProjects.mockResolvedValue(makeOverview({ projects: inRoot.map((dir) => makeProject(dir, true)) }));
+      api.setLibraryRoot.mockResolvedValue(makeStatus({ job: makeJob({ id: "move-5", type: "move", total: 4 }) }));
+      await renderTab();
+
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ }));
+      await flush();
+      expect(api.bringInProjects).toHaveBeenCalledWith({ dirs: inRoot, mode: "leave" });
+      expect(api.setLibraryRoot).toHaveBeenCalledWith({ root: NEW_ROOT, mode: "move" });
+
+      api.bringInProjects.mockResolvedValue({ root: NEW_ROOT, job: makeJob({ id: "projects-1", type: "projects", total: 20 }) });
+      api.fetchJob.mockResolvedValueOnce(makeJob({ id: "move-5", type: "move", state: "done", done: 4, total: 4, finishedAt: 9 }));
+      await advance(JOB_POLL_MS);
+      expect(api.bringInProjects).toHaveBeenLastCalledWith({ dirs: inRoot, mode: "move" });
+      expect(screen.getByRole("progressbar", { name: "Moving 2 projects" })).toBeInTheDocument();
+    });
+
+    it("does not move the projects after a library move that failed", async () => {
+      vi.useFakeTimers();
+      mockBrowse({ success: true, path: NEW_ROOT });
+      api.fetchProjects.mockResolvedValue(makeOverview({ projects: [makeProject(`${ROOT}/Fox`, true)] }));
+      api.setLibraryRoot.mockResolvedValue(makeStatus({ job: makeJob({ id: "move-6", type: "move", total: 4 }) }));
+      await renderTab();
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ }));
+      await flush();
+
+      api.fetchJob.mockResolvedValueOnce(makeJob({ id: "move-6", type: "move", state: "failed", error: "The disk is full." }));
+      await advance(JOB_POLL_MS);
+      expect(api.bringInProjects).toHaveBeenCalledTimes(1);
+      expect(api.bringInProjects).toHaveBeenCalledWith({ dirs: [`${ROOT}/Fox`], mode: "leave" });
+    });
+
+    it("keeps the folder's projects listed where they are when switching", async () => {
+      mockBrowse({ success: true, path: NEW_ROOT });
+      api.fetchProjects.mockResolvedValue(makeOverview({ projects: [makeProject(`${ROOT}/Fox`, true)] }));
+      api.setLibraryRoot.mockResolvedValue(makeStatus({ root: NEW_ROOT, source: "config" }));
+      await renderTab();
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Use that folder/ }));
+      await flush();
+      expect(api.bringInProjects).toHaveBeenCalledWith({ dirs: [`${ROOT}/Fox`], mode: "leave" });
+      expect(api.setLibraryRoot).toHaveBeenCalledWith({ root: NEW_ROOT, mode: "switch" });
     });
 
     it("changes nothing when the confirm step is cancelled", async () => {
@@ -374,7 +464,7 @@ describe("LibrarySettingsTab", () => {
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent("That folder is already your library.");
+      expect(screen.getByRole("status")).toHaveTextContent("That folder is already your Node Banana folder.");
     });
 
     it("shows the picker's own error", async () => {
@@ -427,7 +517,7 @@ describe("LibrarySettingsTab", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
-      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move my library there/ }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ }));
       await flush();
       expect(recorder.applyLibraryStatus).toHaveBeenLastCalledWith(moving);
 
@@ -450,280 +540,80 @@ describe("LibrarySettingsTab", () => {
     });
   });
 
-  describe("importing projects", () => {
-    function storeConfigs() {
-      localStorage.setItem(
-        CONFIGS_KEY,
-        JSON.stringify({
-          "wf-a": { workflowId: "wf-a", name: "Summer campaign", directoryPath: "/work/summer", generationsPath: null, lastSavedAt: 300 },
-          // Same folder, older save: listed once, under the newer name
-          "wf-b": { workflowId: "wf-b", name: "Summer (old)", directoryPath: "/work/summer/", generationsPath: null, lastSavedAt: 100 },
-          "wf-c": { workflowId: "wf-c", name: "Product shots", directoryPath: "/work/products", generationsPath: null, lastSavedAt: 200 },
-          "wf-d": { workflowId: "wf-d", name: "Nowhere", directoryPath: "", generationsPath: null, lastSavedAt: 400 },
-        })
+  describe("projects in other folders", () => {
+    const elsewhere = {
+      count: 2,
+      bytes: 3.3 * 1000 ** 3,
+      groups: [
+        { label: "~/test-files/test workflows", count: 1 },
+        { label: "~/pet-hype", count: 1 },
+      ],
+    };
+    const outside = ["/Users/me/test-files/test workflows/A", "/Users/me/pet-hype"];
+    const withElsewhere = (overrides: Partial<ProjectsOverview> = {}) =>
+      makeOverview({
+        projects: [makeProject(`${ROOT}/Fox`, true), ...outside.map((dir) => makeProject(dir, false))],
+        elsewhere,
+        ...overrides,
+      });
+
+    it("offers to move them in, saying where they are", async () => {
+      api.fetchProjects.mockResolvedValue(withElsewhere());
+      await renderTab();
+      const offer = screen.getByRole("region", { name: "Projects in other folders" });
+      expect(offer).toHaveTextContent("2 projects live in other folders");
+      expect(offer).toHaveTextContent(
+        "test-files › test workflows (1) and pet-hype (1), 3.3 GB. Move them into your Node Banana folder to keep everything in one place."
       );
-    }
-
-    it("lists each project folder once, all checked", async () => {
-      storeConfigs();
-      await renderTab();
-      const boxes = screen.getAllByRole("checkbox");
-      expect(boxes).toHaveLength(2);
-      boxes.forEach((box) => expect(box).toBeChecked());
-      expect(screen.getByRole("checkbox", { name: /Summer campaign/ })).toBeInTheDocument();
-      expect(screen.getByRole("checkbox", { name: /Product shots/ })).toBeInTheDocument();
-      expect(screen.queryByText("Summer (old)")).not.toBeInTheDocument();
-      expect(screen.getByText("/work/products")).toBeInTheDocument();
     });
 
-    it("imports the checked folders and follows the job", async () => {
-      storeConfigs();
-      api.startImport.mockResolvedValue(makeJob({ id: "import-1", type: "import", total: 25 }));
+    it("moves them in and follows the move", async () => {
+      api.fetchProjects.mockResolvedValue(withElsewhere());
+      api.bringInProjects.mockResolvedValue({ root: ROOT, job: makeJob({ id: "projects-2", type: "projects", total: 860 }) });
       await renderTab();
-
-      fireEvent.click(screen.getByRole("checkbox", { name: /Summer campaign/ }));
-      fireEvent.click(screen.getByRole("button", { name: "Import 1" }));
+      fireEvent.click(screen.getByRole("button", { name: "Move them in" }));
       await flush();
-
-      expect(api.startImport).toHaveBeenCalledWith({ projectDirs: ["/work/products"] });
-      expect(screen.getByRole("progressbar", { name: "Importing generations" })).toBeInTheDocument();
-      expect(screen.getByText("0 of 25 files")).toBeInTheDocument();
+      expect(api.bringInProjects).toHaveBeenCalledWith({ dirs: outside, mode: "move" });
+      expect(screen.getByRole("progressbar", { name: "Moving 2 projects" })).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Projects in other folders" })).not.toBeInTheDocument();
     });
 
-    it("selects none and all again", async () => {
-      storeConfigs();
+    it("keeps them where they are, and does not offer again", async () => {
+      api.fetchProjects.mockResolvedValue(withElsewhere());
       await renderTab();
-      fireEvent.click(screen.getByRole("button", { name: "Select none" }));
-      screen.getAllByRole("checkbox").forEach((box) => expect(box).not.toBeChecked());
-      expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
-      fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-      screen.getAllByRole("checkbox").forEach((box) => expect(box).toBeChecked());
+      fireEvent.click(screen.getByRole("button", { name: "Keep where they are" }));
+      await flush();
+      expect(api.dismissProjectsOffer).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("region", { name: "Projects in other folders" })).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("They stay where they are. You can bring them in later from below.");
     });
 
-    it("has nothing to import without saved projects, but can still find some", async () => {
-      await renderTab();
-      expect(screen.getByText("No saved projects found.")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
-      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeEnabled();
-      expect(screen.queryByRole("button", { name: "Select all" })).not.toBeInTheDocument();
-    });
+    it("makes no offer once it was declined, or with nothing elsewhere", async () => {
+      api.fetchProjects.mockResolvedValue(withElsewhere({ offerDismissed: true }));
+      const { unmount } = await renderTab();
+      expect(screen.queryByRole("region", { name: "Projects in other folders" })).not.toBeInTheDocument();
+      unmount();
 
-    it("survives unreadable saved configs", async () => {
-      localStorage.setItem(CONFIGS_KEY, "{not json");
+      api.fetchProjects.mockResolvedValue(makeOverview());
       await renderTab();
-      expect(screen.getByText("No saved projects found.")).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Projects in other folders" })).not.toBeInTheDocument();
     });
   });
 
-  describe("finding projects in a folder", () => {
-    const WORK = "/Users/me/Work";
-    const found = (overrides: Partial<ScanProjectsResult> = {}): ScanProjectsResult => ({
-      root: WORK,
-      projects: [
-        { dir: `${WORK}/Campaign`, name: "Spring campaign", mediaCount: 12 },
-        { dir: `${WORK}/Campaign/Variations/Night`, name: "Night", mediaCount: 1 },
-      ],
-      truncated: false,
-      unreadable: 0,
-      ...overrides,
-    });
-
-    async function find() {
-      fireEvent.click(screen.getByRole("button", { name: "Find projects in a folder…" }));
+  describe("bringing projects in", () => {
+    it("opens the Bring-in view and leaves the settings", async () => {
+      const onLeave = vi.fn();
+      api.fetchLibraryStatus.mockResolvedValue(makeStatus());
+      render(<LibrarySettingsTab onLeave={onLeave} />);
       await flush();
-    }
-
-    it("asks the import picker for a folder, lists what the search found, checked, and imports it", async () => {
-      mockBrowse({ success: true, path: WORK }, "import");
-      api.scanProjects.mockResolvedValue(found());
-      api.startImport.mockResolvedValue(makeJob({ id: "import-2", type: "import", total: 13 }));
-      await renderTab();
-      await find();
-
-      expect(mockFetch).toHaveBeenCalledWith("/api/browse-directory?purpose=import");
-      expect(api.scanProjects).toHaveBeenCalledWith(WORK);
-      const campaign = screen.getByRole("checkbox", { name: /Spring campaign/ });
-      expect(campaign).toBeChecked();
-      expect(screen.getByRole("checkbox", { name: /Night/ })).toBeChecked();
-      expect(within(campaign.closest("label")!).getByText(`${WORK}/Campaign`)).toBeInTheDocument();
-      expect(within(campaign.closest("label")!).getByText("12 files")).toBeInTheDocument();
-      expect(screen.getByText("1 file")).toBeInTheDocument();
-      expect(screen.getByText("2 projects")).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent(`Found 2 projects in ${WORK}.`);
-
-      fireEvent.click(screen.getByRole("button", { name: "Import" }));
-      await flush();
-      expect(api.startImport).toHaveBeenCalledWith({ projectDirs: [`${WORK}/Campaign`, `${WORK}/Campaign/Variations/Night`] });
+      fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+      expect(useBringInStore.getState().request).not.toBeNull();
+      expect(onLeave).toHaveBeenCalledTimes(1);
     });
 
-    it("says it is searching the folder until the search answers", async () => {
-      mockBrowse({ success: true, path: WORK }, "import");
-      let answer!: (result: ScanProjectsResult) => void;
-      api.scanProjects.mockReturnValue(new Promise((resolve) => (answer = resolve)));
-      await renderTab();
-      await find();
-
-      expect(screen.getByRole("status")).toHaveTextContent(`Searching ${WORK}…`);
-      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeDisabled();
-
-      await act(async () => answer(found()));
-      expect(screen.queryByText(`Searching ${WORK}…`)).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeEnabled();
-    });
-
-    it("adds found projects after the saved ones, once per folder, checking only the new ones", async () => {
-      localStorage.setItem(
-        CONFIGS_KEY,
-        JSON.stringify({
-          "wf-a": { workflowId: "wf-a", name: "Summer campaign", directoryPath: "/work/summer", generationsPath: null, lastSavedAt: 300 },
-        })
-      );
-      mockBrowse({ success: true, path: "/work" }, "import");
-      api.scanProjects.mockResolvedValue(
-        found({
-          root: "/work",
-          projects: [
-            // The same folder in another case: the same folder on macOS
-            { dir: "/Work/Summer", name: "Summer (found)", mediaCount: 4 },
-            { dir: "/work/winter", name: "Winter", mediaCount: 2 },
-          ],
-        })
-      );
-      api.startImport.mockResolvedValue(makeJob({ id: "import-3", type: "import" }));
-      await renderTab();
-      // Left unchecked before the search, and still unchecked after it
-      fireEvent.click(screen.getByRole("checkbox", { name: /Summer campaign/ }));
-      await find();
-
-      const boxes = screen.getAllByRole("checkbox");
-      expect(boxes).toHaveLength(2);
-      expect(boxes[0]).toHaveAccessibleName(/Summer campaign/);
-      expect(boxes[0]).not.toBeChecked();
-      expect(within(boxes[0].closest("label")!).getByText("4 files")).toBeInTheDocument();
-      expect(screen.queryByText("Summer (found)")).not.toBeInTheDocument();
-      expect(boxes[1]).toHaveAccessibleName(/Winter/);
-      expect(boxes[1]).toBeChecked();
-
-      fireEvent.click(screen.getByRole("button", { name: "Import 1" }));
-      await flush();
-      expect(api.startImport).toHaveBeenCalledWith({ projectDirs: ["/work/winter"] });
-    });
-
-    it("tells folders apart by case where the file system does", async () => {
-      localStorage.setItem(
-        CONFIGS_KEY,
-        JSON.stringify({
-          "wf-a": { workflowId: "wf-a", name: "Summer campaign", directoryPath: "/work/summer", generationsPath: null, lastSavedAt: 300 },
-        })
-      );
-      mockBrowse({ success: true, path: "/work" }, "import");
-      api.scanProjects.mockResolvedValue(found({ root: "/work", projects: [{ dir: "/work/Summer", name: "Other summer", mediaCount: 1 }] }));
-      await renderTab(makeStatus({ platform: "linux" }));
-      await find();
-      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-      expect(screen.getByRole("checkbox", { name: /Other summer/ })).toBeChecked();
-    });
-
-    it("says when the search stopped early and how many folders it couldn't read", async () => {
-      mockBrowse({ success: true, path: WORK }, "import");
-      api.scanProjects.mockResolvedValue(found({ truncated: true, unreadable: 3 }));
-      await renderTab();
-      await find();
-      expect(screen.getByRole("status")).toHaveTextContent(
-        `Found 2 projects in ${WORK}. The search stopped early; pick a smaller folder to see the rest. 3 folders couldn't be read.`
-      );
-    });
-
-    it("says when the folder holds no projects, and lists nothing", async () => {
-      mockBrowse({ success: true, path: "/Users/me/Empty" }, "import");
-      api.scanProjects.mockResolvedValue(found({ root: "/Users/me/Empty", projects: [] }));
-      await renderTab();
-      await find();
-      expect(screen.getByRole("status")).toHaveTextContent("No Node Banana projects in /Users/me/Empty.");
-      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
-      expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
-    });
-
-    it("does nothing when the picker is cancelled", async () => {
-      mockBrowse({ success: true, path: WORK }, "import");
-      api.scanProjects.mockResolvedValue(found());
-      await renderTab();
-      await find();
-      expect(screen.getByRole("status")).toHaveTextContent("Found 2 projects");
-
-      mockBrowse({ success: true, cancelled: true, path: null }, "import");
-      await find();
-      expect(api.scanProjects).toHaveBeenCalledTimes(1);
-      // The last search's answer stays
-      expect(screen.getByRole("status")).toHaveTextContent("Found 2 projects");
-      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-    });
-
-    it("shows a search that failed inline", async () => {
-      mockBrowse({ success: true, path: "/Users/me/Gone" }, "import");
-      api.scanProjects.mockRejectedValue(new Error('"/Users/me/Gone" doesn\'t exist.'));
-      await renderTab();
-      await find();
-      expect(screen.getByRole("alert")).toHaveTextContent('"/Users/me/Gone" doesn\'t exist.');
-    });
-
-    it("searching the same folder again adds no rows and keeps what was unchecked", async () => {
-      mockBrowse({ success: true, path: WORK }, "import");
-      api.scanProjects.mockResolvedValue(found());
-      await renderTab();
-      await find();
-      fireEvent.click(screen.getByRole("checkbox", { name: /Night/ }));
-
-      // The project has more files by now
-      api.scanProjects.mockResolvedValue(
-        found({ projects: [{ dir: `${WORK}/Campaign`, name: "Spring campaign", mediaCount: 13 }, found().projects[1]] })
-      );
-      await find();
-
-      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-      expect(screen.getByRole("checkbox", { name: /Spring campaign/ })).toBeChecked();
-      expect(screen.getByRole("checkbox", { name: /Night/ })).not.toBeChecked();
-      expect(screen.getByText("13 files")).toBeInTheDocument();
-      expect(screen.getByRole("status")).toHaveTextContent(`Found 2 projects in ${WORK}.`);
-    });
-
-    it("opens one folder picker at a time", async () => {
-      // A picker stays open until the user answers it
-      mockFetch.mockImplementation(() => new Promise(() => {}));
-      await renderTab();
-      await find();
-      expect(screen.getByRole("button", { name: "Choosing…" })).toBeDisabled();
-      expect(screen.getByRole("button", { name: "Change…" })).toBeDisabled();
-    });
-
-    it("won't open the import picker while Change…'s is open", async () => {
-      mockFetch.mockImplementation(() => new Promise(() => {}));
-      await renderTab();
-      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
-      await flush();
-      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeDisabled();
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it("shows the picker's own error", async () => {
-      mockBrowse({ success: false, error: "No folder picker on this system" }, "import");
-      await renderTab();
-      await find();
-      expect(screen.getByRole("alert")).toHaveTextContent("No folder picker on this system");
-      expect(api.scanProjects).not.toHaveBeenCalled();
-    });
-
-    it("won't import more folders at once than the server takes", async () => {
-      const many = Array.from({ length: 501 }, (_, i) => ({ dir: `${WORK}/p${i}`, name: `P${i}`, mediaCount: 1 }));
-      mockBrowse({ success: true, path: WORK }, "import");
-      api.scanProjects.mockResolvedValue(found({ projects: many, truncated: true }));
-      await renderTab();
-      await find();
-      const importButton = screen.getByRole("button", { name: "Import" });
-      expect(importButton).toBeDisabled();
-      expect(importButton).toHaveAttribute("title", "Import at most 500 projects at a time");
-      fireEvent.click(screen.getByRole("checkbox", { name: /^P0\b/ }));
-      expect(screen.getByRole("button", { name: "Import 500" })).toBeEnabled();
+    it("waits for a running job", async () => {
+      await renderTab(makeStatus({ job: makeJob({ id: "import-8" }) }));
+      expect(screen.getByRole("button", { name: "Choose folder…" })).toBeDisabled();
     });
   });
 
@@ -835,10 +725,6 @@ describe("LibrarySettingsTab", () => {
   });
 
   it("keeps Enter inside the page, so the settings dialog does not save and close", async () => {
-    localStorage.setItem(
-      CONFIGS_KEY,
-      JSON.stringify({ "wf-a": { workflowId: "wf-a", name: "A", directoryPath: "/work/a", generationsPath: null, lastSavedAt: 1 } })
-    );
     const onKeyDown = vi.fn();
     api.fetchLibraryStatus.mockResolvedValue(makeStatus());
     render(
@@ -847,9 +733,10 @@ describe("LibrarySettingsTab", () => {
       </div>
     );
     await flush();
-    fireEvent.keyDown(screen.getByRole("checkbox"), { key: "Enter" });
+    const button = screen.getByRole("button", { name: "Clean up" });
+    fireEvent.keyDown(button, { key: "Enter" });
     expect(onKeyDown).not.toHaveBeenCalled();
-    fireEvent.keyDown(screen.getByRole("checkbox"), { key: "Tab" });
+    fireEvent.keyDown(button, { key: "Tab" });
     expect(onKeyDown).toHaveBeenCalledTimes(1);
   });
 });
@@ -870,23 +757,6 @@ describe("library settings helpers", () => {
     expect(revealLabel("linux")).toBe("Show folder");
   });
 
-  it("merges found projects into the import list, folding case on macOS and Windows", () => {
-    const rows = [{ dir: "/work/summer", name: "Summer" }];
-    const projects = [
-      { dir: "/Work/Summer", name: "Found summer", mediaCount: 3 },
-      { dir: "/work/winter", name: "Winter", mediaCount: 2 },
-    ];
-    expect(mergeFoundProjects(rows, projects, "darwin")).toEqual({
-      rows: [
-        { dir: "/work/summer", name: "Summer", mediaCount: 3 },
-        { dir: "/work/winter", name: "Winter", mediaCount: 2 },
-      ],
-      added: ["/work/winter"],
-    });
-    expect(mergeFoundProjects(rows, projects, "linux").added).toEqual(["/Work/Summer", "/work/winter"]);
-    expect(mergeFoundProjects([{ dir: "C:\\Work\\Summer", name: "S" }], [{ dir: "c:/work/summer/", name: "x", mediaCount: 1 }], "win32").added).toEqual([]);
-  });
-
   it("describes a search and counts files", () => {
     const result = { root: "/w", projects: [{ dir: "/w/a", name: "A", mediaCount: 1 }], truncated: false, unreadable: 1 };
     expect(describeScan(result)).toBe("Found 1 project in /w. 1 folder couldn't be read.");
@@ -896,21 +766,5 @@ describe("library settings helpers", () => {
     expect(formatFileCount(1)).toBe("1 file");
     expect(formatFileCount(2500)).toBe("2,500 files");
     expect(formatFileCount(10_000)).toBe("10,000+ files");
-  });
-
-  it("lists project folders newest first, skipping configs without a folder", () => {
-    localStorage.setItem(
-      CONFIGS_KEY,
-      JSON.stringify({
-        a: { workflowId: "a", name: "", directoryPath: "C:\\work\\alpha\\", generationsPath: null, lastSavedAt: 1 },
-        b: { workflowId: "b", name: "Beta", directoryPath: "/work/beta", generationsPath: null, lastSavedAt: 2 },
-        c: { workflowId: "c", name: "Gamma", directoryPath: "   ", generationsPath: null, lastSavedAt: 3 },
-      })
-    );
-    expect(listProjectFolders()).toEqual([
-      { dir: "/work/beta", name: "Beta" },
-      { dir: "C:\\work\\alpha", name: "alpha" },
-    ]);
-    localStorage.clear();
   });
 });

@@ -1,31 +1,33 @@
 "use client";
 
-import { CloudUpload, TriangleAlert, X } from "lucide-react";
-import { useCallback, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { CloudUpload, FolderInput, TriangleAlert, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import {
+  bringInProjects,
   cancelJob,
+  dismissProjectsOffer,
   fetchJob,
   fetchLibraryStatus,
+  fetchProjects,
   revealLibraryRoot,
-  scanProjects,
   setLibraryRoot,
   startCleanup,
-  startImport,
 } from "@/lib/assets/client/api";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import {
   FOUND_MEDIA_COUNT_CAP,
   MAX_IMPORT_PROJECTS,
-  type FoundProject,
   type LibraryJobStatus,
   type LibraryJobType,
   type LibraryRootSource,
   type LibraryStatus,
+  type ProjectsOverview,
   type ScanProjectsResult,
   type SetLibraryRootRequest,
 } from "@/lib/assets/types";
-import { loadSaveConfigs } from "@/store/utils/localStorage";
+import { openBringIn } from "@/store/bringInStore";
+import { ELSEWHERE_PITCH, elsewhereTitle, elsewhereWhere, shortenHomePath } from "@/components/assets/projectsFormat";
 import {
   Dialog,
   DialogBody,
@@ -46,9 +48,10 @@ import {
 import { cn } from "@/components/nodes/ui/cn";
 
 /**
- * The Library page of the settings dialog: where generations are saved, on
- * every workflow. Nothing here is a draft — every action applies at once and
- * long ones (move, import, clean-up) run as a server job this page follows.
+ * The Storage page of the settings dialog: the Node Banana folder, which
+ * holds the projects saved by name and the generations of workflows that
+ * have none. Nothing here is a draft — every action applies at once and long
+ * ones (moves, clean-up) run as a server job this page follows.
  *
  * Every status this page reads or is handed also goes to the recorder, which
  * records only while its last status says the library is available: a switch
@@ -134,63 +137,7 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-/** A project folder the import offers: one the saved workflow configs point at, or one a search found. */
-export interface ProjectFolder {
-  dir: string;
-  name: string;
-  /** Media files in its generations folder, once a search has counted them. */
-  mediaCount?: number;
-}
-
-/** Project folders from `node-banana-workflow-configs`, most recently saved first. */
-export function listProjectFolders(): ProjectFolder[] {
-  let configs: ReturnType<typeof loadSaveConfigs>;
-  try {
-    configs = loadSaveConfigs();
-  } catch {
-    return [];
-  }
-  const sorted = Object.values(configs ?? {})
-    .filter((config) => config && typeof config.directoryPath === "string" && config.directoryPath.trim() !== "")
-    .sort((a, b) => (b.lastSavedAt ?? 0) - (a.lastSavedAt ?? 0));
-  const seen = new Set<string>();
-  const folders: ProjectFolder[] = [];
-  for (const config of sorted) {
-    const dir = trimTrailingSeparators(config.directoryPath.trim());
-    if (seen.has(dir)) continue;
-    seen.add(dir);
-    const name = typeof config.name === "string" && config.name.trim() ? config.name.trim() : basename(dir);
-    folders.push({ dir, name });
-  }
-  return folders;
-}
-
-/**
- * The import list with the projects a search found: a folder already listed
- * keeps its row (and its check) and gains the file count, a new one is added
- * at the end. Folders compare as the server's file system does. `added` are
- * the new rows' folders.
- */
-export function mergeFoundProjects(
-  rows: readonly ProjectFolder[],
-  found: readonly FoundProject[],
-  platform: string
-): { rows: ProjectFolder[]; added: string[] } {
-  const merged = [...rows];
-  const added: string[] = [];
-  for (const project of found) {
-    const index = merged.findIndex((row) => samePath(row.dir, project.dir, platform));
-    if (index >= 0) {
-      merged[index] = { ...merged[index], mediaCount: project.mediaCount };
-      continue;
-    }
-    merged.push({ dir: project.dir, name: project.name, mediaCount: project.mediaCount });
-    added.push(project.dir);
-  }
-  return { rows: merged, added };
-}
-
-/** The line under the import list once a search is done. */
+/** What a search for projects found, in words (for a list of what it found). */
 export function describeScan(result: ScanProjectsResult): string {
   const count = result.projects.length;
   const parts = [
@@ -273,20 +220,22 @@ function Stat({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-/** Progress of one library job, with Cancel while it runs. */
+/** Progress of one library job, with Cancel while it runs. `label` names it more closely ("Moving 14 projects"). */
 function LibraryJobRow({
   job,
+  label: ownLabel,
   cancelling,
   onCancel,
   onDismiss,
 }: {
   job: LibraryJobStatus;
+  label?: string;
   cancelling: boolean;
   onCancel: () => void;
   onDismiss: () => void;
 }) {
   const running = job.state === "running";
-  const label = JOB_LABELS[job.type] ?? "Working";
+  const label = ownLabel ?? JOB_LABELS[job.type] ?? "Working";
   const percent = job.total > 0 ? Math.min(100, Math.round((job.done / job.total) * 100)) : null;
   const detail = [
     job.total > 0 ? `${job.done.toLocaleString()} of ${job.total.toLocaleString()} files` : null,
@@ -342,7 +291,25 @@ function LibraryJobRow({
   );
 }
 
-export function LibrarySettingsTab() {
+/** "1 project", "14 projects". */
+function projectCount(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "project" : "projects"}`;
+}
+
+/** The known projects' folders, inside the Node Banana folder or outside it (at most what one request takes). */
+function projectDirs(overview: ProjectsOverview | null, inRoot: boolean): string[] {
+  if (!overview) return [];
+  return overview.projects
+    .filter((project) => project.inRoot === inRoot)
+    .map((project) => project.dir)
+    .slice(0, MAX_IMPORT_PROJECTS);
+}
+
+/**
+ * `onLeave` closes the settings dialog when an action continues elsewhere
+ * ("Choose folder…" opens the quickstart's Bring-in view).
+ */
+export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
   const [status, setStatus] = useState<LibraryStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [job, setJob] = useState<LibraryJobStatus | null>(null);
@@ -355,13 +322,16 @@ export function LibrarySettingsTab() {
   const [starting, setStarting] = useState(false);
   // The job a Cancel was sent for, until the job reports it has stopped
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-  // The saved projects, then any a search found
-  const [projects, setProjects] = useState<ProjectFolder[]>(listProjectFolders);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(projects.map((project) => project.dir)));
-  // "Find projects in a folder…": picking the folder, then searching it
-  const [finding, setFinding] = useState<{ phase: "choosing" } | { phase: "searching"; folder: string } | null>(null);
-  // One line under the import list: what the last search found, or why it failed
-  const [findLine, setFindLine] = useState<{ text: string; error: boolean } | null>(null);
+  // The projects the app knows about, and those outside the folder (the offer)
+  const [overview, setOverview] = useState<ProjectsOverview | null>(null);
+  const [overviewFailed, setOverviewFailed] = useState(false);
+  // "Keep where they are" was chosen on this page: the offer gives way to a line
+  const [offerKept, setOfferKept] = useState(false);
+  // How many projects the running projects move carries, for its row's title
+  const [movingCount, setMovingCount] = useState<number | null>(null);
+  // "Move everything there": once the library has moved, the projects that
+  // were in the old folder follow it (a projects move into the new one).
+  const followUp = useRef<{ jobId: string; dirs: string[] } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -369,7 +339,7 @@ export function LibrarySettingsTab() {
       setStatus(next);
       applyLibraryStatus(next);
       setLoadError(null);
-      // A job started elsewhere (the Assets view's import) is followed here too,
+      // A job started elsewhere (the Assets view's offer) is followed here too,
       // but a job this page has already seen end is not brought back.
       const running = next.job?.state === "running" ? next.job : null;
       if (running) {
@@ -382,9 +352,19 @@ export function LibrarySettingsTab() {
     }
   }, []);
 
+  const refreshProjects = useCallback(async () => {
+    try {
+      setOverview(await fetchProjects());
+      setOverviewFailed(false);
+    } catch {
+      setOverviewFailed(true);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshProjects();
+  }, [refresh, refreshProjects]);
 
   // A big library's first scan outlasts the status request, whose counts are
   // then provisional zeros: read again until the real ones are in.
@@ -403,6 +383,44 @@ export function LibrarySettingsTab() {
       clearTimeout(timer);
     };
   }, [counting, refresh]);
+
+  // What a job's end sets off: the counts and projects are read again, and a
+  // library move that "Move everything there" started is followed by its projects.
+  const jobEnded = useRef<(ended: LibraryJobStatus) => void>(() => {});
+
+  const runJob = async (start: () => Promise<LibraryJobStatus>) => {
+    setStarting(true);
+    setFeedback(null);
+    try {
+      const started = await start();
+      setJob(started);
+      if (started.state !== "running") jobEnded.current(started);
+    } catch (error) {
+      setFeedback({ text: errorMessage(error, "Could not start the job."), error: true });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  /** Moves project folders into the Node Banana folder, as a job this page follows. */
+  const moveProjects = (dirs: string[], count: number) => {
+    setMovingCount(count);
+    return runJob(async () => {
+      const result = await bringInProjects({ dirs, mode: "move" });
+      if (!result.job) throw new Error("The move did not start.");
+      return result.job;
+    });
+  };
+
+  jobEnded.current = (ended) => {
+    void refresh();
+    void refreshProjects();
+    const next = followUp.current;
+    if (next && next.jobId === ended.id) {
+      followUp.current = null;
+      if (ended.state === "done" && next.dirs.length > 0) void moveProjects(next.dirs, next.dirs.length);
+    }
+  };
 
   // Follow a running job once a second; refresh the counts when it ends.
   const runningJobId = job?.state === "running" ? job.id : null;
@@ -424,7 +442,7 @@ export function LibrarySettingsTab() {
         }
         setJob(next);
         if (next.state !== "running") {
-          void refresh();
+          jobEnded.current(next);
           return;
         }
       } catch {
@@ -446,7 +464,7 @@ export function LibrarySettingsTab() {
   }, [runningJobId, refresh]);
 
   // The settings dialog saves and closes on Enter. Nothing on this page is a
-  // draft, and Enter on a checkbox or an option must not close the dialog.
+  // draft, and Enter on an option must not close the dialog.
   const keepEnter = (event: ReactKeyboardEvent) => {
     if (event.key === "Enter") event.stopPropagation();
   };
@@ -478,9 +496,7 @@ export function LibrarySettingsTab() {
   // the change be refused. A location that resolved but cannot be written
   // (an unplugged drive) is different: another folder is the fix.
   const unreachable = !status.available && !status.root;
-  // One folder picker at a time: Change… and "Find projects in a folder…" both open one
-  const pickerOpen = choosing || finding?.phase === "choosing";
-  const changeDisabled = fromEnv || unreachable || busy || pickerOpen;
+  const changeDisabled = fromEnv || unreachable || busy || choosing;
   const changeTitle = fromEnv
     ? "Set by the NODE_BANANA_ASSET_LIBRARY environment variable"
     : unreachable
@@ -488,20 +504,19 @@ export function LibrarySettingsTab() {
       : busy
         ? BUSY_REASON
         : undefined;
-  const allSelected = projects.length > 0 && projects.every((project) => selected.has(project.dir));
-  const tooManySelected = selected.size > MAX_IMPORT_PROJECTS;
-  const importTitle = busy
-    ? BUSY_REASON
-    : tooManySelected
-      ? `Import at most ${MAX_IMPORT_PROJECTS} projects at a time`
-      : undefined;
+
+  const inRootDirs = projectDirs(overview, true);
+  const elsewhere = overview?.elsewhere ?? null;
+  const movingProjects = job?.type === "projects" && job.state === "running";
+  const offerOpen =
+    status.available && elsewhere !== null && elsewhere.count > 0 && !overview?.offerDismissed && !offerKept && !movingProjects;
 
   const reveal = async () => {
     setFeedback(null);
     try {
       await revealLibraryRoot();
     } catch (error) {
-      setFeedback({ text: errorMessage(error, "Could not show the library folder."), error: true });
+      setFeedback({ text: errorMessage(error, "Could not show the Node Banana folder."), error: true });
     }
   };
 
@@ -512,7 +527,7 @@ export function LibrarySettingsTab() {
       const picked = await pickFolder("library");
       if (!picked) return;
       if (samePath(picked, status.root, status.platform)) {
-        setFeedback({ text: "That folder is already your library.", error: false });
+        setFeedback({ text: "That folder is already your Node Banana folder.", error: false });
         return;
       }
       setApplyError(null);
@@ -524,78 +539,41 @@ export function LibrarySettingsTab() {
     }
   };
 
-  // Searches a folder for projects, nested ones included, and adds the new
-  // ones to the import list, checked. A cancelled picker changes nothing.
-  const findProjects = async () => {
-    setFinding({ phase: "choosing" });
-    try {
-      let folder: string | null;
-      try {
-        folder = await pickFolder("import");
-      } catch (error) {
-        setFindLine({ text: errorMessage(error, "Failed to open the folder picker"), error: true });
-        return;
-      }
-      if (!folder) return;
-      setFindLine(null);
-      setFinding({ phase: "searching", folder });
-      try {
-        const result = await scanProjects(folder);
-        const merged = mergeFoundProjects(projects, result.projects, status.platform);
-        setProjects(merged.rows);
-        setSelected((previous) => new Set([...previous, ...merged.added]));
-        setFindLine({ text: describeScan(result), error: false });
-      } catch (error) {
-        setFindLine({ text: errorMessage(error, `Could not search ${folder}.`), error: true });
-      }
-    } finally {
-      setFinding(null);
-    }
-  };
-
   const applyRoot = async (mode: SetLibraryRootRequest["mode"]) => {
     if (!pendingRoot) return;
     const previousRoot = status.root;
+    // The projects in the folder being left: listed where they are either
+    // way, so they stay in Open and Assets; a move takes them along after.
+    const leaving = inRootDirs;
     setApplying(mode);
     setApplyError(null);
     try {
+      if (leaving.length > 0) await bringInProjects({ dirs: leaving, mode: "leave" });
       const next = await setLibraryRoot({ root: pendingRoot, mode });
       setStatus(next);
       applyLibraryStatus(next);
       if (mode === "move" && next.job) {
+        followUp.current = leaving.length > 0 ? { jobId: next.job.id, dirs: leaving } : null;
         setJob(next.job);
         // A small library can finish moving before the answer arrives
-        if (next.job.state !== "running") void refresh();
+        if (next.job.state !== "running") jobEnded.current(next.job);
       } else if (next.job?.state === "running") {
         setJob(next.job);
       }
       setPendingRoot(null);
+      void refreshProjects();
       if (mode === "switch") {
         setFeedback({
           text: previousRoot
-            ? `Now saving to ${next.root ?? pendingRoot}. Your previous library is still at ${previousRoot}.`
+            ? `Now saving to ${next.root ?? pendingRoot}. ${previousRoot} stays as it is.`
             : `Now saving to ${next.root ?? pendingRoot}.`,
           error: false,
         });
       }
     } catch (error) {
-      setApplyError(errorMessage(error, "Could not change the library folder."));
+      setApplyError(errorMessage(error, "Could not change the Node Banana folder."));
     } finally {
       setApplying(null);
-    }
-  };
-
-  const runJob = async (start: () => Promise<LibraryJobStatus>) => {
-    setStarting(true);
-    setFeedback(null);
-    try {
-      const started = await start();
-      setJob(started);
-      if (started.state !== "running") void refresh();
-    } catch (error) {
-      setFeedback({ text: errorMessage(error, "Could not start the job."), error: true });
-    } finally {
-      setStarting(false);
     }
   };
 
@@ -611,19 +589,26 @@ export function LibrarySettingsTab() {
     }
   };
 
-  const toggleProject = (dir: string) =>
-    setSelected((previous) => {
-      const next = new Set(previous);
-      if (next.has(dir)) next.delete(dir);
-      else next.add(dir);
-      return next;
-    });
+  const keepProjects = async () => {
+    setOfferKept(true);
+    try {
+      await dismissProjectsOffer();
+    } catch (error) {
+      setFeedback({ text: errorMessage(error, "Could not save that choice."), error: true });
+    }
+  };
+
+  const bringIn = () => {
+    openBringIn();
+    onLeave?.();
+  };
 
   /** The job row, shown beside the action that starts that kind of job. */
   const jobRow = (...types: LibraryJobType[]) =>
     job && types.includes(job.type) ? (
       <LibraryJobRow
         job={job}
+        label={job.type === "projects" && movingCount ? `Moving ${projectCount(movingCount)}` : undefined}
         cancelling={cancellingId === job.id}
         onCancel={() => void cancel()}
         onDismiss={() => setJob(null)}
@@ -644,30 +629,28 @@ export function LibrarySettingsTab() {
   );
 
   const assetCount = status.counts.assets;
-  // The server refuses to move a library it cannot read; while it is still
-  // counting, the move is offered without numbers that are not real yet.
   const moveDescription = !status.available
-    ? "The current library isn't available, so there is nothing to move."
-    : counting
-      ? "Copies your library there, checks every file, then removes them from the current folder. Project folders stay where they are."
-      : `Copies your ${assetCount.toLocaleString()} ${assetCount === 1 ? "asset" : "assets"} (${formatBytes(status.counts.bytes)}) there, checks every file, then removes them from the current folder. Project folders stay where they are.`;
+    ? "The current folder isn't available, so there is nothing to move."
+    : inRootDirs.length > 0
+      ? `Moves the ${projectCount(inRootDirs.length)} in your folder and your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are.`
+      : "Moves your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are.";
 
   return (
     <div onKeyDown={keepEnter}>
-      {/* Location */}
+      {/* The Node Banana folder */}
       <DialogRow
         first
         align="start"
         className="pt-0"
         title={
           <span className="flex items-center gap-2">
-            Location
+            Node Banana folder
             <DialogChip>{SOURCE_LABELS[status.source] ?? status.source}</DialogChip>
           </span>
         }
         description={
           <span className="block mt-1 font-mono text-xs leading-4 text-neutral-300 break-all select-text">
-            {status.root ?? "No library folder"}
+            {status.root ?? "No folder"}
           </span>
         }
       >
@@ -678,6 +661,10 @@ export function LibrarySettingsTab() {
           {changeButton}
         </div>
       </DialogRow>
+
+      <p className="-mt-1.5 pb-3.5 text-xs leading-4 text-ink-3">
+        New projects are saved here, and generations from workflows you haven’t saved go to its Generations folder.
+      </p>
 
       {fromEnv && (
         <p className="-mt-1.5 pb-3.5 text-xs leading-4 text-ink-3">
@@ -724,113 +711,79 @@ export function LibrarySettingsTab() {
         </div>
       )}
 
+      {/* Projects that live in other folders: move them in, or keep them there */}
+      {offerOpen && elsewhere && (
+        <div
+          role="region"
+          aria-label="Projects in other folders"
+          className="mb-3.5 flex items-start gap-2.5 rounded-lg border border-card-border bg-white/[0.02] px-3 py-2.5 text-xs leading-4 text-neutral-300"
+        >
+          <FolderInput size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-ink-3" />
+          <div className="min-w-0 flex-1">
+            <div className="font-display text-[13px] leading-[18px] font-semibold tracking-[-0.01em] text-neutral-100">
+              {elsewhereTitle(elsewhere)}
+            </div>
+            <p className="mt-0.5 text-neutral-400">
+              {elsewhereWhere(elsewhere, true)}. {ELSEWHERE_PITCH}
+            </p>
+            <div className="mt-2.5 flex items-center gap-1.5">
+              <DialogButton
+                variant="outline"
+                size="md"
+                className="h-8"
+                disabled={busy}
+                title={busy ? BUSY_REASON : undefined}
+                onClick={() => void moveProjects(projectDirs(overview, false), elsewhere.count)}
+              >
+                Move them in
+              </DialogButton>
+              <DialogTextButton onClick={() => void keepProjects()}>Keep where they are</DialogTextButton>
+            </div>
+          </div>
+        </div>
+      )}
+      {offerKept && (
+        <p role="status" className="pb-3.5 text-xs leading-4 text-neutral-400">
+          They stay where they are. You can bring them in later from below.
+        </p>
+      )}
+
+      {jobRow("projects")}
       {jobRow("move", "export")}
 
       {status.available && (
         <>
           <dl
-            aria-label="Library contents"
+            aria-label="What the folder holds"
             aria-busy={counting || undefined}
             className="grid grid-cols-3 gap-4 py-3.5 border-t border-card"
           >
+            <Stat
+              label={inRootDirs.length === 1 ? "Project" : "Projects"}
+              value={overview ? inRootDirs.length.toLocaleString() : overviewFailed ? "—" : null}
+            />
             <Stat
               label={assetCount === 1 && !counting ? "Asset" : "Assets"}
               value={counting ? null : assetCount.toLocaleString()}
             />
             <Stat label="Size" value={counting ? null : formatBytes(status.counts.bytes)} />
-            <Stat label="In Trash" value={counting ? null : status.counts.trashed.toLocaleString()} />
           </dl>
 
           <DialogRow
-            align="start"
-            title="Import generations from existing projects"
-            description={
-              projects.length > 0
-                ? "Adds what each project's generations folder holds. The files stay where they are."
-                : "No saved projects found."
-            }
+            title="Bring in projects from another folder"
+            description="Searches a folder and its subfolders, then lets you use, move or add what it finds."
           >
             <DialogButton
               variant="outline"
               size="md"
               className="h-8 shrink-0"
-              disabled={busy || selected.size === 0 || tooManySelected}
-              title={importTitle}
-              onClick={() =>
-                void runJob(() =>
-                  startImport({ projectDirs: projects.filter((project) => selected.has(project.dir)).map((project) => project.dir) })
-                )
-              }
+              disabled={busy}
+              title={busy ? BUSY_REASON : undefined}
+              onClick={bringIn}
             >
-              {selected.size > 0 && !allSelected ? `Import ${selected.size}` : "Import"}
+              Choose folder…
             </DialogButton>
           </DialogRow>
-
-          {/* min-w-0: a fieldset is otherwise as wide as its longest path, however truncated */}
-          <fieldset className="-mt-1 min-w-0 pb-3.5">
-            <legend className="sr-only">Projects to import</legend>
-            <div className="flex items-center justify-between gap-4 pb-1.5">
-              {projects.length > 0 && (
-                <DialogEyebrow>
-                  {projects.length} {projects.length === 1 ? "project" : "projects"}
-                </DialogEyebrow>
-              )}
-              <div className="ml-auto flex shrink-0 items-center gap-1">
-                <DialogTextButton onClick={() => void findProjects()} disabled={finding !== null || pickerOpen}>
-                  {finding?.phase === "choosing" ? "Choosing…" : "Find projects in a folder…"}
-                </DialogTextButton>
-                {projects.length > 0 && (
-                  <DialogTextButton
-                    onClick={() => setSelected(allSelected ? new Set() : new Set(projects.map((project) => project.dir)))}
-                  >
-                    {allSelected ? "Select none" : "Select all"}
-                  </DialogTextButton>
-                )}
-              </div>
-            </div>
-            {projects.length > 0 && (
-              <ul className="max-h-[164px] overflow-y-auto rounded-lg border border-card-border divide-y divide-card-border">
-                {projects.map((project) => (
-                  <li key={project.dir}>
-                    <label className="flex items-start gap-3 px-3 py-2 cursor-pointer transition-colors hover:bg-white/[0.02]">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(project.dir)}
-                        onChange={() => toggleProject(project.dir)}
-                        className="mt-0.5 w-4 h-4 shrink-0 rounded accent-neutral-200"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] leading-[18px] text-neutral-100">{project.name}</span>
-                        <span className="block truncate font-mono text-[11px] leading-4 text-ink-3" title={project.dir}>
-                          {project.dir}
-                        </span>
-                      </span>
-                      {project.mediaCount !== undefined && (
-                        <span className="shrink-0 font-mono text-[11px] leading-[18px] text-ink-3 tabular-nums">
-                          {formatFileCount(project.mediaCount)}
-                        </span>
-                      )}
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {finding?.phase === "searching" ? (
-              <p role="status" className="mt-2 flex items-center gap-2 text-xs leading-4 text-neutral-400">
-                <DialogSpinner className="size-3.5 shrink-0" />
-                <span className="min-w-0 break-words">Searching {finding.folder}…</span>
-              </p>
-            ) : (
-              findLine && (
-                <p
-                  role={findLine.error ? "alert" : "status"}
-                  className={cn("mt-2 text-xs leading-4 break-words", findLine.error ? "text-error" : "text-neutral-400")}
-                >
-                  {findLine.text}
-                </p>
-              )
-            )}
-          </fieldset>
 
           {jobRow("import")}
 
@@ -867,7 +820,7 @@ export function LibrarySettingsTab() {
         </>
       )}
 
-      {/* Confirm step for a new location: move the library, or just use the folder */}
+      {/* Confirm step for a new folder: move everything there, or just use it */}
       <Dialog
         open={pendingRoot !== null}
         onClose={applying ? undefined : () => setPendingRoot(null)}
@@ -876,7 +829,7 @@ export function LibrarySettingsTab() {
         portal
       >
         <DialogHeader>
-          <DialogTitle>Change the library folder</DialogTitle>
+          <DialogTitle>Change the Node Banana folder</DialogTitle>
           <DialogDescription className="font-mono break-all">{pendingRoot}</DialogDescription>
         </DialogHeader>
         <DialogBody scroll={false} className="flex flex-col gap-2 pb-4">
@@ -887,7 +840,7 @@ export function LibrarySettingsTab() {
             disabled={applying !== null || !status.available}
           >
             <span className="block font-display text-sm leading-[18px] font-semibold tracking-[-0.01em] text-neutral-100">
-              {applying === "move" ? "Starting the move…" : "Move my library there"}
+              {applying === "move" ? "Starting the move…" : "Move everything there"}
             </span>
             <span className="mt-0.5 block text-xs leading-4 text-ink-3">{moveDescription}</span>
           </button>
@@ -902,8 +855,8 @@ export function LibrarySettingsTab() {
             </span>
             <span className="mt-0.5 block text-xs leading-4 text-ink-3">
               {status.root
-                ? `Saves there from now on, as the folder is. Your current library stays on disk at ${status.root}.`
-                : "Saves there from now on, as the folder is."}
+                ? `New projects and generations are saved there from now on. ${shortenHomePath(status.root)} stays as it is, and its projects stay in Open and Assets.`
+                : "New projects and generations are saved there from now on."}
             </span>
           </button>
           {applyError && (
