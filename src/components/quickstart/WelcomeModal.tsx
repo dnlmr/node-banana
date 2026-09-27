@@ -1,12 +1,14 @@
 "use client";
 
 import { Dialog, splitPanelClass } from "@/components/ui/Dialog";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { WorkflowFile } from "@/store/workflowStore";
 import { QuickstartView } from "@/types/quickstart";
 import { QuickstartInitialView } from "./QuickstartInitialView";
 import { TemplateExplorerView } from "./TemplateExplorerView";
 import { WorkflowBrowserView } from "./WorkflowBrowserView";
+import { BringInView } from "./BringInView";
+import { fetchProjects } from "@/lib/assets/client/api";
 import { cn } from "@/components/nodes/ui/cn";
 
 interface WelcomeModalProps {
@@ -15,7 +17,7 @@ interface WelcomeModalProps {
   onNewProject: () => void;
   /** Opens an empty canvas with the agent window open. */
   onStartWithAgent: () => void;
-  /** View to open on; the menu's Templates entry passes "templates". */
+  /** View to open on; the menu's Templates entry passes "templates", Settings › Storage "bringIn". */
   initialView?: QuickstartView;
 }
 
@@ -29,6 +31,7 @@ interface WelcomeModalProps {
 const VIEW_SIZE: Record<QuickstartView, string> = {
   initial: "w-[820px] h-[470px]",
   browse: "w-[820px] h-[470px]",
+  bringIn: "w-[820px] h-[470px]",
   templates: "w-[1200px] h-[720px]",
 };
 
@@ -40,6 +43,21 @@ export function WelcomeModal({
   initialView = "initial",
 }: WelcomeModalProps) {
   const [currentView, setCurrentView] = useState<QuickstartView>(initialView);
+  // Only someone with no known projects is asked whether they used Node Banana before
+  const [noProjects, setNoProjects] = useState(false);
+
+  // A second request while open (Settings › Storage's "Choose folder…") switches the view
+  useEffect(() => {
+    setCurrentView(initialView);
+  }, [initialView]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchProjects(controller.signal)
+      .then((overview) => setNoProjects(overview.projects.length === 0))
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
 
   const handleNewProject = useCallback(() => {
     onNewProject();
@@ -55,6 +73,16 @@ export function WelcomeModal({
 
   const handleBack = useCallback(() => {
     setCurrentView("initial");
+  }, []);
+
+  const handleSelectBringIn = useCallback(() => {
+    setCurrentView("bringIn");
+  }, []);
+
+  // Once they are in, Open lists them
+  const handleBroughtIn = useCallback(() => {
+    setNoProjects(false);
+    setCurrentView("browse");
   }, []);
 
   const handleWorkflowSelected = useCallback(
@@ -77,6 +105,7 @@ export function WelcomeModal({
           onSelectTemplates={handleSelectTemplates}
           onStartWithAgent={onStartWithAgent}
           onSelectLoad={handleSelectLoad}
+          onBringIn={noProjects ? handleSelectBringIn : undefined}
         />
       )}
       {currentView === "templates" && (
@@ -92,6 +121,16 @@ export function WelcomeModal({
             onWorkflowGenerated(workflow, dirPath)
           }
           onClose={onClose}
+          onNewProject={handleNewProject}
+          onBringIn={handleSelectBringIn}
+        />
+      )}
+      {currentView === "bringIn" && (
+        <BringInView
+          // Opened straight onto Bring-in (from Settings), Back and Cancel close
+          onBack={initialView === "bringIn" ? undefined : handleBack}
+          onClose={onClose}
+          onDone={handleBroughtIn}
         />
       )}
     </Dialog>

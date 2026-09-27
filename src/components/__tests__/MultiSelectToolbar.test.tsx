@@ -578,6 +578,43 @@ describe("MultiSelectToolbar", () => {
       // Should not create object URL when no images
       expect(createObjectURLSpy).not.toHaveBeenCalled();
     });
+
+    it("zips each image's own bytes, named by what they are, whatever type the data URL declares", async () => {
+      global.URL.createObjectURL = vi.fn(() => "blob:zip");
+      global.URL.revokeObjectURL = vi.fn();
+      const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13];
+      const jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1];
+      const base64 = (bytes: number[]) => btoa(String.fromCharCode(...bytes));
+      const zipFile = vi.fn();
+      const JSZip = (await import("jszip")).default as unknown as ReturnType<typeof vi.fn>;
+      // A constructor (`new JSZip()`), so a function rather than an arrow.
+      JSZip.mockImplementationOnce(function () {
+        return { file: zipFile, generateAsync: vi.fn().mockResolvedValue(new Blob()) };
+      });
+
+      mockUseWorkflowStore.mockImplementation((selector) => {
+        return selector(createDefaultState({
+          nodes: [
+            createMockNode("node-1", { type: "imageInput", data: { image: `data:;base64,${base64(png)}` } }),
+            createMockNode("node-2", { type: "imageInput", position: { x: 300, y: 0 }, data: { image: `data:image/png;base64,${base64(jpeg)}` } }),
+            createMockNode("node-3", { type: "imageInput", position: { x: 600, y: 0 }, data: { image: "https://example.com/a.png" } }),
+          ],
+        }));
+      });
+
+      render(
+        <TestWrapper>
+          <MultiSelectToolbar />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTitle("Download images as ZIP"));
+
+      await vi.waitFor(() => expect(zipFile).toHaveBeenCalledTimes(2));
+      expect(zipFile.mock.calls.map(([name, bytes]) => [name, [...(bytes as Uint8Array)]])).toEqual([
+        ["image-1.png", png],
+        ["image-2.jpg", jpeg],
+      ]);
+    });
   });
 
   describe("Toolbar Position", () => {

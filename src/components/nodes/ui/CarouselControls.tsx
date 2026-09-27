@@ -47,6 +47,8 @@ export function CarouselControls({
   className,
 }: CarouselControlsProps) {
   if (count <= 1) return null;
+  // Below 0: the node shows an output that is not in the list, so no item is current
+  const current = index >= 0;
   const safeIndex = Math.min(Math.max(index, 0), count - 1);
   const window = dotWindow(safeIndex, count);
 
@@ -60,14 +62,14 @@ export function CarouselControls({
               key={i}
               className={cn(
                 "block rounded-full transition-colors",
-                i === safeIndex ? "w-[5px] h-[5px] bg-neutral-300" : "w-1 h-1 bg-neutral-600"
+                current && i === safeIndex ? "w-[5px] h-[5px] bg-neutral-300" : "w-1 h-1 bg-neutral-600"
               )}
             />
           ))}
         </div>
       )}
       <span className={cn("text-node text-neutral-400 tabular-nums text-center", compact ? "min-w-[28px]" : "min-w-[32px]")}>
-        {`${safeIndex + 1} / ${count}`}
+        {`${current ? safeIndex + 1 : "–"} / ${count}`}
       </span>
       <NavButton title={`Next ${noun}`} onClick={onNext} disabled={loading} dir="next" />
     </div>

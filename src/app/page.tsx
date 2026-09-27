@@ -14,9 +14,36 @@ import { FTUXModal } from "@/components/onboarding/FTUXModal";
 import { getFTUXCompleted, setFTUXCompleted } from "@/store/utils/localStorage";
 import { useFTUXStore } from "@/store/ftuxStore";
 import { anyWorkflowTabUnsaved } from "@/store/utils/workflowTabs";
+import { useAssetStore } from "@/store/assetStore";
+import { AssetsView } from "@/components/assets/AssetsView";
+import { watchFirstRecording } from "@/components/assets/FirstRunHint";
+import { unloadWarning } from "@/components/assets/unloadWarning";
+import { initAssetLibrary, pendingRecordings } from "@/lib/assets/client/recorder";
+import { fetchLibraryStatus, reportProjects } from "@/lib/assets/client/api";
+import { watchMovedProjects } from "@/lib/assets/client/movedProjects";
+import { collectProjectReport } from "@/lib/assets/client/projects";
 
 export default function Home() {
   return <DesktopSession><Editor /></DesktopSession>;
+}
+
+/** One library init per page load, however often the effect below runs (Strict Mode runs it twice). */
+let libraryInit: ReturnType<typeof initAssetLibrary> | null = null;
+/** The projects this page's localStorage remembers go to the server once per page load. */
+let projectsReport: Promise<void> | null = null;
+
+/**
+ * Sends the report once the library is known to work. When the server
+ * adopted the old workflows folder as the Node Banana folder, the status
+ * the page holds is stale, so it is asked for again.
+ */
+function reportProjectsOnce(): Promise<void> {
+  projectsReport ??= reportProjects(collectProjectReport())
+    .then(async (result) => {
+      if (result.adopted) useAssetStore.getState().setLibrary(await fetchLibraryStatus());
+    })
+    .catch((error) => console.warn("Couldn't report projects to the asset library:", error));
+  return projectsReport;
 }
 
 function Editor() {
@@ -26,17 +53,55 @@ function Editor() {
   const cleanupAutoSave = useWorkflowStore((state) => state.cleanupAutoSave);
   const setShowQuickstart = useWorkflowStore((state) => state.setShowQuickstart);
   const [showFTUX, setShowFTUX] = useState(false);
+  const assetsShown = useAssetStore((state) => state.appView === "assets");
 
   useEffect(() => {
     initializeAutoSave();
     return () => cleanupAutoSave();
   }, [initializeAutoSave, cleanupAutoSave]);
 
+  // The asset library: ask the server where it is (recording stays off until
+  // it answers that it is available), and say once where the first asset went
+  useEffect(() => {
+    let cancelled = false;
+    let stopHint = () => {};
+    libraryInit ??= initAssetLibrary();
+    libraryInit
+      .then((status) => {
+        if (cancelled) return;
+        useAssetStore.getState().setLibrary(status);
+        // A projects move (from any screen) repoints the open canvas and saved configs at the new folders
+        watchMovedProjects(status);
+        stopHint = watchFirstRecording(status);
+        if (status?.available) void reportProjectsOnce();
+      })
+      .catch((error) => console.warn("Asset library unavailable:", error));
+    return () => {
+      cancelled = true;
+      stopHint();
+    };
+  }, []);
+
+  // While Assets shows, the canvas behind counts as covered: React Flow's
+  // delete, pan and selection stay off (its key handler has its own guard)
+  useEffect(() => {
+    if (!assetsShown) return;
+    useWorkflowStore.getState().incrementModalCount();
+    return () => useWorkflowStore.getState().decrementModalCount();
+  }, [assetsShown]);
+
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       const { tabs, hasUnsavedChanges } = useWorkflowStore.getState();
-      if (anyWorkflowTabUnsaved(tabs, { hasUnsavedChanges })) {
+      // Unsaved tabs, or generations still on their way to the library, each said as what it is
+      const warning = unloadWarning({
+        unsavedTabs: anyWorkflowTabUnsaved(tabs, { hasUnsavedChanges }),
+        pendingRecordings: pendingRecordings(),
+      });
+      if (warning) {
         e.preventDefault();
+        // Browsers show their own words; this is the reason for anything that reads it
+        e.returnValue = warning;
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -71,6 +136,10 @@ function Editor() {
             flows into. It must not isolate its stacking: modals and menus inside
             it are fixed and have to cover the strip too. */}
         <div className="workflow-canvas-frame relative mx-1 mb-1 flex-1 min-h-0 flex flex-col overflow-hidden rounded-t-lg border border-card-border bg-canvas-bg">
+        {/* The canvas stays mounted under the Assets view (React Flow keeps
+            measuring, a run or an agent turn keeps going), but inert and
+            invisible, which also hides its fixed floaters */}
+        <div className={`flex min-h-0 flex-1 flex-col ${assetsShown ? "invisible" : ""}`} inert={assetsShown}>
         <ErrorBoundary
           label="Canvas"
           onError={(error, info) =>
@@ -109,9 +178,50 @@ function Editor() {
         >
           <WorkflowCanvas />
         </ErrorBoundary>
-        <FloatingMenu />
         </div>
-        <FloatingActionBar />
+        {/* Hidden, not unmounted, while Assets shows: it hosts the settings and
+            shortcuts dialogs, which render inline and must still open from
+            there. Only its own chrome hides; an open dialog's overlay stays. */}
+        <div className={assetsShown ? "contents [&>:not([data-dialog-overlay])]:hidden" : "contents"}>
+          <FloatingMenu />
+        </div>
+        {assetsShown && (
+          <div className="absolute inset-0 z-[60] flex">
+            <ErrorBoundary
+              label="Assets"
+              onError={(error, info) => console.error("Assets view crashed:", error, info)}
+              fallback={(error, reset) => (
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-canvas-bg p-6 text-center">
+                  <div className="text-sm font-semibold text-red-400">The Assets view hit an unexpected error</div>
+                  <div className="max-w-md break-words text-xs text-neutral-400">{error.message || "Unexpected render error"}</div>
+                  <div className="text-xs text-neutral-500">Your files and workflows are not affected.</div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={reset}
+                      className="rounded-md border border-neutral-600 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-700/40"
+                    >
+                      Try again
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => useAssetStore.getState().setAppView("canvas")}
+                      className="rounded-md border border-neutral-600 px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-700/40"
+                    >
+                      Back to canvas
+                    </button>
+                  </div>
+                </div>
+              )}
+            >
+              <AssetsView />
+            </ErrorBoundary>
+          </div>
+        )}
+        </div>
+        <div hidden={assetsShown} inert={assetsShown}>
+          <FloatingActionBar />
+        </div>
         <AnnotationModal />
         {showFTUX && (
           <FTUXModal

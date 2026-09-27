@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderOpen, KeyRound, Keyboard, Layers, LayoutTemplate, Menu, MessageSquareText, Plus, Save, Settings, SquareArrowOutUpRight } from "lucide-react";
+import { FolderOpen, KeyRound, Keyboard, Layers, LayoutTemplate, LibraryBig, Menu, MessageSquareText, Plus, Save, Settings, SquareArrowOutUpRight } from "lucide-react";
 import {
   useState,
   useMemo,
@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useAssetStore } from "@/store/assetStore";
 import { useShallow } from "zustand/shallow";
 import { ProjectSetupModal, type SettingsTab } from "./ProjectSetupModal";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
@@ -24,6 +25,8 @@ import {
   CHROME_ICON_BUTTON_SIZE,
   CHROME_SURFACE,
 } from "./chromeStyles";
+import { LibraryNotices } from "./LibraryNotices";
+import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 
 /** The bar's buttons are the navigator card's: 32px squircles in a 40px row. */
 const ICON_BUTTON = `relative ${CHROME_ICON_BUTTON} ${CHROME_ICON_BUTTON_SIZE.md}`;
@@ -193,6 +196,11 @@ export function FloatingMenu() {
   const [projectModalMode, setProjectModalMode] = useState<"new" | "settings">("new");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("project");
   const [showWorkflowBrowser, setShowWorkflowBrowser] = useState(false);
+  // Settings asked for from elsewhere in the app (the first-run hint, the Assets view)
+  const settingsRequest = useSettingsDialogStore((state) => state.request);
+  const consumeSettingsRequest = useSettingsDialogStore((state) => state.consumeRequest);
+  // How many such requests arrived; each one moves an open dialog to its page
+  const [settingsRequests, setSettingsRequests] = useState<number | undefined>(undefined);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -304,6 +312,18 @@ export function FloatingMenu() {
     setShowProjectModal(true);
   };
 
+  // This menu hosts the settings dialog, so it answers requests to open it at
+  // a page; the request counter moves an already open dialog there too.
+  useEffect(() => {
+    if (!settingsRequest) return;
+    closeMenu();
+    handleOpenSettings(settingsRequest.page);
+    setSettingsRequests((count) => (count ?? 0) + 1);
+    consumeSettingsRequest();
+    // handleOpenSettings only sets state; the request is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsRequest]);
+
   const handleSave = () => {
     if (!isProjectConfigured) {
       handleNewProject();
@@ -368,7 +388,9 @@ export function FloatingMenu() {
         onSave={handleProjectSave}
         mode={projectModalMode}
         initialTab={settingsTab}
+        pageRequest={settingsRequests}
       />
+      <LibraryNotices />
       <WorkflowBrowserModal
         isOpen={showWorkflowBrowser}
         onClose={() => setShowWorkflowBrowser(false)}
@@ -462,6 +484,13 @@ export function FloatingMenu() {
               }
               label="Templates"
               onClick={choose(() => setShowQuickstart(true, "templates"))}
+            />
+            <MenuRow
+              icon={<LibraryBig size={16} strokeWidth={1.75} />}
+              label="Assets"
+              shortcut="A"
+              onClick={choose(() => useAssetStore.getState().setAppView("assets"))}
+              title="Every generation, from every workflow"
             />            {saveDirectoryPath && (
               <MenuRow
                 icon={

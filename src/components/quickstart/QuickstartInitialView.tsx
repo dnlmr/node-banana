@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, History } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
@@ -18,18 +18,22 @@ interface QuickstartInitialViewProps {
   onSelectTemplates: () => void;
   onStartWithAgent: () => void;
   onSelectLoad: () => void;
+  /** "Bring in your projects": offered only while the app knows no projects. */
+  onBringIn?: () => void;
 }
 
 /**
  * The first view of the welcome dialog. The pane carries the mark, the
  * stacked wordmark and the site's three points; the page is four ruled
- * rows, one per way in, and the links along the bottom.
+ * rows, one per way in, the Bring-in row for someone whose projects are
+ * not known yet, and the links along the bottom.
  */
 export function QuickstartInitialView({
   onNewProject,
   onSelectTemplates,
   onStartWithAgent,
   onSelectLoad,
+  onBringIn,
 }: QuickstartInitialViewProps) {
   return (
     <>
@@ -61,8 +65,8 @@ export function QuickstartInitialView({
           />
           <OptionRow
             onClick={onSelectLoad}
-            title="Load workflow"
-            description="Open existing file"
+            title="Open project"
+            description="From your Node Banana folder"
           />
           <OptionRow
             onClick={onSelectTemplates}
@@ -75,6 +79,20 @@ export function QuickstartInitialView({
             description="Describe it and the agent builds it"
             badge={<DialogChip className="nb-new-badge">New</DialogChip>}
           />
+          {onBringIn && (
+            <button
+              type="button"
+              onClick={onBringIn}
+              className="group mt-auto flex items-center gap-2 h-11 px-1 border-t border-card text-left text-[13px] leading-[18px] transition-colors hover:bg-white/[0.03] focus-visible:outline-none focus-visible:bg-white/[0.04]"
+            >
+              <History size={16} strokeWidth={1.75} className="shrink-0 text-neutral-500" />
+              <span className="text-neutral-500">Used Node Banana before?</span>
+              <span className="font-display font-semibold tracking-[-0.01em] text-neutral-200 group-hover:text-white transition-colors">
+                Bring in your projects
+              </span>
+              <ArrowRight size={16} strokeWidth={1.75} className="shrink-0 ml-auto text-neutral-500" />
+            </button>
+          )}
         </div>
         <div className="shrink-0 flex flex-wrap gap-x-5 gap-y-2 px-8 pt-4 pb-5">
           <FootLink href="https://node-banana-docs.vercel.app/">Docs</FootLink>

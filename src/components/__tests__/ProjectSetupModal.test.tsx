@@ -7,6 +7,11 @@ vi.mock('@/components/settings/EnvironmentImport', () => ({
   EnvironmentImport: ({ onImported }: { onImported: (value: unknown) => void }) => <button onClick={() => onImported({ preferences: {} })}>Complete environment import</button>,
 }));
 
+// The Library page talks to the asset library; its own tests cover it.
+vi.mock("@/components/settings/LibrarySettingsTab", () => ({
+  LibrarySettingsTab: () => <div data-testid="library-settings">Library settings</div>,
+}));
+
 // Mock the workflow store
 const mockSetUseExternalImageStorage = vi.fn();
 const mockUpdateProviderApiKey = vi.fn();
@@ -14,13 +19,22 @@ const mockToggleProvider = vi.fn();
 const mockUseWorkflowStore = vi.fn();
 
 vi.mock("@/store/workflowStore", () => ({
-  useWorkflowStore: (selector?: (state: unknown) => unknown) => {
-    if (selector) {
-      return mockUseWorkflowStore(selector);
-    }
-    return mockUseWorkflowStore((s: unknown) => s);
-  },
+  useWorkflowStore: Object.assign(
+    (selector?: (state: unknown) => unknown) => {
+      if (selector) {
+        return mockUseWorkflowStore(selector);
+      }
+      return mockUseWorkflowStore((s: unknown) => s);
+    },
+    { getState: () => mockUseWorkflowStore((s: unknown) => s) }
+  ),
   generateWorkflowId: () => "mock-workflow-id",
+}));
+
+// What the asset library last said about itself (null until it has answered)
+const mockLibraryStatus = vi.fn((): { available: boolean; root: string | null } | null => null);
+vi.mock("@/lib/assets/client/recorder", () => ({
+  getRecorderLibraryStatus: () => mockLibraryStatus(),
 }));
 
 // Stand-in for the model browser: a search box rendered, like the real one,
@@ -699,6 +713,208 @@ describe("ProjectSetupModal", () => {
     });
   });
 
+  describe("Workflow identity and existing folders", () => {
+    /** Folders on "disk": path → the workflow saved there (null = empty folder). */
+    function mockFolders(folders: Record<string, { id?: string; name: string } | null>) {
+      mockFetch.mockImplementation((url: string) => {
+        if (url === "/api/env-status") {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+        }
+        if (url.startsWith("/api/workflow?")) {
+          const params = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+          const folder = params.get("path") ?? "";
+          const exists = folder in folders;
+          if (params.get("load") === "true") {
+            const workflow = folders[folder];
+            return Promise.resolve({
+              ok: !!workflow,
+              json: () => Promise.resolve(workflow ? { success: true, workflow: { version: 1, nodes: [], edges: [], ...workflow } } : { success: false }),
+            });
+          }
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, exists, isDirectory: exists }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) });
+      });
+    }
+
+    function fillAndCreate(projectName: string, directory: string) {
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: projectName } });
+      fireEvent.change(screen.getByPlaceholderText("/Users/username/projects/my-project"), { target: { value: directory } });
+      fireEvent.click(screen.getByText("Create"));
+    }
+
+    it("keeps the id of a canvas that has never had a folder, so its generations join the project", async () => {
+      mockFolders({});
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ workflowId: "wf_canvas", saveDirectoryPath: null })));
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("wf_canvas", "Fox", "/projects/Fox"));
+    });
+
+    it("gives a canvas that already has a folder a new id", async () => {
+      mockFolders({});
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ workflowId: "wf_canvas", saveDirectoryPath: "/projects/Old" })));
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+    });
+
+    it("asks before saving over a different workflow, and replaces it when told to", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_someone_else", name: "Their Fox" } });
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      expect(await screen.findByText("Folder already has a workflow")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("“Their Fox” is saved in /projects/Fox");
+      expect(onSave).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText("Replace"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+    });
+
+    it("saves as '<name> 2' in a folder of its own, leaving the other workflow alone", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_someone_else", name: "Their Fox" } });
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+      fireEvent.click(await screen.findByText("Save as “Fox 2”"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox 2", "/projects/Fox 2"));
+      expect(screen.getByPlaceholderText("my-project")).toHaveValue("Fox 2");
+    });
+
+    it("saves over its own workflow without asking", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_mine", name: "Fox" } });
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowId: "wf_mine", workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="settings" />);
+
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("wf_mine", "Fox", "/projects/Fox"));
+      expect(screen.queryByText("Folder already has a workflow")).toBeNull();
+    });
+
+    it("saves into the folder it already lives in without asking, even when its file has no id", async () => {
+      mockFolders({ "/projects/Fox": { name: "Fox" } });
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowId: null, workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="settings" />);
+
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+      expect(screen.queryByText("Folder already has a workflow")).toBeNull();
+    });
+  });
+
+  describe("Saving into the Node Banana folder", () => {
+    const ROOT = "/Users/me/Documents/Node Banana";
+    /** Folders already in the Node Banana folder, lower-cased, as the folder-name route numbers past them. */
+    let taken: string[] = [];
+
+    beforeEach(() => {
+      taken = [];
+      mockLibraryStatus.mockReturnValue({ available: true, root: ROOT });
+      mockFetch.mockImplementation((url: string) => {
+        if (url.startsWith("/api/assets/projects/folder-name?")) {
+          const name = new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("name") ?? "";
+          let folder = name;
+          for (let n = 2; taken.includes(folder.toLowerCase()); n++) folder = `${name} ${n}`;
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ folder, path: `${ROOT}/${folder}`, taken: folder !== name }),
+          });
+        }
+        if (url.startsWith("/api/workflow?")) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, exists: false }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      });
+    });
+
+    afterEach(() => {
+      mockLibraryStatus.mockReturnValue(null);
+    });
+
+    it("saves a new project in a folder of its own there, named after it", async () => {
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+      expect(screen.queryByLabelText("Project directory")).toBeNull();
+
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Lookbook" } });
+      expect(await screen.findByText("~/Documents/Node Banana/Lookbook")).toBeInTheDocument();
+      expect(screen.getByText(/Saves to/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Lookbook", `${ROOT}/Lookbook`));
+      // Only a chosen directory is remembered as the next one to offer
+      expect(localStorageMock.setItem).not.toHaveBeenCalledWith("node-banana-last-project-dir", expect.anything());
+    });
+
+    it("numbers the folder past one that is taken, and says why", async () => {
+      taken = ["lookbook"];
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Lookbook" } });
+      expect(await screen.findByText("~/Documents/Node Banana/Lookbook 2")).toBeInTheDocument();
+      expect(screen.getByText("There’s already a “Lookbook” folder there, so this one gets a number.")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Lookbook", `${ROOT}/Lookbook 2`));
+    });
+
+    it("chooses another location, starting at the Node Banana folder, and comes back", async () => {
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Fox" } });
+
+      fireEvent.click(screen.getByText("Choose another location…"));
+      expect(screen.getByLabelText("Project directory")).toHaveValue(ROOT);
+      expect(screen.getByText("Only this project is saved here. Its generations still show in Assets.")).toBeInTheDocument();
+      expect(screen.queryByText(/Saves to/)).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("Project directory"), { target: { value: "/projects" } });
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+
+      fireEvent.click(screen.getByText("Use the Node Banana folder"));
+      expect(screen.queryByLabelText("Project directory")).toBeNull();
+      expect(await screen.findByText("~/Documents/Node Banana/Fox")).toBeInTheDocument();
+    });
+
+    it("keeps a saved project's own directory in its settings", () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+      expect(screen.getByLabelText("Project directory")).toHaveValue("/projects/Fox");
+      expect(screen.getByText("Use the Node Banana folder")).toBeInTheDocument();
+    });
+
+    it("asks for a directory when there is no Node Banana folder", () => {
+      mockLibraryStatus.mockReturnValue({ available: false, root: null });
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="new" />);
+      expect(screen.getByLabelText("Project directory")).toBeInTheDocument();
+      expect(screen.queryByText("Use the Node Banana folder")).toBeNull();
+      expect(screen.queryByText("Choose another location…")).toBeNull();
+    });
+  });
+
   describe("Browse Button", () => {
     it("should call browse-directory API when Browse is clicked", async () => {
       mockFetch.mockImplementation((url: string) => {
@@ -1216,5 +1432,64 @@ describe("Noodles tab", () => {
     // The Canvas tab no longer carries them
     fireEvent.click(screen.getByRole("button", { name: "Canvas" }));
     expect(screen.queryByTestId("connection-preview")).toBeNull();
+  });
+});
+
+describe("Storage page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The env status plays no part here; left pending, it cannot update after a test ends.
+    mockFetch.mockReturnValue(new Promise(() => {}));
+    mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState()));
+  });
+
+  it("sits second in the rail, after Project", () => {
+    render(<ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+    const rail = screen.getByRole("navigation", { name: "Settings pages" });
+    const pages = Array.from(rail.querySelectorAll("button")).map((button) => button.textContent);
+    expect(pages.slice(0, 3)).toEqual(["Project", "Storage", "Providers"]);
+  });
+
+  it("opens on the Storage page when asked, with Done in place of Cancel and Save", () => {
+    const onClose = vi.fn();
+    render(<ProjectSetupModal isOpen={true} onClose={onClose} onSave={vi.fn()} mode="settings" initialTab="library" />);
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
+    expect(screen.getByText("Where your projects and generations are saved.")).toBeInTheDocument();
+    expect(screen.getByTestId("library-settings")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockUpdateProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("moves an open dialog to a newly requested page, and only on a new request", () => {
+    const props = { isOpen: true, onClose: vi.fn(), onSave: vi.fn(), mode: "settings" as const };
+    const { rerender } = render(<ProjectSetupModal {...props} initialTab="project" pageRequest={1} />);
+    expect(screen.getByRole("button", { name: "Project" })).toHaveAttribute("aria-current", "page");
+
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={2} />);
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("library-settings")).toBeInTheDocument();
+
+    // The user moves on; a re-render without a new request leaves them there
+    fireEvent.click(screen.getByRole("button", { name: "Providers" }));
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={2} />);
+    expect(screen.getByRole("button", { name: "Providers" })).toHaveAttribute("aria-current", "page");
+
+    // The same page asked for again
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={3} />);
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("renders into the body, so it opens while its host is hidden", () => {
+    const { container } = render(
+      <div hidden>
+        <ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" initialTab="library" />
+      </div>
+    );
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
   });
 });

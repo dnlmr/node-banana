@@ -187,7 +187,11 @@ export function Generate3DNode({ id, data, selected }: NodeProps<Generate3DNodeT
                   const res = await fetch("/api/open-file", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ filePath: nodeData.savedFilePath }),
+                    // The project folder lets the route reveal a model saved there, wherever it is.
+                    body: JSON.stringify({
+                      filePath: nodeData.savedFilePath,
+                      projectPath: useWorkflowStore.getState().saveDirectoryPath,
+                    }),
                   });
                   if (!res.ok) {
                     const detail = await res.text().catch(() => `Status ${res.status}`);

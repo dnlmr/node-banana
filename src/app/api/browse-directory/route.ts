@@ -4,6 +4,7 @@ import { promisify } from "util";
 import { writeFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 
 const execAsync = promisify(exec);
 
@@ -34,9 +35,34 @@ export function normalizeSelectedPath(selectedPath: string, platform: string): s
   return selectedPath;
 }
 
-// GET: Open native directory picker and return the selected path
-export async function GET() {
+/**
+ * The picker's title for what the folder is for: `?purpose=library` is the
+ * asset library's "Change…", `?purpose=export` the destination of Export and
+ * "Save a copy…", `?purpose=import` the folder the library's import searches
+ * for projects. Only these fixed strings are ever used, since the title is
+ * spliced into the shell commands below. The desktop app's copy is
+ * browseDirectoryTitle in electron/lib/bridge.cjs.
+ */
+const PICKER_TITLES = {
+  default: "Select a folder to save workflows",
+  library: "Choose where Node Banana saves your media",
+  export: "Choose a folder to export to",
+  import: "Choose a folder of Node Banana projects",
+} as const;
+
+function pickerTitle(purpose: string | null): string {
+  return purpose === "library" || purpose === "export" || purpose === "import"
+    ? PICKER_TITLES[purpose]
+    : PICKER_TITLES.default;
+}
+
+// GET: Open native directory picker and return the selected path. Only Node
+// Banana's own page may pop a dialog on this computer (see guard.ts).
+export async function GET(request: Request) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const platform = process.platform;
+  const title = pickerTitle(new URL(request.url).searchParams.get("purpose"));
 
   try {
     let selectedPath: string | null = null;
@@ -44,7 +70,7 @@ export async function GET() {
     if (platform === "darwin") {
       // macOS: Use osascript to open folder picker
       const { stdout } = await execAsync(
-        `osascript -e 'set folderPath to POSIX path of (choose folder with prompt "Select a folder to save workflows")' -e 'return folderPath'`
+        `osascript -e 'set folderPath to POSIX path of (choose folder with prompt "${title}")' -e 'return folderPath'`
       );
       selectedPath = stdout.trim();
     } else if (platform === "win32") {
@@ -91,7 +117,7 @@ public class FolderPicker {
 }
 "@ -ErrorAction Stop
 
-$result = [FolderPicker]::Show("Select a folder to save workflows")
+$result = [FolderPicker]::Show("${title}")
 if ($result) { Write-Output $result }
 `;
 
@@ -111,14 +137,14 @@ if ($result) { Write-Output $result }
       // Linux: Try zenity (common on GNOME) or kdialog (KDE)
       try {
         const { stdout } = await execAsync(
-          `zenity --file-selection --directory --title="Select a folder to save workflows" 2>/dev/null`
+          `zenity --file-selection --directory --title="${title}" 2>/dev/null`
         );
         selectedPath = stdout.trim();
       } catch {
         // Try kdialog as fallback
         try {
           const { stdout } = await execAsync(
-            `kdialog --getexistingdirectory ~ --title "Select a folder to save workflows"`
+            `kdialog --getexistingdirectory ~ --title "${title}"`
           );
           selectedPath = stdout.trim();
         } catch {

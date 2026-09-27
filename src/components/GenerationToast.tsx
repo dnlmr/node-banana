@@ -5,6 +5,7 @@ import { Toaster, toast } from "sonner";
 import { CHROME_SURFACE } from "./chromeStyles";
 import { producerName, setHistoryDragData } from "./GlobalImageHistory";
 import { STACK_RIGHT_CSS, STACK_TOP } from "./Toast";
+import { useAssetStore } from "@/store/assetStore";
 
 /** One finished generation. */
 export interface GenerationToastItem {
@@ -22,6 +23,12 @@ const CARD_WIDTH = 268;
 /** Cards past this many wait behind the stack until the front ones go. */
 const MAX_VISIBLE = 4;
 
+/** Cards still up. Sonner also carries the asset library's first-run hint, which clearing must leave. */
+const shownCards = new Set<string>();
+const forget = (t: { id: string | number }) => {
+  shownCards.delete(String(t.id));
+};
+
 /** Announce a finished generation under the history button: one card each, stacked by sonner. */
 export function pushGenerationToast({
   image,
@@ -32,6 +39,8 @@ export function pushGenerationToast({
   model: string;
   aspectRatio: string;
 }) {
+  // The Assets view shows arrivals itself; cards would sit over its header
+  if (useAssetStore.getState().appView === "assets") return;
   const now = Date.now();
   const item: GenerationToastItem = {
     id: `${now}-${Math.random().toString(36).slice(2, 9)}`,
@@ -40,15 +49,19 @@ export function pushGenerationToast({
     aspectRatio,
     shownAt: now,
   };
+  shownCards.add(item.id);
   toast.custom(() => <GenerationToastCard toast={item} />, {
     id: item.id,
     duration: GENERATION_TOAST_DURATION_MS,
+    onDismiss: forget,
+    onAutoClose: forget,
   });
 }
 
-/** Drop every card. Sonner carries only generation toasts today. */
+/** Drop every generation card (and only those). */
 export function clearGenerationToasts() {
-  toast.dismiss();
+  for (const id of shownCards) toast.dismiss(id);
+  shownCards.clear();
 }
 
 const THUMB = "h-10 w-10 shrink-0 rounded-lg squircle object-cover shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]";

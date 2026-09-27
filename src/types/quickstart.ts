@@ -1,6 +1,7 @@
 import type { NodeType } from "./nodes";
 
-export type QuickstartView = "initial" | "templates" | "browse";
+/** `bringIn`: "Bring in your projects", also opened from Settings › Storage. */
+export type QuickstartView = "initial" | "templates" | "browse" | "bringIn";
 
 export type TemplateCategory = "simple" | "advanced" | "community";
 
