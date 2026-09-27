@@ -14,6 +14,7 @@ import {
   ASSET_ID_PATTERN,
   ASSET_KINDS,
   ASSET_ORIGINS,
+  MAX_IMPORT_PROJECTS,
   RUN_ID_PATTERN,
   SHA256_PATTERN,
   WORKFLOW_ID_PATTERN,
@@ -32,6 +33,7 @@ import {
   type RecordAssetMeta,
   type RecordAssetRequest,
   type RevealRequest,
+  type ScanProjectsRequest,
   type SetLibraryRootRequest,
   type SnapshotWorkflow,
   type WorkflowEntryUpdate,
@@ -49,7 +51,7 @@ export const MAX_MEDIA_HASHES = 5000;
 export const MAX_TAGS = 200;
 export const MAX_TAG_LENGTH = 200;
 /** Project folders in one import. */
-export const MAX_IMPORT_DIRS = 500;
+export const MAX_IMPORT_DIRS = MAX_IMPORT_PROJECTS;
 /** Hashes referenced by one stored run. */
 export const MAX_RUN_MEDIA_HASHES = 50_000;
 
@@ -407,6 +409,11 @@ export function parseImportRequest(body: unknown): ImportProjectsRequest {
   const dirs = array(request.projectDirs, "projectDirs", MAX_IMPORT_DIRS).map((dir, i) => folder(dir, `projectDirs[${i}]`));
   if (dirs.length === 0) throw badRequest("Choose at least one project folder to import.");
   return { projectDirs: [...new Set(dirs)] };
+}
+
+export function parseScanProjectsRequest(body: unknown): ScanProjectsRequest {
+  const request = object(body, "The request");
+  return { root: folder(request.root, "root") };
 }
 
 export function parseCleanupRequest(body: unknown): CleanupRequest {

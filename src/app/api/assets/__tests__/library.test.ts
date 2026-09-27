@@ -17,6 +17,7 @@ import { logger } from "@/utils/logger";
 import { POST as cleanup } from "../cleanup/route";
 import { POST as exportAssets } from "../export/route";
 import { POST as importProjects } from "../import/route";
+import { POST as scanProjects } from "../import/scan/route";
 import { DELETE as cancelJob, GET as getJob } from "../jobs/[jobId]/route";
 import { GET as getLibrary, PUT as putLibrary } from "../library/route";
 import { PUT as putRun } from "../runs/[runId]/route";
@@ -192,6 +193,68 @@ describe("job starts", () => {
     const response = await exportAssets(page("/api/assets/export", { json: body }));
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "Another job is running.", code: "busy" });
+  });
+});
+
+describe("POST /api/assets/import/scan", () => {
+  const FOUND = {
+    root: DIR,
+    projects: [{ dir: path.join(DIR, "Campaign"), name: "Campaign", mediaCount: 12 }],
+    truncated: false,
+    unreadable: 1,
+  };
+
+  it("answers the projects found under the folder", async () => {
+    vi.mocked(facade.scanProjects).mockResolvedValue(FOUND);
+    const response = await scanProjects(page("/api/assets/import/scan", { json: { root: `${DIR}${path.sep}` } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(FOUND);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(facade.scanProjects).toHaveBeenCalledWith({ root: DIR });
+  });
+
+  it("refuses a missing, relative or system folder before searching", async () => {
+    for (const body of [{}, { root: 7 }, { root: "Projects" }, { root: `${DIR}${path.sep}..${path.sep}x` }, [DIR]]) {
+      const response = await scanProjects(page("/api/assets/import/scan", { json: body }));
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "bad_request" });
+    }
+    if (process.platform !== "win32") {
+      const system = await scanProjects(page("/api/assets/import/scan", { json: { root: "/System/Library" } }));
+      expect(system.status).toBe(400);
+    }
+    expect(facade.scanProjects).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body over 64 KB", async () => {
+    const response = await scanProjects(
+      page("/api/assets/import/scan", { json: { root: DIR, padding: "x".repeat(64 * 1024) } }),
+    );
+    expect(response.status).toBe(413);
+    expect((await response.json()).error).toBe("The request body is over the 64 KB limit.");
+    expect(facade.scanProjects).not.toHaveBeenCalled();
+  });
+
+  it("maps the library's refusals", async () => {
+    vi.mocked(facade.scanProjects).mockRejectedValueOnce(new LibraryError(`"${DIR}" doesn't exist.`, 404, "not_found"));
+    const missing = await scanProjects(page("/api/assets/import/scan", { json: { root: DIR } }));
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: `"${DIR}" doesn't exist.`, code: "not_found" });
+
+    vi.mocked(facade.scanProjects).mockRejectedValueOnce(new LibraryError(`"${DIR}" isn't a folder.`, 400, "bad_request"));
+    expect((await scanProjects(page("/api/assets/import/scan", { json: { root: DIR } }))).status).toBe(400);
+  });
+
+  it("refuses another website, and a server that can't vouch for this computer, without searching", async () => {
+    const response = await scanProjects(crossSite("/api/assets/import/scan"));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: LIBRARY_GUARD_MESSAGE, code: "forbidden" });
+
+    unvouch();
+    const unvouched = await scanProjects(page("/api/assets/import/scan", { json: { root: DIR } }));
+    expect(unvouched.status).toBe(403);
+    expect(await unvouched.json()).toEqual({ error: LIBRARY_UNVOUCHED_MESSAGE, code: "forbidden" });
+    expect(facade.scanProjects).not.toHaveBeenCalled();
   });
 });
 

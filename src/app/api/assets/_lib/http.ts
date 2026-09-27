@@ -18,6 +18,8 @@ import { logger } from "@/utils/logger";
 export const JSON_BODY_LIMIT = 1024 * 1024;
 /** PUT /runs/[runId] carries a media-free workflow snapshot. */
 export const RUN_BODY_LIMIT = 16 * 1024 * 1024;
+/** POST /import/scan carries one folder path. */
+export const SCAN_BODY_LIMIT = 64 * 1024;
 /** Uploads and snapshot media: refused early when the declared length is over this (the library enforces it as bytes arrive). */
 export const UPLOAD_BYTE_LIMIT = 2 * 1024 * 1024 * 1024;
 

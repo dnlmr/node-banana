@@ -18,6 +18,7 @@ import {
   parseQuery,
   parseRecordRequest,
   parseRevealRequest,
+  parseScanProjectsRequest,
   parseSelection,
   parseSetLibraryRoot,
   parseWorkflowEntry,
@@ -292,6 +293,14 @@ describe("library and jobs", () => {
     expect(parseImportRequest({ projectDirs: [DIR, DIR] })).toEqual({ projectDirs: [DIR] });
     expect400(() => parseImportRequest({ projectDirs: [] }), /at least one/);
     expect400(() => parseImportRequest({ projectDirs: ["rel"] }), /projectDirs\[0\]/);
+  });
+
+  it("parseScanProjectsRequest resolves the folder to search", () => {
+    expect(parseScanProjectsRequest({ root: `${DIR}${path.sep}` })).toEqual({ root: DIR });
+    expect400(() => parseScanProjectsRequest({ root: "rel" }), /root/);
+    expect400(() => parseScanProjectsRequest({ root: `${DIR}${path.sep}..${path.sep}x` }), /traversal/);
+    expect400(() => parseScanProjectsRequest({}), /root must be a string/);
+    expect400(() => parseScanProjectsRequest(null), /The request must be an object/);
   });
 
   it("parseCleanupRequest needs something to do", () => {
