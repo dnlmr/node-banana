@@ -52,6 +52,7 @@ to the old project-only save.
     workflows.json                                     workflow id → name, project folder
     journal.ndjson                                     change log (other processes, tombstones)
     writers/, lock, move.json                          in-flight writes per server; a running move
+    project-move.json                                  the project a projects move is copying (from, dest, phase)
 ```
 
 A workflow with a project keeps writing into `<project>/generations/` under
@@ -187,7 +188,8 @@ the registry gains folders, every known project whose `generations/` stamp
 (mtime and entry count) differs from its `indexedStamp` is imported in place
 by one quiet import job (never shown in the library status), and the stamps
 are stored. It never runs alongside another job or a move; it looks again
-30 seconds later.
+30 seconds later. A job the user starts stops a quiet one first
+(`JobRunner.startOverQuiet`), so the hidden job never refuses them.
 
 **Bringing projects in** (`POST /api/assets/projects/bring-in`) takes the
 projects found under a picked folder and a mode: `use` makes that folder the
@@ -207,6 +209,23 @@ and the registry — and only then deletes the source. A source that can't be
 removed is reported in `job.moved` with `leftovers`, not as a failure.
 Cancelling stops between files and removes the copy in progress; projects
 already moved stay moved.
+
+Only a folder that is nothing but a project moves: never a drive root, the
+home folder or its standard folders (Desktop, Documents, Downloads, …), nor
+one whose top holds anything besides workflow files, `generations/`,
+`inputs/`, `outputs/`, `.images/` and projects of its own. The offer counts
+only such folders and lists them in `elsewhere.dirs`. If the library can't
+follow the copy, the records and registry are put back and the copy goes.
+`.nodebanana/project-move.json` names the project in progress: a copy still
+`copying` is never listed or indexed and is removed at the next start while
+its source exists. The last pass before the source goes compares by size
+and mtime with the source as last copied, and copies keep their times.
+Each `job.moved` entry repoints the page (`movedProjects.ts`): the open
+canvas and parked tabs, `node-banana-workflow-configs` and in-flight runs.
+
+"Move everything there" sends the old folder's projects with the library
+move (`SetLibraryRootRequest.projects`); the server moves them into the new
+folder after the library, in the same job.
 
 **The offer.** `GET /api/assets/projects` also sums the known projects
 outside the Node Banana folder (`elsewhere`: outermost count, size, groups by
