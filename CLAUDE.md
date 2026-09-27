@@ -371,11 +371,22 @@ update `src/lib/agent/graph/catalog.ts` / `handles.ts` too (the server's copy).
 
 Every generated and edited asset is saved to disk as it is made, with or
 without a project, and indexed for the Assets view (bare `A`). The library
-root defaults to `~/Pictures/Node Banana` (Windows: `Pictures\Node Banana`,
-or `%USERPROFILE%\Node Banana` when Pictures syncs to OneDrive); metadata
-lives in its hidden `.nodebanana/` folder. Project workflows still write into
+root is the "Node Banana folder": it defaults to `~/Documents/Node Banana`
+(Windows: `Documents\Node Banana`, or `%USERPROFILE%\Node Banana` when
+Documents syncs to OneDrive; Linux: `XDG_DOCUMENTS_DIR`) and holds projects
+saved by name (`<root>/<Project>/`), `Generations/` for unsaved workflows
+and the hidden `.nodebanana/` metadata. Project workflows still write into
 `<project>/generations/` and are indexed in place. See
-`docs/asset-library.md` for the layout, recording, snapshots and deletion.
+`docs/asset-library.md` for the layout, recording, snapshots, deletion and
+projects.
+
+- Known projects (the root's own, the project registry
+  `~/.node-banana/projects.json`, workflow rows) are listed by
+  `GET /api/assets/projects`. Each page load reports its localStorage's
+  project folders once (`reportProjects`), which may adopt the old workflows
+  folder as the root; known projects' generations are auto-indexed by a quiet
+  import job; the `projects` job moves folders into the root and rewrites
+  every path that pointed at them.
 
 - Executors record through `ctx.recordAsset` (present only while the library
   is available); a new media-producing node should call it from its success
@@ -425,6 +436,7 @@ All routes in `src/app/api/`:
 | `/api/assets/facets`, `/bulk`, `/exists`, `/reveal` | default | Filter counts, bulk tag/favourite/trash/restore/delete, carousel existence, Show in Finder/Explorer |
 | `/api/assets/media`, `/runs/[id]`, `/workflows/[id]` | default | Snapshot media, run snapshots, workflow classification |
 | `/api/assets/library`, `/jobs/[id]`, `/import`, `/import/scan`, `/cleanup`, `/export` | default | Library status/location, background jobs (move, import projects, clean up, export), finding the projects under a folder to import |
+| `/api/assets/projects` (`/report`, `/bring-in`, `/offer`, `/folder-name`) | default | Known projects and the "live elsewhere" offer, the page load's project report, bringing projects in (use, move, leave), a new project's folder name |
 
 ## localStorage Keys
 
@@ -443,7 +455,8 @@ All routes in `src/app/api/`:
 
 The asset library's location and index live on disk, not in localStorage
 (the desktop and web origins do not share it): `~/.node-banana/library.json`
-and `<library>/.nodebanana/`.
+and `<library>/.nodebanana/`, and the project registry in
+`~/.node-banana/projects.json`.
 
 ## Git Workflow
 

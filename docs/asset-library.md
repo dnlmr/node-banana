@@ -6,13 +6,19 @@ shows up in the **Assets** view. Projects still exist. An asset records the
 workflow it came from, so creating a project adds that workflow's earlier
 assets to it without moving any files.
 
+The library root is the **Node Banana folder**. It holds the projects saved
+by name (`<root>/<Project>/`), `Generations/` for workflows that have no
+project yet, and the hidden `.nodebanana/`. `Generations` is never a
+project's name.
+
 ## Where files go
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Library (default) | `~/Pictures/Node Banana` | `Pictures\Node Banana`, or `%USERPROFILE%\Node Banana` when Pictures is inside OneDrive | `$(xdg-user-dir PICTURES)/Node Banana` |
+| Node Banana folder (default) | `~/Documents/Node Banana` | `Documents\Node Banana`, or `%USERPROFILE%\Node Banana` when Documents is inside OneDrive | `$(xdg-user-dir DOCUMENTS)/Node Banana` |
 | Thumbnails (rebuildable) | `~/Library/Caches/Node Banana` | `%LOCALAPPDATA%\Node Banana\Cache` | `$XDG_CACHE_HOME/node-banana` |
 | Location choice | `~/.node-banana/library.json` | same | same |
+| Project registry | `~/.node-banana/projects.json` | same | same |
 
 The library root is resolved on the server, so the desktop app and
 `npm run dev` agree. Resolution order:
@@ -22,6 +28,10 @@ The library root is resolved on the server, so the desktop app and
 3. `NODE_BANANA_DEFAULT_LIBRARY`, which Electron main computes with the
    OneDrive rule.
 4. The platform default.
+
+Under `NODE_BANANA_ASSET_LIBRARY` the location choice and the project
+registry live in `<root>/.nodebanana/` (`config.json`, `projects.json`)
+instead, so an isolated run never touches `~/.node-banana`.
 
 The first successful use saves the default root to `library.json`. If the
 default folder can't be written (for example Controlled Folder Access, or
@@ -147,9 +157,70 @@ once every record reads again. The 30-day auto-empty uses the OS Trash too. The 
 web mode on older macOS, where only the Finder route exists and would prompt
 for permission; there it deletes the files outright.
 
+## Projects
+
+The app knows a project from three places, merged by `listKnownProjects`
+(`known.ts`) for `GET /api/assets/projects`, newest first:
+
+- the Node Banana folder itself: any folder in it with a Node Banana
+  workflow file (a `.json` with `version`, `nodes` and `edges`, read from its
+  ends only) or a `generations/` folder, except `Generations/` and
+  `.nodebanana/` (same bounds as the project search below, 5 seconds);
+- the **project registry**, `projects.json`: `{ v, projects: [{ dir, name,
+  addedAt, lastOpenedAt, indexedStamp }], offer: { dismissed }, adoption:
+  { done } }`, listed while the folder still holds a workflow file
+  (`registry.ts`: atomic writes, tolerant reads, folders absolute and unique
+  by case-folded path);
+- the project folders the workflows table names.
+
+Each page load reports what its own localStorage remembers
+(`POST /api/assets/projects/report`: the `node-banana-workflow-configs`
+folders and the old `node-banana-workflows-directory`) into the registry;
+the two builds keep separate localStorage. **Adoption** happens once: while
+the root is still the default, a workflows folder that exists becomes the
+Node Banana folder — switched to when nothing is saved in the library yet,
+else the library moves there. Adoption is also marked done when the library
+already holds assets and the page had no workflows folder.
+
+**Auto-index.** After the library is ready, when the root changes and when
+the registry gains folders, every known project whose `generations/` stamp
+(mtime and entry count) differs from its `indexedStamp` is imported in place
+by one quiet import job (never shown in the library status), and the stamps
+are stored. It never runs alongside another job or a move; it looks again
+30 seconds later.
+
+**Bringing projects in** (`POST /api/assets/projects/bring-in`) takes the
+projects found under a picked folder and a mode: `use` makes that folder the
+Node Banana folder (moving the library there when it holds anything, else
+switching), `move` starts the projects move, `leave` lists them where they
+are for the auto-index. The search behind it (`/import/scan`) reports each
+project's size and `recommendUse`: every visible entry at the folder's top
+is a project, holds one or is a loose workflow file.
+
+**The projects move** (job type `projects`, `projectMove.ts`) moves each
+outermost folder in turn to `<root>/<name>`, numbered past a taken name
+(case-insensitively, `Generations` reserved). It copies without following
+links, checks every file's size, copies again what changed meanwhile, then
+points the library at the copy — records of its files (`relocateExternal`,
+under each record's lock), workflow rows, `media/*.ref` snapshot references
+and the registry — and only then deletes the source. A source that can't be
+removed is reported in `job.moved` with `leftovers`, not as a failure.
+Cancelling stops between files and removes the copy in progress; projects
+already moved stay moved.
+
+**The offer.** `GET /api/assets/projects` also sums the known projects
+outside the Node Banana folder (`elsewhere`: outermost count, size, groups by
+parent folder) for "N projects live in other folders", until
+`POST /api/assets/projects/offer { dismissed: true }`.
+
+**Saving a project by name** needs no new save route: the client composes
+`<root>/<folder>`, and `GET /api/assets/projects/folder-name?name=` answers
+the folder (made safe for every filesystem, numbered past a taken one) and
+whether the plain name was taken.
+
 ## Moving the library
 
-Settings → Library → Change… offers two choices:
+Settings → Storage → Change… offers two choices:
 
 - **Move my library there.** This is a background job. It copies
   `Generations/` and `.nodebanana/`, verifies each file's size and hash,
@@ -164,11 +235,10 @@ undone.
 
 ## Importing existing projects
 
-Settings → Library → "Import generations from existing projects" indexes the
-files in each checked project's `generations/` folder where they are. The list
-starts with the projects the app has saved, and **Find projects in a folder…**
-adds every project under a folder you pick, however deeply nested
-(`POST /api/assets/import/scan`, `projects.ts`). A project is a folder whose
+`POST /api/assets/import` indexes the files in each project's
+`generations/` folder where they are; the auto-index runs it for known
+projects. `POST /api/assets/import/scan` (`projects.ts`) finds every project
+under a folder you pick, however deeply nested, for bringing projects in. A project is a folder whose
 `generations/` holds at least one media file; it is named from its newest
 workflow file, else its folder. The search goes up to eight levels down,
 never follows links, and skips hidden folders, `node_modules`, `__pycache__`,
@@ -197,7 +267,8 @@ agent routes, so run the app with `npm run dev` / `npm start` / Electron.
 | Upload/URL ingest, dedupe, downloads (SSRF-guarded) | `src/lib/assets/server/ingest.ts`, `download.ts` |
 | Location resolution, platform defaults | `src/lib/assets/server/paths.ts` |
 | Thumbnails (sharp), jobs (move, import, cleanup, export) | `src/lib/assets/server/thumbs.ts`, `jobs.ts` |
-| Finding the projects under a folder to import | `src/lib/assets/server/projects.ts` |
+| Finding the projects under a folder | `src/lib/assets/server/projects.ts` |
+| Project registry, known projects, the projects move | `src/lib/assets/server/registry.ts`, `known.ts`, `projectMove.ts` |
 | Unreadable files (what can't be opened, the load-time look) | `src/lib/assets/server/readable.ts` |
 | data: URLs and magic-byte sniffing (shared with the save routes) | `src/utils/dataUrl.ts`, `src/utils/mediaSniff.ts` |
 | Reveal / OS Trash (Electron bridge or OS tools) | `src/lib/assets/server/desktop.ts`, `electron/lib/bridge.cjs` |
@@ -206,7 +277,8 @@ agent routes, so run the app with `npm run dev` / `npm start` / Electron.
 | Recorder, snapshots, open workflow | `src/lib/assets/client/` |
 | Store integration | `src/store/execution/assetRecording.ts`, `workflowStore.ts` (`_currentRun`, `ensureWorkflowId`, `recordUiAsset`) |
 | Assets view | `src/store/assetStore.ts`, `src/components/assets/` |
-| Settings → Library | `src/components/settings/LibrarySettingsTab.tsx` |
+| Settings → Storage | `src/components/settings/LibrarySettingsTab.tsx` |
+| The page load's project report | `src/lib/assets/client/projects.ts`, `src/app/page.tsx` |
 
 ## Tests
 
