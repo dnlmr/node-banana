@@ -551,6 +551,8 @@ export interface ProjectsOverview {
   projects: KnownProject[];
   elsewhere: ProjectsElsewhere | null;
   offerDismissed: boolean;
+  /** Bytes in the projects inside the Node Banana folder (what "Move everything there" carries besides the library). */
+  rootBytes?: number;
 }
 
 /** POST /api/assets/projects/report: what this browser's localStorage knows, sent once per page load. */

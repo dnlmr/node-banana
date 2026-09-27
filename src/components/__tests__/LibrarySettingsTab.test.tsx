@@ -356,13 +356,13 @@ describe("LibrarySettingsTab", () => {
     it("names the projects that move along, or only the unsaved generations", async () => {
       mockBrowse({ success: true, path: NEW_ROOT });
       api.fetchProjects.mockResolvedValue(
-        makeOverview({ projects: [makeProject(`${ROOT}/Fox`, true), makeProject(`${ROOT}/Owl`, true)] })
+        makeOverview({ projects: [makeProject(`${ROOT}/Fox`, true), makeProject(`${ROOT}/Owl`, true)], rootBytes: 3.3 * 1024 ** 3 })
       );
       const { unmount } = await renderTab();
       fireEvent.click(screen.getByRole("button", { name: "Change…" }));
       await flush();
       expect(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ })).toHaveTextContent(
-        "Moves the 2 projects in your folder and your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are."
+        "Moves the 2 projects in your folder (3.3 GB) and your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are."
       );
       unmount();
 

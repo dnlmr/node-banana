@@ -954,11 +954,15 @@ export async function listProjects(): Promise<ProjectsOverview> {
   const rt = runtime();
   const { library, location, registry } = await projectsContext(rt);
   const projects = await knownProjects(location, library, registry);
-  const [elsewhere, state] = await Promise.all([
+  const inRoot = outermost(projects.filter((project) => project.inRoot).map((project) => project.dir));
+  const budget = sizeBudget();
+  const [elsewhere, state, rootSizes] = await Promise.all([
     summariseElsewhere(projects, { home: pathContext(rt).homedir }),
     registry.read(),
+    mapConcurrent(inRoot, 4, (dir) => folderBytes(dir, budget)),
   ]);
-  return { root: location.root, projects, elsewhere, offerDismissed: state.offer.dismissed };
+  const rootBytes = rootSizes.reduce((sum, size) => sum + size, 0);
+  return { root: location.root, projects, elsewhere, offerDismissed: state.offer.dismissed, rootBytes };
 }
 
 /**

@@ -115,6 +115,7 @@ describe("the projects move", () => {
     const overview = await listProjects();
     expect(overview.projects).toMatchObject([{ dir: dest, name: "Cats", relativePath: "Cats", inRoot: true }]);
     expect(overview.elsewhere).toBeNull();
+    expect(overview.rootBytes).toBeGreaterThan(bytes.length);
   });
 
   it("numbers past a taken name, and moves a nested project with its parent", async () => {

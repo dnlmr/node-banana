@@ -403,6 +403,7 @@ export async function fetchProjects(signal?: AbortSignal): Promise<ProjectsOverv
       : [],
     elsewhere: projectsElsewhere(body.elsewhere),
     offerDismissed: body.offerDismissed === true,
+    ...(typeof body.rootBytes === "number" ? { rootBytes: body.rootBytes } : {}),
   };
 }
 

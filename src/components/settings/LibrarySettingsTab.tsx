@@ -627,7 +627,9 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
   const moveDescription = !status.available
     ? "The current folder isn't available, so there is nothing to move."
     : inRootDirs.length > 0
-      ? `Moves the ${projectCount(inRootDirs.length)} in your folder and your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are.`
+      ? `Moves the ${projectCount(inRootDirs.length)} in your folder${
+          overview?.rootBytes ? ` (${formatBytes(overview.rootBytes)})` : ""
+        } and your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are.`
       : "Moves your unsaved generations, checks every file, then removes the originals. Projects in other folders stay where they are.";
 
   return (
