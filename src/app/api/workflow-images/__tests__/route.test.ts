@@ -157,6 +157,7 @@ describe("/api/workflow-images route", () => {
       ["no media type", `data:;base64,${png.toString("base64")}`],
       ["application/octet-stream", `data:application/octet-stream;base64,${png.toString("base64")}`],
       ["a ;charset= parameter", `data:image/png;charset=utf-8;base64,${png.toString("base64")}`],
+      ["a bare word for a type", `data:image;base64,${png.toString("base64")}`],
     ])("writes the exact bytes of a PNG declared with %s", async (_, imageData) => {
       const { data, filePath, bytes } = await save(imageData);
       expect(data.success).toBe(true);

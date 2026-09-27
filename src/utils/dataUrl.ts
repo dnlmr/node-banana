@@ -17,7 +17,7 @@
  */
 
 export interface DataUrlHeader {
-  /** The declared media type, lowercased and without parameters; "" when the URL declares none. */
+  /** The declared media type, lowercased and without parameters; "" when the URL declares none (or a bare word that is no media type). */
   mime: string;
   /** `;key=value` parameters, keys lowercased (e.g. `{ charset: "utf-8" }`). */
   params: Record<string, string>;
@@ -28,7 +28,7 @@ export interface DataUrlHeader {
 }
 
 export interface DataUrl {
-  /** The declared media type, lowercased and without parameters; "" when the URL declares none. */
+  /** The declared media type, lowercased and without parameters; "" when the URL declares none (or a bare word that is no media type). */
   mime: string;
   /** `;key=value` parameters, keys lowercased (e.g. `{ charset: "utf-8" }`). */
   params: Record<string, string>;
@@ -39,6 +39,7 @@ export interface DataUrl {
 /** A header longer than this is not a data: URL header (and scanning further would only cost time). */
 const MAX_HEADER_LENGTH = 1024;
 const MIME = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/;
+const TOKEN = /^[A-Za-z0-9!#$&^_.+-]+$/;
 const PARAM = /^([a-z0-9!#$%&'*+.^_`|~-]+)(?:=(.*))?$/i;
 const BASE64 = /^[A-Za-z0-9+/]*$/;
 
@@ -53,8 +54,13 @@ export function parseDataUrlHeader(value: unknown): DataUrlHeader | null {
   const comma = value.indexOf(",", 5);
   if (comma < 0 || comma - 5 > MAX_HEADER_LENGTH) return null;
   const [type, ...rest] = value.slice(5, comma).split(";");
-  const mime = type.trim().toLowerCase();
-  if (mime && !MIME.test(mime)) return null;
+  let mime = type.trim().toLowerCase();
+  if (mime && !MIME.test(mime)) {
+    // A bare word where the type goes (`data:image;base64,…`) is read as no type, as the Fetch
+    // spec reads it (browsers still show the image); anything else there is prose, not a data: URL.
+    if (!TOKEN.test(type)) return null;
+    mime = "";
+  }
   const params: Record<string, string> = {};
   let base64 = false;
   for (const part of rest) {

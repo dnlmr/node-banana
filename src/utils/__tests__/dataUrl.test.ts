@@ -38,6 +38,17 @@ describe("parseDataUrl", () => {
     expect(Buffer.from(url, "base64").equals(png)).toBe(false);
   });
 
+  it("decodes a URL whose type is a bare word as one with no type, as browsers do", () => {
+    for (const word of ["image", "png", "PNG"]) {
+      const parsed = parseDataUrl(`data:${word};base64,${png.toString("base64")}`);
+      expect([word, parsed?.mime]).toEqual([word, ""]);
+      expect(Buffer.from(parsed!.bytes).equals(png)).toBe(true);
+    }
+    // Prose still isn't a data: URL.
+    expect(parseDataUrl("data: prose, really")).toBeNull();
+    expect(parseDataUrl("data:two words, here")).toBeNull();
+  });
+
   it("decodes application/octet-stream like any other type", () => {
     const parsed = parseDataUrl(`data:application/octet-stream;base64,${png.toString("base64")}`);
     expect(parsed?.mime).toBe("application/octet-stream");
