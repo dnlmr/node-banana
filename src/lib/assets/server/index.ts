@@ -3,7 +3,7 @@
  *
  * Internal modules live next to this file (paths, fsutil, validate, media,
  * layout, library, search, workflows, runs, ingest, download, thumbs, jobs,
- * readable, desktop). Routes import only from here and must not reach into them.
+ * projects, readable, desktop). Routes import only from here and must not reach into them.
  *
  * All functions throw `LibraryError` for expected failures; routes map
  * `status` to the HTTP status and `message` to `{ error }` (and send
@@ -37,6 +37,8 @@ import type {
   PutRunResult,
   RecordAssetRequest,
   RecordAssetResult,
+  ScanProjectsRequest,
+  ScanProjectsResult,
   SetLibraryRootRequest,
   UploadTicket,
   WorkflowEntryUpdate,
@@ -57,6 +59,7 @@ import {
   runMove,
   validateMoveTarget,
 } from "./jobs";
+import { libraryLayout } from "./layout";
 import { AssetLibrary } from "./library";
 import {
   currentPathContext,
@@ -72,6 +75,7 @@ import {
   type PathContext,
   type ResolvedLocation,
 } from "./paths";
+import { findProjects, resolveScanRoot } from "./projects";
 import { assessReadable, findUnreadable } from "./readable";
 import { runMeta } from "./runs";
 import { Thumbnailer } from "./thumbs";
@@ -769,6 +773,27 @@ export async function startImport(request: ImportProjectsRequest): Promise<Libra
   const library = await readyLibrary();
   await assertNoMoveElsewhere(library);
   return rt.jobs.start("import", (job) => runImport(job, { library, thumbs: rt.thumbs }, dirs));
+}
+
+/**
+ * The Node Banana projects under a folder, nested ones included, for the
+ * import to offer (projects.ts). It only reads, so it runs during a move
+ * too. The library's own Generations and data folders and the thumbnail
+ * cache are never searched.
+ */
+export async function scanProjects(request: ScanProjectsRequest): Promise<ScanProjectsResult> {
+  const rt = runtime();
+  if (isHostedServer()) throw new LibraryError(HOSTED_REASON, 503, "unavailable");
+  if (!request || typeof request !== "object") throw new LibraryError("Invalid request", 400, "bad_request");
+  const root = await resolveScanRoot(request.root);
+  // A library that isn't available still has folders to leave out.
+  const location = (await activeLocation(rt).catch(() => null))?.location;
+  const exclude: string[] = [];
+  if (location) {
+    const layout = libraryLayout(location.root);
+    exclude.push(layout.generations, layout.data, location.cacheDir);
+  }
+  return findProjects(root, { exclude });
 }
 
 export async function startCleanup(request: CleanupRequest): Promise<LibraryJobStatus> {

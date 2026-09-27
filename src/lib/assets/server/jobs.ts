@@ -9,7 +9,7 @@ import { createHash, randomUUID } from "crypto";
 import { constants as fsConstants, promises as fs } from "fs";
 import path from "path";
 import { newAssetId, newRunId } from "../client/ids";
-import type { AssetModelRef, AssetRecord, LibraryJobStatus, LibraryJobType } from "../types";
+import { MAX_IMPORT_PROJECTS, type AssetModelRef, type AssetRecord, type LibraryJobStatus, type LibraryJobType } from "../types";
 import { errnoCode, LibraryError } from "./errors";
 import {
   atomicWriteFile,
@@ -423,7 +423,7 @@ export function normaliseImportDirs(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new LibraryError("Choose at least one project folder", 400, "bad_request");
   }
-  if (value.length > 500) throw new LibraryError("Too many folders", 400, "bad_request");
+  if (value.length > MAX_IMPORT_PROJECTS) throw new LibraryError("Too many folders", 400, "bad_request");
   const seen = new Set<string>();
   const dirs: string[] = [];
   for (const entry of value) {

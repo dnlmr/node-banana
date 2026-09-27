@@ -261,20 +261,22 @@ export function libraryFileName(
  * Normalises a project folder sent by the client. `path.resolve` fixes the
  * mixed separators the store builds on Windows (`C:\p/x`), a trailing
  * separator, and `.` segments; `..` is refused outright rather than resolved.
+ * `what` names the folder in the refusals.
  */
 export function normaliseProjectDir(
   value: unknown,
   platform: NodeJS.Platform = process.platform,
+  what = "project folder",
 ): string {
   const api = platform === "win32" ? path.win32 : path.posix;
   if (typeof value !== "string" || value.trim() === "" || value.length > 1024 || value.includes("\0")) {
-    throw new LibraryError("Invalid project folder", 400, "bad_request");
+    throw new LibraryError(`Invalid ${what}`, 400, "bad_request");
   }
   if (value.split(/[\\/]/).some((segment) => segment === "..")) {
-    throw new LibraryError("The project folder must not contain '..'", 400, "bad_request");
+    throw new LibraryError(`The ${what} must not contain '..'`, 400, "bad_request");
   }
   if (!api.isAbsolute(value)) {
-    throw new LibraryError("The project folder must be an absolute path", 400, "bad_request");
+    throw new LibraryError(`The ${what} must be an absolute path`, 400, "bad_request");
   }
   return api.resolve(value);
 }
