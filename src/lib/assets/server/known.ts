@@ -12,7 +12,7 @@ import os from "os";
 import path from "path";
 import type { KnownProject, ProjectFolderName, ProjectsElsewhere } from "../types";
 import { isInsideRoot, mapConcurrent, pathKey } from "./fsutil";
-import { findProjects, inspectProject, type ScanLimits, type ScannedProject } from "./projects";
+import { findProjects, inspectProject, isWorkflowFile, type ScanLimits, type ScannedProject } from "./projects";
 
 /** The Node Banana folder is walked on every listing, so it answers sooner than a search the user asked for. */
 export const KNOWN_SCAN_LIMITS: Partial<ScanLimits> = { timeoutMs: 5_000 };
@@ -209,6 +209,44 @@ export async function summariseElsewhere(
     bytes: sizes.reduce((sum, size) => sum + size, 0),
     groups: [...groups.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
   };
+}
+
+/** What the OS leaves in any folder, not the user's. */
+const OS_CLUTTER = new Set(["desktop.ini", "thumbs.db", "icon\r"]);
+
+/**
+ * Whether `folder` looks like a Node Banana folder already: it holds
+ * projects, and every visible entry at its top is a project, holds one, is
+ * a library's Generations folder or is a loose workflow file. A folder
+ * that is itself a project doesn't.
+ */
+export async function looksLikeProjectsFolder(
+  folder: string,
+  projectDirs: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): Promise<boolean> {
+  if (!projectDirs.length) return false;
+  if (projectDirs.some((dir) => pathKey(dir, platform) === pathKey(folder, platform))) return false;
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(folder, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || OS_CLUTTER.has(entry.name.toLowerCase())) continue;
+    const full = path.join(folder, entry.name);
+    if (entry.isDirectory()) {
+      if (projectDirs.some((dir) => isInsideRoot(full, dir, { platform, allowEqual: true }))) continue;
+      if (RESERVED_FOLDER_NAMES.includes(entry.name.toLowerCase())) continue;
+      // A project with no media yet is one too, though the search reports only those with media.
+      if (await inspectProject(full, { requireWorkflow: true })) continue;
+      return false;
+    }
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".json") && (await isWorkflowFile(full))) continue;
+    return false;
+  }
+  return true;
 }
 
 /** Windows device names, which no folder may be called (with any extension). */

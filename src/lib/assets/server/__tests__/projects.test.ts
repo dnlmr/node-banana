@@ -425,14 +425,14 @@ describe("scanProjects", () => {
 
   beforeEach(async () => {
     home = path.join(base, "home");
-    library = path.join(home, "Pictures", "Node Banana");
+    library = path.join(home, "Documents", "Node Banana");
     fs.mkdirSync(library, { recursive: true });
     await __resetAssetLibraryForTests({
       pathContext: {
         platform: process.platform,
         env: { NODE_BANANA_ASSET_LIBRARY: library },
         homedir: home,
-        winPicturesDir: path.join(home, "Pictures"),
+        winDocumentsDir: path.join(home, "Documents"),
       },
     });
   });
@@ -462,14 +462,40 @@ describe("scanProjects", () => {
     await expect(scanProjects({ root: path.join(library, "Generations") })).resolves.toMatchObject({ projects: [] });
   });
 
-  it("answers with the resolved folder and what it found", async () => {
-    project(path.join(root, "One"), ["a.png", "b.png"], { "flow.json": workflowFile("First") });
+  it("answers with the resolved folder and what it found, sized", async () => {
+    const one = project(path.join(root, "One"), ["a.png", "b.png"], { "flow.json": workflowFile("First") });
+    const bytes = ["generations/a.png", "generations/b.png", "flow.json"].reduce((sum, rel) => sum + fs.statSync(path.join(one, rel)).size, 0);
     await expect(scanProjects({ root: `${root}${path.sep}` })).resolves.toEqual({
       root,
-      projects: [{ dir: path.join(root, "One"), name: "First", mediaCount: 2 }],
+      projects: [{ dir: one, name: "First", mediaCount: 2, bytes }],
       truncated: false,
       unreadable: 0,
+      recommendUse: true,
     });
+  });
+
+  it("recommends using the folder when everything at its top is a project, holds one, or is a workflow file", async () => {
+    project(path.join(root, "One"));
+    project(path.join(root, "Group", "Two"));
+    fs.mkdirSync(path.join(root, "No media yet"));
+    fs.writeFileSync(path.join(root, "No media yet", "flow.json"), workflowFile("Draft"));
+    fs.writeFileSync(path.join(root, "loose.json"), workflowFile("Loose"));
+    fs.writeFileSync(path.join(root, ".DS_Store"), "");
+    expect((await scanProjects({ root })).recommendUse).toBe(true);
+
+    fs.writeFileSync(path.join(root, "notes.txt"), "not a project");
+    expect((await scanProjects({ root })).recommendUse).toBe(false);
+    fs.rmSync(path.join(root, "notes.txt"));
+    fs.mkdirSync(path.join(root, "Holiday photos"));
+    expect((await scanProjects({ root })).recommendUse).toBe(false);
+  });
+
+  it("does not recommend using a folder that is itself a project, or holds none", async () => {
+    project(root);
+    expect((await scanProjects({ root })).recommendUse).toBe(false);
+    const empty = path.join(base, "Empty");
+    fs.mkdirSync(empty);
+    expect((await scanProjects({ root: empty })).recommendUse).toBe(false);
   });
 
   it("refuses a bad request or folder before searching", async () => {

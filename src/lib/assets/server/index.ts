@@ -3,7 +3,7 @@
  *
  * Internal modules live next to this file (paths, fsutil, validate, media,
  * layout, library, search, workflows, runs, ingest, download, thumbs, jobs,
- * projects, readable, desktop). Routes import only from here and must not reach into them.
+ * projects, readable, desktop, registry, known, projectMove). Routes import only from here and must not reach into them.
  *
  * All functions throw `LibraryError` for expected failures; routes map
  * `status` to the HTTP status and `message` to `{ error }` (and send
@@ -27,25 +27,34 @@ import type {
   AssetRecord,
   AssetView,
   AssetWorkflowResult,
+  BringInProjectsRequest,
+  BringInProjectsResult,
   CleanupRequest,
   ExportAssetsRequest,
   ImportProjectsRequest,
+  KnownProject,
   LibraryJobStatus,
   LibraryStatus,
   LibraryWorkflowEntry,
+  ProjectFolderName,
+  ProjectsOfferRequest,
+  ProjectsOverview,
   PutRunRequest,
   PutRunResult,
   RecordAssetRequest,
   RecordAssetResult,
+  ReportProjectsRequest,
+  ReportProjectsResult,
   ScanProjectsRequest,
   ScanProjectsResult,
   SetLibraryRootRequest,
   UploadTicket,
   WorkflowEntryUpdate,
 } from "../types";
+import { MAX_IMPORT_PROJECTS } from "../types";
 import { openFolder, revealFile } from "./desktop";
 import { LibraryError, pausedError } from "./errors";
-import { hideOnWindows, isInsideRoot, sweepStaleTemps } from "./fsutil";
+import { hideOnWindows, isInsideRoot, mapConcurrent, pathKey, sweepStaleTemps } from "./fsutil";
 import { Ingestor, STALE_PARTIAL_MS } from "./ingest";
 import {
   isUnfinishedMoveTarget,
@@ -59,6 +68,15 @@ import {
   runMove,
   validateMoveTarget,
 } from "./jobs";
+import {
+  folderBytes,
+  generationsStamp,
+  listKnownProjects,
+  looksLikeProjectsFolder,
+  projectFolderName,
+  sizeBudget,
+  summariseElsewhere,
+} from "./known";
 import { libraryLayout } from "./layout";
 import { AssetLibrary } from "./library";
 import {
@@ -75,8 +93,10 @@ import {
   type PathContext,
   type ResolvedLocation,
 } from "./paths";
+import { normaliseMoveDirs, runProjectsMove } from "./projectMove";
 import { findProjects, resolveScanRoot } from "./projects";
 import { assessReadable, findUnreadable } from "./readable";
+import { ProjectRegistry, registryDir } from "./registry";
 import { runMeta } from "./runs";
 import { Thumbnailer } from "./thumbs";
 import { extOf, isAssetId, isMediaExtension, isSha256, requireSha256 } from "./validate";
@@ -98,7 +118,7 @@ export interface ServedFile {
 /* Runtime                                                             */
 /* ------------------------------------------------------------------ */
 
-const RUNTIME_VERSION = 1;
+const RUNTIME_VERSION = 2;
 const HOSTED_REASON = "The asset library needs Node Banana running on your own computer.";
 /** How often a healthy location is checked for its data folder (a drive can be unplugged). */
 const RECHECK_OK_MS = 60_000;
@@ -108,6 +128,8 @@ const RECHECK_FAILED_MS = 10_000;
 const CONFIG_STAMP_MS = 2_000;
 /** A move keeps its lock this long after switching, so the other build has re-read library.json before it writes again. */
 const MOVE_SETTLE_MS = CONFIG_STAMP_MS + 500;
+/** How soon the auto-index looks again when another job (or a move) was in its way. */
+const AUTO_INDEX_RETRY_MS = 30_000;
 
 interface ResolvedState {
   key: string;
@@ -132,6 +154,9 @@ interface Runtime {
   writeWaiters: (() => void)[];
   initialised: Set<string>;
   background: Set<Promise<unknown>>;
+  /** One per registry file, so this process's changes to it are serialised. */
+  registries: Map<string, ProjectRegistry>;
+  autoIndex: { running: boolean; again: boolean; retry: ReturnType<typeof setTimeout> | null };
 }
 
 const globalState = globalThis as typeof globalThis & { __nodeBananaAssetLibrary?: Runtime };
@@ -150,6 +175,8 @@ function createRuntime(): Runtime {
     writeWaiters: [],
     initialised: new Set<string>(),
     background: new Set<Promise<unknown>>(),
+    registries: new Map<string, ProjectRegistry>(),
+    autoIndex: { running: false, again: false, retry: null },
   } as unknown as Runtime;
   rt.ingest = new Ingestor({
     library: () => {
@@ -292,6 +319,7 @@ async function initialiseRoot(rt: Runtime, library: AssetLibrary): Promise<void>
     await counted(rt, () => library.writing(() => library.emptyExpiredTrash()));
   }
   await rt.thumbs?.trim();
+  scheduleAutoIndex(rt);
 }
 
 /**
@@ -517,6 +545,8 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
     rt.resolved = null;
     const next = await activeLocation(rt);
     if (next.ok) libraryFor(rt, next.location);
+    // A root this process used before is not initialised again, so its projects are looked at here.
+    scheduleAutoIndex(rt);
   };
 
   if (request.mode === "switch") {
@@ -793,7 +823,15 @@ export async function scanProjects(request: ScanProjectsRequest): Promise<ScanPr
     const layout = libraryLayout(location.root);
     exclude.push(layout.generations, layout.data, location.cacheDir);
   }
-  return findProjects(root, { exclude });
+  const result = await findProjects(root, { exclude });
+  // What a bring-in shows: each project's size, and whether the folder already looks like a Node Banana folder.
+  const budget = sizeBudget();
+  const sizes = await mapConcurrent(result.projects, 4, (project) => folderBytes(project.dir, budget));
+  return {
+    ...result,
+    projects: result.projects.map((project, index) => ({ ...project, bytes: sizes[index] })),
+    recommendUse: await looksLikeProjectsFolder(root, result.projects.map((project) => project.dir)),
+  };
 }
 
 export async function startCleanup(request: CleanupRequest): Promise<LibraryJobStatus> {
@@ -827,6 +865,261 @@ export function cancelJob(id: string): boolean {
   return runtime().jobs.cancel(id);
 }
 
+/* Projects ----------------------------------------------------------- */
+
+function registryFor(rt: Runtime, location: ResolvedLocation): ProjectRegistry {
+  let registry = rt.registries.get(location.registryFile);
+  if (!registry) {
+    registry = new ProjectRegistry(location.registryFile);
+    rt.registries.set(location.registryFile, registry);
+  }
+  return registry;
+}
+
+/** The ready library with its location and registry. */
+async function projectsContext(rt: Runtime): Promise<{ library: AssetLibrary; location: ResolvedLocation; registry: ProjectRegistry }> {
+  const { library, location } = await availableLibrary(rt);
+  await library.ready();
+  return { library, location, registry: registryFor(rt, location) };
+}
+
+async function knownProjects(location: ResolvedLocation, library: AssetLibrary, registry: ProjectRegistry): Promise<KnownProject[]> {
+  const layout = libraryLayout(location.root);
+  return listKnownProjects({
+    root: location.root,
+    exclude: [layout.generations, layout.data, location.cacheDir],
+    registryDirs: (await registry.read()).projects.map((project) => project.dir),
+    workflowDirs: library.workflowProjectPaths(),
+  });
+}
+
+/** Library-owned assets (trashed ones too): what a library move would carry. */
+function holdsLibraryAssets(library: AssetLibrary): boolean {
+  return library.allRecords().some((record) => record.file.root === "library");
+}
+
+/**
+ * Every project the app knows about, newest first, with the summary of the
+ * ones that live outside the Node Banana folder for the "Move them in" offer.
+ */
+export async function listProjects(): Promise<ProjectsOverview> {
+  const rt = runtime();
+  const { library, location, registry } = await projectsContext(rt);
+  const projects = await knownProjects(location, library, registry);
+  const [elsewhere, state] = await Promise.all([
+    summariseElsewhere(projects, { home: pathContext(rt).homedir }),
+    registry.read(),
+  ]);
+  return { root: location.root, projects, elsewhere, offerDismissed: state.offer.dismissed };
+}
+
+/**
+ * Takes in the projects one page load remembers, and once, the old
+ * workflows folder: while the Node Banana folder is still the default, a
+ * workflows folder the user had becomes it — switched to when nothing is
+ * saved here yet, else the library moves there.
+ */
+export async function reportProjects(request: ReportProjectsRequest): Promise<ReportProjectsResult> {
+  const rt = runtime();
+  if (!request || typeof request !== "object" || !Array.isArray(request.projects)) {
+    throw new LibraryError("Invalid request", 400, "bad_request");
+  }
+  const { library, location, registry } = await projectsContext(rt);
+  const added = await registry.add(request.projects);
+  let adopted = false;
+  if (location.source === "default" && !(await registry.read()).adoption.done) {
+    adopted = await adoptWorkflowsDir(library, location, registry, request.workflowsDir ?? null);
+  }
+  if (added.length) scheduleAutoIndex(rt);
+  const now = (await activeLocation(rt)).location;
+  return { adopted, root: now?.root ?? location.root };
+}
+
+async function isDirectory(dir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function adoptWorkflowsDir(
+  library: AssetLibrary,
+  location: ResolvedLocation,
+  registry: ProjectRegistry,
+  workflowsDir: string | null,
+): Promise<boolean> {
+  const dir = registryDir(workflowsDir);
+  const holds = holdsLibraryAssets(library);
+  if (!dir || !(await isDirectory(dir))) {
+    // Nothing to adopt from this page; the other build's page may still have one, unless this library is already in use.
+    if (holds) await registry.markAdopted();
+    return false;
+  }
+  if (pathKey(dir) === pathKey(location.root)) {
+    await registry.markAdopted();
+    return false;
+  }
+  try {
+    await setLibraryRoot({ root: dir, mode: holds ? "move" : "switch" });
+  } catch (error) {
+    // Another job is running: the next page load tries again.
+    if (error instanceof LibraryError && error.code === "busy") return false;
+    console.warn("[assets] could not adopt the workflows folder", dir, error);
+    await registry.markAdopted();
+    return false;
+  }
+  await registry.markAdopted();
+  return true;
+}
+
+/** Starts the projects job: each folder moves into the Node Banana folder. */
+async function startProjectsMove(
+  rt: Runtime,
+  library: AssetLibrary,
+  location: ResolvedLocation,
+  registry: ProjectRegistry,
+  value: unknown,
+): Promise<LibraryJobStatus> {
+  assertWritable(rt);
+  await assertNoMoveElsewhere(library);
+  const dirs = await normaliseMoveDirs(value, location.root);
+  if (!dirs.length) throw new LibraryError("Those projects are already in the Node Banana folder.", 400, "bad_request");
+  return rt.jobs.start("projects", (job) => runProjectsMove(job, { library, root: location.root, registry }, dirs));
+}
+
+/**
+ * Brings projects from another folder in. `use`: that folder becomes the
+ * Node Banana folder (the library moves there when it holds anything, else
+ * it is simply switched to). `move`: the project folders move into the
+ * Node Banana folder. `leave`: they are listed where they are, and indexed.
+ */
+export async function bringInProjects(request: BringInProjectsRequest): Promise<BringInProjectsResult> {
+  const rt = runtime();
+  if (!request || typeof request !== "object" || !Array.isArray(request.dirs)) {
+    throw new LibraryError("Invalid request", 400, "bad_request");
+  }
+  const { library, location, registry } = await projectsContext(rt);
+  const additions = request.dirs.map((dir) => ({ dir }));
+  switch (request.mode) {
+    case "use": {
+      const folder = registryDir(request.folder);
+      if (!folder) throw new LibraryError("Choose a folder", 400, "bad_request");
+      let job: LibraryJobStatus | null = null;
+      if (pathKey(folder) !== pathKey(location.root)) {
+        const holds = holdsLibraryAssets(library);
+        const status = await setLibraryRoot({ root: folder, mode: holds ? "move" : "switch" });
+        job = holds ? status.job : null;
+      }
+      await registry.add(additions);
+      scheduleAutoIndex(rt);
+      return { root: (await activeLocation(rt)).location?.root ?? null, job };
+    }
+    case "move": {
+      // Listed first, so the move carries their entries (and names) along.
+      await registry.add(additions);
+      const job = await startProjectsMove(rt, library, location, registry, request.dirs);
+      return { root: location.root, job };
+    }
+    case "leave": {
+      await registry.add(additions);
+      scheduleAutoIndex(rt);
+      return { root: location.root, job: null };
+    }
+    default:
+      throw new LibraryError("mode must be use, move or leave", 400, "bad_request");
+  }
+}
+
+/** "Keep where they are": the offer to move projects in is not made again. */
+export async function setProjectsOffer(request: ProjectsOfferRequest): Promise<void> {
+  if (!request || request.dismissed !== true) throw new LibraryError("dismissed must be true", 400, "bad_request");
+  const { registry } = await projectsContext(runtime());
+  await registry.dismissOffer();
+}
+
+/** The folder a new project called `name` would be saved in. */
+export async function getProjectFolderName(name: string): Promise<ProjectFolderName> {
+  if (typeof name !== "string") throw new LibraryError("name is required", 400, "bad_request");
+  const { location } = await availableLibrary(runtime());
+  return projectFolderName(location.root, name);
+}
+
+/* Auto-index --------------------------------------------------------- */
+
+/**
+ * Indexes, in place, the generations of every known project whose
+ * `generations/` changed since it was last indexed. Runs after the library
+ * is ready, when the root changes and when the registry gains folders; one
+ * pass at a time (a request meanwhile runs one more pass after it), and
+ * never alongside another job or a move — it looks again a little later.
+ */
+function scheduleAutoIndex(rt: Runtime): void {
+  if (isHostedServer()) return;
+  track(rt, autoIndex(rt));
+}
+
+function retryAutoIndex(rt: Runtime): void {
+  if (rt.autoIndex.retry) return;
+  rt.autoIndex.retry = setTimeout(() => {
+    rt.autoIndex.retry = null;
+    scheduleAutoIndex(rt);
+  }, AUTO_INDEX_RETRY_MS);
+  rt.autoIndex.retry.unref?.();
+}
+
+async function autoIndex(rt: Runtime): Promise<void> {
+  if (rt.autoIndex.running) {
+    rt.autoIndex.again = true;
+    return;
+  }
+  rt.autoIndex.running = true;
+  try {
+    do {
+      rt.autoIndex.again = false;
+      await autoIndexPass(rt);
+    } while (rt.autoIndex.again);
+  } finally {
+    rt.autoIndex.running = false;
+  }
+}
+
+async function autoIndexPass(rt: Runtime): Promise<void> {
+  const result = await activeLocation(rt);
+  if (!result.ok) return;
+  const location = result.location;
+  const library = libraryFor(rt, location);
+  await library.ready();
+  const registry = registryFor(rt, location);
+  const projects = await knownProjects(location, library, registry);
+  const indexed = new Map((await registry.read()).projects.map((project) => [pathKey(project.dir), project.indexedStamp]));
+  const stamps = await mapConcurrent(projects, 8, (project) => generationsStamp(project.dir));
+  const due = projects
+    .map((project, index) => ({ dir: project.dir, name: project.name, stamp: stamps[index] }))
+    .filter((project): project is { dir: string; name: string; stamp: string } =>
+      project.stamp !== null && indexed.get(pathKey(project.dir)) !== project.stamp,
+    )
+    .slice(0, MAX_IMPORT_PROJECTS);
+  if (!due.length) return;
+  if (rt.paused || rt.jobs.isRunning || (await library.movingElsewhere())) {
+    retryAutoIndex(rt);
+    return;
+  }
+  let job: LibraryJobStatus;
+  try {
+    job = rt.jobs.start("import", (ctx) => runImport(ctx, { library, thumbs: rt.thumbs }, due.map((project) => project.dir)), {
+      quiet: true,
+    });
+  } catch {
+    retryAutoIndex(rt);
+    return;
+  }
+  await rt.jobs.wait(job.id);
+  const finished = rt.jobs.get(job.id);
+  if (finished?.state === "done") await registry.setIndexed(due);
+  else if (finished?.state === "failed") retryAutoIndex(rt);
+}
+
 /* Test hooks --------------------------------------------------------- */
 
 /** Waits for every background task (scans, thumbnails, jobs) to settle. */
@@ -845,6 +1138,8 @@ export async function __drainAssetLibraryForTests(): Promise<void> {
 /** Drains and forgets the process-wide library state, so the next call resolves from scratch. */
 export async function __resetAssetLibraryForTests(options: { pathContext?: PathContext | null } = {}): Promise<void> {
   await __drainAssetLibraryForTests();
+  const retry = globalState.__nodeBananaAssetLibrary?.autoIndex?.retry;
+  if (retry) clearTimeout(retry);
   delete globalState.__nodeBananaAssetLibrary;
   resetPathCachesForTests();
   if (options.pathContext) runtime().ctxOverride = options.pathContext;
