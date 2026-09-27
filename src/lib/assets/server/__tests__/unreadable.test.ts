@@ -377,7 +377,9 @@ describe("records already in the library", () => {
       goodWav: write("p/generations/good.wav", makeWav()),
     };
     const records = {
-      badPng: projectRecord(files.badPng, "image", "png", "image/png"),
+      // Recorded live, like its twin below: an imported record beside a live one of
+      // the same bytes is forgotten at start (forgetDuplicateImports)
+      badPng: projectRecord(files.badPng, "image", "png", "image/png", { imported: undefined }),
       // The same bytes with a size the client sent: they share the verdict.
       badPngSized: projectRecord(files.badPng, "image", "png", "image/png", { width: 8, height: 6, imported: undefined }),
       badOctet: projectRecord(files.badOctet, "image", "png", "image/png"),
