@@ -50,7 +50,7 @@ function FirstRunCard({ id, root }: { id: string; root: string }) {
       role="status"
       data-testid="assets-first-run"
       className={`${CHROME_SURFACE} flex items-center gap-2.5 rounded-xl p-1.5 pl-3`}
-      style={{ width: 268 }}
+      style={{ width: 280 }}
     >
       <FolderCheck size={16} strokeWidth={1.75} className="shrink-0 text-neutral-400" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
