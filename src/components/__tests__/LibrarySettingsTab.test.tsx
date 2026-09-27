@@ -667,6 +667,24 @@ describe("LibrarySettingsTab", () => {
       expect(screen.getByRole("alert")).toHaveTextContent('"/Users/me/Gone" doesn\'t exist.');
     });
 
+    it("opens one folder picker at a time", async () => {
+      // A picker stays open until the user answers it
+      mockFetch.mockImplementation(() => new Promise(() => {}));
+      await renderTab();
+      await find();
+      expect(screen.getByRole("button", { name: "Choosing…" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Change…" })).toBeDisabled();
+    });
+
+    it("won't open the import picker while Change…'s is open", async () => {
+      mockFetch.mockImplementation(() => new Promise(() => {}));
+      await renderTab();
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeDisabled();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it("shows the picker's own error", async () => {
       mockBrowse({ success: false, error: "No folder picker on this system" }, "import");
       await renderTab();

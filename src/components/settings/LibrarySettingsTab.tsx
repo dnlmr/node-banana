@@ -477,7 +477,9 @@ export function LibrarySettingsTab() {
   // the change be refused. A location that resolved but cannot be written
   // (an unplugged drive) is different: another folder is the fix.
   const unreachable = !status.available && !status.root;
-  const changeDisabled = fromEnv || unreachable || busy || choosing;
+  // One folder picker at a time: Change… and "Find projects in a folder…" both open one
+  const pickerOpen = choosing || finding?.phase === "choosing";
+  const changeDisabled = fromEnv || unreachable || busy || pickerOpen;
   const changeTitle = fromEnv
     ? "Set by the NODE_BANANA_ASSET_LIBRARY environment variable"
     : unreachable
@@ -773,7 +775,7 @@ export function LibrarySettingsTab() {
                 </DialogEyebrow>
               )}
               <div className="ml-auto flex shrink-0 items-center gap-1">
-                <DialogTextButton onClick={() => void findProjects()} disabled={finding !== null}>
+                <DialogTextButton onClick={() => void findProjects()} disabled={finding !== null || pickerOpen}>
                   {finding?.phase === "choosing" ? "Choosing…" : "Find projects in a folder…"}
                 </DialogTextButton>
                 {projects.length > 0 && (
