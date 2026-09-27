@@ -13,7 +13,7 @@ import { AssetContextMenu } from "./AssetContextMenu";
 import { AssetDetail, toggleDetailFullscreen, useDetailFullscreen } from "./AssetDetail";
 import { AssetGrid, gridNavigation } from "./AssetGrid";
 import { AssetNotice } from "./AssetNotice";
-import { AssetsHeader } from "./AssetsHeader";
+import { AssetsHeader, AssetsSortMenu } from "./AssetsHeader";
 import { AssetsRail } from "./AssetsRail";
 import { BulkBar } from "./BulkBar";
 import { ConfirmDelete } from "./ConfirmDelete";
@@ -171,6 +171,7 @@ function Popovers() {
   if (popover.kind === "menu") {
     return <AssetContextMenu x={popover.x} y={popover.y} anchorId={popover.anchorId} useSelection={popover.useSelection} />;
   }
+  if (popover.kind === "sort") return <AssetsSortMenu x={popover.x} y={popover.y} />;
   return (
     <BulkTagEditor
       selection={popover.selection}

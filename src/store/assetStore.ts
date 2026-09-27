@@ -127,6 +127,8 @@ export interface AssetNotice {
  */
 export type AssetPopover =
   | { kind: "menu"; x: number; y: number; anchorId: string; useSelection: boolean }
+  /** The header's sort menu, hanging from its button (x, y: the menu's top-left). */
+  | { kind: "sort"; x: number; y: number }
   | {
       kind: "tags";
       x: number;
