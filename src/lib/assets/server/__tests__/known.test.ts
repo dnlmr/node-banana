@@ -13,6 +13,7 @@ import {
   summariseElsewhere,
   uniqueFolderName,
 } from "../known";
+import type { KnownProject } from "../../types";
 import { isWorkflowFile } from "../projects";
 import { makePng, tempDir } from "./helpers";
 
@@ -173,7 +174,7 @@ describe("summariseElsewhere", () => {
     fs.writeFileSync(path.join(b, "big.bin"), Buffer.alloc(1000));
     const nested = project(path.join(b, "Nested"), { name: "N" });
     const c = project(path.join(base, "Other", "C"), { name: "C" });
-    const known = [a, b, nested, c].map((dir) => ({
+    const known: KnownProject[] = [a, b, nested, c].map((dir) => ({
       dir,
       name: path.basename(dir),
       relativePath: null,
