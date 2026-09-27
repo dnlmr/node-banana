@@ -450,6 +450,38 @@ export interface ImportProjectsRequest {
   projectDirs: string[];
 }
 
+/** Most project folders one import takes, and one search reports. */
+export const MAX_IMPORT_PROJECTS = 500;
+
+/** POST /api/assets/import/scan: find the Node Banana projects under a folder, nested ones included. */
+export interface ScanProjectsRequest {
+  root: string;
+}
+
+/** A folder whose `generations` subfolder holds media: what an import of it would index. */
+export interface FoundProject {
+  /** Absolute folder. */
+  dir: string;
+  /** The name in its newest workflow file, else the folder's own name. */
+  name: string;
+  /** Media files directly in its `generations` folder, counted up to {@link FOUND_MEDIA_COUNT_CAP}. */
+  mediaCount: number;
+}
+
+/** `FoundProject.mediaCount` stops counting here. */
+export const FOUND_MEDIA_COUNT_CAP = 10_000;
+
+export interface ScanProjectsResult {
+  /** The folder searched, as the server resolved it. */
+  root: string;
+  /** Sorted by path. */
+  projects: FoundProject[];
+  /** The search stopped at a bound (folders visited, projects found, time) before it was done. */
+  truncated: boolean;
+  /** Folders that could not be read (no permission, gone); the search went on without them. */
+  unreadable: number;
+}
+
 /** POST /api/assets/reveal: show an asset's file, or the library folder, in Finder/Explorer. */
 export type RevealRequest = { id: string } | { target: "root" };
 
@@ -549,6 +581,7 @@ export const ASSET_ROUTES = {
   library: "/api/assets/library", // GET LibraryStatus, PUT SetLibraryRootRequest
   job: (jobId: string) => `/api/assets/jobs/${jobId}`, // GET LibraryJobStatus, DELETE cancels
   importProjects: "/api/assets/import", // POST ImportProjectsRequest → { job }
+  scanProjects: "/api/assets/import/scan", // POST ScanProjectsRequest → ScanProjectsResult
   cleanup: "/api/assets/cleanup", // POST CleanupRequest → { job }
   exportAssets: "/api/assets/export", // POST ExportAssetsRequest → { job }
 } as const;

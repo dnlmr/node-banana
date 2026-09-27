@@ -16,6 +16,7 @@ import { GET } from "../route";
 
 const LIBRARY_TITLE = "Choose where Node Banana saves your media";
 const EXPORT_TITLE = "Choose a folder to export to";
+const IMPORT_TITLE = "Choose a folder of Node Banana projects";
 const DEFAULT_TITLE = "Select a folder to save workflows";
 
 const realPlatform = process.platform;
@@ -66,6 +67,18 @@ describe("GET /api/browse-directory picker title", () => {
     onPlatform("win32");
     await pick("?purpose=export");
     expect(writeFile.mock.calls[0][1]).toContain(`[FolderPicker]::Show("${EXPORT_TITLE}")`);
+  });
+
+  it("asks for a folder of projects when ?purpose=import (Find projects in a folder…), on every platform", async () => {
+    onPlatform("darwin");
+    await pick("?purpose=import");
+    expect(exec.mock.calls[0][0]).toContain(`choose folder with prompt "${IMPORT_TITLE}"`);
+    onPlatform("win32");
+    await pick("?purpose=import");
+    expect(writeFile.mock.calls[0][1]).toContain(`[FolderPicker]::Show("${IMPORT_TITLE}")`);
+    onPlatform("linux");
+    await pick("?purpose=import");
+    expect(exec.mock.calls.at(-1)?.[0]).toContain(`--title="${IMPORT_TITLE}"`);
   });
 
   it("asks where to save media when ?purpose=library (macOS)", async () => {

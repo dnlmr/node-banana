@@ -24,6 +24,7 @@ import * as exists from "../exists/route";
 import * as exportAssets from "../export/route";
 import * as facets from "../facets/route";
 import * as importProjects from "../import/route";
+import * as scanProjects from "../import/scan/route";
 import * as job from "../jobs/[jobId]/route";
 import * as library from "../library/route";
 import * as media from "../media/[sha256]/route";
@@ -57,6 +58,7 @@ const ROUTES: { path: string; module: Record<string, unknown>; params: Record<st
   { path: "/api/assets/library", module: library, params: {} },
   { path: "/api/assets/jobs/job_1", module: job, params: { jobId: "job_1" } },
   { path: "/api/assets/import", module: importProjects, params: {} },
+  { path: "/api/assets/import/scan", module: scanProjects, params: {} },
   { path: "/api/assets/cleanup", module: cleanup, params: {} },
   { path: "/api/assets/export", module: exportAssets, params: {} },
 ];
@@ -98,6 +100,7 @@ describe("every /api/assets route", () => {
     expect(upload.maxDuration).toBe(600);
     expect(media.maxDuration).toBe(600);
     expect(importProjects.maxDuration).toBe(60);
+    expect(scanProjects.maxDuration).toBe(60);
     expect(cleanup.maxDuration).toBe(60);
     expect(exportAssets.maxDuration).toBe(60);
   });

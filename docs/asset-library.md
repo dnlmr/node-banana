@@ -162,6 +162,24 @@ Settings → Library → Change… offers two choices:
 A move that stops part-way is detected at the next start and its partial copy
 undone.
 
+## Importing existing projects
+
+Settings → Library → "Import generations from existing projects" indexes the
+files in each checked project's `generations/` folder where they are. The list
+starts with the projects the app has saved, and **Find projects in a folder…**
+adds every project under a folder you pick, however deeply nested
+(`POST /api/assets/import/scan`, `projects.ts`). A project is a folder whose
+`generations/` holds at least one media file; it is named from its newest
+workflow file, else its folder. The search goes up to eight levels down,
+never follows links, and skips hidden folders, `node_modules`, `__pycache__`,
+system folders and paths over 1,024 characters (the import refuses both),
+the library's own `Generations/`, `.nodebanana/` and thumbnail cache (also
+when either is reached through a link), and a project's `generations/`,
+`inputs/`, `outputs/` and `.images/` (its other subfolders are still
+searched, since projects nest). It
+stops after 20,000 folders, 500 projects or 15 seconds (even when a folder
+never answers) and says so, and says how many folders it couldn't read.
+
 ## Access
 
 `/api/assets/*` and the older routes that take a file path answer only Node
@@ -179,6 +197,7 @@ agent routes, so run the app with `npm run dev` / `npm start` / Electron.
 | Upload/URL ingest, dedupe, downloads (SSRF-guarded) | `src/lib/assets/server/ingest.ts`, `download.ts` |
 | Location resolution, platform defaults | `src/lib/assets/server/paths.ts` |
 | Thumbnails (sharp), jobs (move, import, cleanup, export) | `src/lib/assets/server/thumbs.ts`, `jobs.ts` |
+| Finding the projects under a folder to import | `src/lib/assets/server/projects.ts` |
 | Unreadable files (what can't be opened, the load-time look) | `src/lib/assets/server/readable.ts` |
 | data: URLs and magic-byte sniffing (shared with the save routes) | `src/utils/dataUrl.ts`, `src/utils/mediaSniff.ts` |
 | Reveal / OS Trash (Electron bridge or OS tools) | `src/lib/assets/server/desktop.ts`, `electron/lib/bridge.cjs` |

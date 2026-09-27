@@ -424,7 +424,7 @@ All routes in `src/app/api/`:
 | `/api/assets/thumb/[sha256]` | default | 320/640 px webp thumbnails (204 when none) |
 | `/api/assets/facets`, `/bulk`, `/exists`, `/reveal` | default | Filter counts, bulk tag/favourite/trash/restore/delete, carousel existence, Show in Finder/Explorer |
 | `/api/assets/media`, `/runs/[id]`, `/workflows/[id]` | default | Snapshot media, run snapshots, workflow classification |
-| `/api/assets/library`, `/jobs/[id]`, `/import`, `/cleanup`, `/export` | default | Library status/location, background jobs (move, import projects, clean up, export) |
+| `/api/assets/library`, `/jobs/[id]`, `/import`, `/import/scan`, `/cleanup`, `/export` | default | Library status/location, background jobs (move, import projects, clean up, export), finding the projects under a folder to import |
 
 ## localStorage Keys
 

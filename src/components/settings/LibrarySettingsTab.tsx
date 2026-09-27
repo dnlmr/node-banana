@@ -8,17 +8,22 @@ import {
   fetchJob,
   fetchLibraryStatus,
   revealLibraryRoot,
+  scanProjects,
   setLibraryRoot,
   startCleanup,
   startImport,
 } from "@/lib/assets/client/api";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
-import type {
-  LibraryJobStatus,
-  LibraryJobType,
-  LibraryRootSource,
-  LibraryStatus,
-  SetLibraryRootRequest,
+import {
+  FOUND_MEDIA_COUNT_CAP,
+  MAX_IMPORT_PROJECTS,
+  type FoundProject,
+  type LibraryJobStatus,
+  type LibraryJobType,
+  type LibraryRootSource,
+  type LibraryStatus,
+  type ScanProjectsResult,
+  type SetLibraryRootRequest,
 } from "@/lib/assets/types";
 import { loadSaveConfigs } from "@/store/utils/localStorage";
 import {
@@ -128,10 +133,12 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-/** A project folder the saved workflow configs point at, once per folder. */
+/** A project folder the import offers: one the saved workflow configs point at, or one a search found. */
 export interface ProjectFolder {
   dir: string;
   name: string;
+  /** Media files in its generations folder, once a search has counted them. */
+  mediaCount?: number;
 }
 
 /** Project folders from `node-banana-workflow-configs`, most recently saved first. */
@@ -155,6 +162,68 @@ export function listProjectFolders(): ProjectFolder[] {
     folders.push({ dir, name });
   }
   return folders;
+}
+
+/**
+ * The import list with the projects a search found: a folder already listed
+ * keeps its row (and its check) and gains the file count, a new one is added
+ * at the end. Folders compare as the server's file system does. `added` are
+ * the new rows' folders.
+ */
+export function mergeFoundProjects(
+  rows: readonly ProjectFolder[],
+  found: readonly FoundProject[],
+  platform: string
+): { rows: ProjectFolder[]; added: string[] } {
+  const merged = [...rows];
+  const added: string[] = [];
+  for (const project of found) {
+    const index = merged.findIndex((row) => samePath(row.dir, project.dir, platform));
+    if (index >= 0) {
+      merged[index] = { ...merged[index], mediaCount: project.mediaCount };
+      continue;
+    }
+    merged.push({ dir: project.dir, name: project.name, mediaCount: project.mediaCount });
+    added.push(project.dir);
+  }
+  return { rows: merged, added };
+}
+
+/** The line under the import list once a search is done. */
+export function describeScan(result: ScanProjectsResult): string {
+  const count = result.projects.length;
+  const parts = [
+    count === 0
+      ? `No Node Banana projects in ${result.root}.`
+      : `Found ${count.toLocaleString()} ${count === 1 ? "project" : "projects"} in ${result.root}.`,
+  ];
+  if (result.truncated) parts.push("The search stopped early; pick a smaller folder to see the rest.");
+  if (result.unreadable > 0) {
+    parts.push(`${result.unreadable.toLocaleString()} ${result.unreadable === 1 ? "folder" : "folders"} couldn't be read.`);
+  }
+  return parts.join(" ");
+}
+
+/** "1 file", "12 files", "10,000+ files" (the search stops counting there). */
+export function formatFileCount(count: number): string {
+  const capped = count >= FOUND_MEDIA_COUNT_CAP ? "+" : "";
+  return `${count.toLocaleString()}${capped} ${count === 1 ? "file" : "files"}`;
+}
+
+/**
+ * Opens the native folder picker (`/api/browse-directory`) with the title
+ * for `purpose`. Null when the user cancels; throws with the picker's reason.
+ */
+async function pickFolder(purpose: "library" | "import"): Promise<string | null> {
+  let result: { success?: boolean; cancelled?: boolean; path?: string | null; error?: string };
+  try {
+    const response = await fetch(`/api/browse-directory?purpose=${purpose}`);
+    result = await response.json();
+  } catch (error) {
+    throw new Error(`Failed to open the folder picker: ${errorMessage(error, "Unknown error")}`);
+  }
+  if (!result.success) throw new Error(result.error || "Failed to open the folder picker");
+  return result.cancelled || !result.path ? null : result.path;
 }
 
 /** A boxed line under the location: a warning, a sync note, why the library is off. */
@@ -285,8 +354,13 @@ export function LibrarySettingsTab() {
   const [starting, setStarting] = useState(false);
   // The job a Cancel was sent for, until the job reports it has stopped
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-  const [projects] = useState(listProjectFolders);
+  // The saved projects, then any a search found
+  const [projects, setProjects] = useState<ProjectFolder[]>(listProjectFolders);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(projects.map((project) => project.dir)));
+  // "Find projects in a folder…": picking the folder, then searching it
+  const [finding, setFinding] = useState<{ phase: "choosing" } | { phase: "searching"; folder: string } | null>(null);
+  // One line under the import list: what the last search found, or why it failed
+  const [findLine, setFindLine] = useState<{ text: string; error: boolean } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -403,7 +477,9 @@ export function LibrarySettingsTab() {
   // the change be refused. A location that resolved but cannot be written
   // (an unplugged drive) is different: another folder is the fix.
   const unreachable = !status.available && !status.root;
-  const changeDisabled = fromEnv || unreachable || busy || choosing;
+  // One folder picker at a time: Change… and "Find projects in a folder…" both open one
+  const pickerOpen = choosing || finding?.phase === "choosing";
+  const changeDisabled = fromEnv || unreachable || busy || pickerOpen;
   const changeTitle = fromEnv
     ? "Set by the NODE_BANANA_ASSET_LIBRARY environment variable"
     : unreachable
@@ -412,6 +488,12 @@ export function LibrarySettingsTab() {
         ? BUSY_REASON
         : undefined;
   const allSelected = projects.length > 0 && projects.every((project) => selected.has(project.dir));
+  const tooManySelected = selected.size > MAX_IMPORT_PROJECTS;
+  const importTitle = busy
+    ? BUSY_REASON
+    : tooManySelected
+      ? `Import at most ${MAX_IMPORT_PROJECTS} projects at a time`
+      : undefined;
 
   const reveal = async () => {
     setFeedback(null);
@@ -426,23 +508,47 @@ export function LibrarySettingsTab() {
     setChoosing(true);
     setFeedback(null);
     try {
-      const response = await fetch("/api/browse-directory?purpose=library");
-      const result = await response.json();
-      if (!result.success) {
-        setFeedback({ text: result.error || "Failed to open the folder picker", error: true });
-        return;
-      }
-      if (result.cancelled || !result.path) return;
-      if (samePath(result.path, status.root, status.platform)) {
+      const picked = await pickFolder("library");
+      if (!picked) return;
+      if (samePath(picked, status.root, status.platform)) {
         setFeedback({ text: "That folder is already your library.", error: false });
         return;
       }
       setApplyError(null);
-      setPendingRoot(result.path);
+      setPendingRoot(picked);
     } catch (error) {
-      setFeedback({ text: `Failed to open the folder picker: ${errorMessage(error, "Unknown error")}`, error: true });
+      setFeedback({ text: errorMessage(error, "Failed to open the folder picker"), error: true });
     } finally {
       setChoosing(false);
+    }
+  };
+
+  // Searches a folder for projects, nested ones included, and adds the new
+  // ones to the import list, checked. A cancelled picker changes nothing.
+  const findProjects = async () => {
+    setFinding({ phase: "choosing" });
+    try {
+      let folder: string | null;
+      try {
+        folder = await pickFolder("import");
+      } catch (error) {
+        setFindLine({ text: errorMessage(error, "Failed to open the folder picker"), error: true });
+        return;
+      }
+      if (!folder) return;
+      setFindLine(null);
+      setFinding({ phase: "searching", folder });
+      try {
+        const result = await scanProjects(folder);
+        const merged = mergeFoundProjects(projects, result.projects, status.platform);
+        setProjects(merged.rows);
+        setSelected((previous) => new Set([...previous, ...merged.added]));
+        setFindLine({ text: describeScan(result), error: false });
+      } catch (error) {
+        setFindLine({ text: errorMessage(error, `Could not search ${folder}.`), error: true });
+      }
+    } finally {
+      setFinding(null);
     }
   };
 
@@ -647,8 +753,8 @@ export function LibrarySettingsTab() {
               variant="outline"
               size="md"
               className="h-8 shrink-0"
-              disabled={busy || selected.size === 0}
-              title={busy ? BUSY_REASON : undefined}
+              disabled={busy || selected.size === 0 || tooManySelected}
+              title={importTitle}
               onClick={() =>
                 void runJob(() =>
                   startImport({ projectDirs: projects.filter((project) => selected.has(project.dir)).map((project) => project.dir) })
@@ -659,19 +765,29 @@ export function LibrarySettingsTab() {
             </DialogButton>
           </DialogRow>
 
-          {projects.length > 0 && (
-            <fieldset className="-mt-1 pb-3.5">
-              <legend className="sr-only">Projects to import</legend>
-              <div className="flex items-center justify-between gap-4 pb-1.5">
+          {/* min-w-0: a fieldset is otherwise as wide as its longest path, however truncated */}
+          <fieldset className="-mt-1 min-w-0 pb-3.5">
+            <legend className="sr-only">Projects to import</legend>
+            <div className="flex items-center justify-between gap-4 pb-1.5">
+              {projects.length > 0 && (
                 <DialogEyebrow>
                   {projects.length} {projects.length === 1 ? "project" : "projects"}
                 </DialogEyebrow>
-                <DialogTextButton
-                  onClick={() => setSelected(allSelected ? new Set() : new Set(projects.map((project) => project.dir)))}
-                >
-                  {allSelected ? "Select none" : "Select all"}
+              )}
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                <DialogTextButton onClick={() => void findProjects()} disabled={finding !== null || pickerOpen}>
+                  {finding?.phase === "choosing" ? "Choosing…" : "Find projects in a folder…"}
                 </DialogTextButton>
+                {projects.length > 0 && (
+                  <DialogTextButton
+                    onClick={() => setSelected(allSelected ? new Set() : new Set(projects.map((project) => project.dir)))}
+                  >
+                    {allSelected ? "Select none" : "Select all"}
+                  </DialogTextButton>
+                )}
               </div>
+            </div>
+            {projects.length > 0 && (
               <ul className="max-h-[164px] overflow-y-auto rounded-lg border border-card-border divide-y divide-card-border">
                 {projects.map((project) => (
                   <li key={project.dir}>
@@ -682,18 +798,38 @@ export function LibrarySettingsTab() {
                         onChange={() => toggleProject(project.dir)}
                         className="mt-0.5 w-4 h-4 shrink-0 rounded accent-neutral-200"
                       />
-                      <span className="min-w-0">
+                      <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] leading-[18px] text-neutral-100">{project.name}</span>
                         <span className="block truncate font-mono text-[11px] leading-4 text-ink-3" title={project.dir}>
                           {project.dir}
                         </span>
                       </span>
+                      {project.mediaCount !== undefined && (
+                        <span className="shrink-0 font-mono text-[11px] leading-[18px] text-ink-3 tabular-nums">
+                          {formatFileCount(project.mediaCount)}
+                        </span>
+                      )}
                     </label>
                   </li>
                 ))}
               </ul>
-            </fieldset>
-          )}
+            )}
+            {finding?.phase === "searching" ? (
+              <p role="status" className="mt-2 flex items-center gap-2 text-xs leading-4 text-neutral-400">
+                <DialogSpinner className="size-3.5 shrink-0" />
+                <span className="min-w-0 break-words">Searching {finding.folder}…</span>
+              </p>
+            ) : (
+              findLine && (
+                <p
+                  role={findLine.error ? "alert" : "status"}
+                  className={cn("mt-2 text-xs leading-4 break-words", findLine.error ? "text-error" : "text-neutral-400")}
+                >
+                  {findLine.text}
+                </p>
+              )
+            )}
+          </fieldset>
 
           {jobRow("import")}
 

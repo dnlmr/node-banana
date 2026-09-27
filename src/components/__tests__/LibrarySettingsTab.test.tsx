@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
-import type { LibraryJobStatus, LibraryStatus } from "@/lib/assets/types";
+import type { LibraryJobStatus, LibraryStatus, ScanProjectsResult } from "@/lib/assets/types";
 import {
   COUNT_POLL_MS,
   JOB_POLL_MS,
   LibrarySettingsTab,
+  describeScan,
   formatBytes,
+  formatFileCount,
   listProjectFolders,
+  mergeFoundProjects,
   revealLabel,
 } from "@/components/settings/LibrarySettingsTab";
 
@@ -15,6 +18,7 @@ const api = vi.hoisted(() => ({
   setLibraryRoot: vi.fn(),
   revealLibraryRoot: vi.fn(),
   startImport: vi.fn(),
+  scanProjects: vi.fn(),
   startCleanup: vi.fn(),
   fetchJob: vi.fn(),
   cancelJob: vi.fn(),
@@ -63,9 +67,9 @@ const makeJob = (overrides: Partial<LibraryJobStatus> = {}): LibraryJobStatus =>
 
 const mockFetch = vi.fn();
 
-function mockBrowse(result: Record<string, unknown>) {
+function mockBrowse(result: Record<string, unknown>, purpose: "library" | "import" = "library") {
   mockFetch.mockImplementation((url: string) =>
-    url === "/api/browse-directory?purpose=library"
+    url === `/api/browse-directory?purpose=${purpose}`
       ? Promise.resolve({ ok: true, json: () => Promise.resolve(result) })
       : Promise.reject(new Error(`unexpected fetch ${url}`))
   );
@@ -496,16 +500,230 @@ describe("LibrarySettingsTab", () => {
       screen.getAllByRole("checkbox").forEach((box) => expect(box).toBeChecked());
     });
 
-    it("has nothing to import without saved projects", async () => {
+    it("has nothing to import without saved projects, but can still find some", async () => {
       await renderTab();
       expect(screen.getByText("No saved projects found.")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeEnabled();
+      expect(screen.queryByRole("button", { name: "Select all" })).not.toBeInTheDocument();
     });
 
     it("survives unreadable saved configs", async () => {
       localStorage.setItem(CONFIGS_KEY, "{not json");
       await renderTab();
       expect(screen.getByText("No saved projects found.")).toBeInTheDocument();
+    });
+  });
+
+  describe("finding projects in a folder", () => {
+    const WORK = "/Users/me/Work";
+    const found = (overrides: Partial<ScanProjectsResult> = {}): ScanProjectsResult => ({
+      root: WORK,
+      projects: [
+        { dir: `${WORK}/Campaign`, name: "Spring campaign", mediaCount: 12 },
+        { dir: `${WORK}/Campaign/Variations/Night`, name: "Night", mediaCount: 1 },
+      ],
+      truncated: false,
+      unreadable: 0,
+      ...overrides,
+    });
+
+    async function find() {
+      fireEvent.click(screen.getByRole("button", { name: "Find projects in a folder…" }));
+      await flush();
+    }
+
+    it("asks the import picker for a folder, lists what the search found, checked, and imports it", async () => {
+      mockBrowse({ success: true, path: WORK }, "import");
+      api.scanProjects.mockResolvedValue(found());
+      api.startImport.mockResolvedValue(makeJob({ id: "import-2", type: "import", total: 13 }));
+      await renderTab();
+      await find();
+
+      expect(mockFetch).toHaveBeenCalledWith("/api/browse-directory?purpose=import");
+      expect(api.scanProjects).toHaveBeenCalledWith(WORK);
+      const campaign = screen.getByRole("checkbox", { name: /Spring campaign/ });
+      expect(campaign).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: /Night/ })).toBeChecked();
+      expect(within(campaign.closest("label")!).getByText(`${WORK}/Campaign`)).toBeInTheDocument();
+      expect(within(campaign.closest("label")!).getByText("12 files")).toBeInTheDocument();
+      expect(screen.getByText("1 file")).toBeInTheDocument();
+      expect(screen.getByText("2 projects")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(`Found 2 projects in ${WORK}.`);
+
+      fireEvent.click(screen.getByRole("button", { name: "Import" }));
+      await flush();
+      expect(api.startImport).toHaveBeenCalledWith({ projectDirs: [`${WORK}/Campaign`, `${WORK}/Campaign/Variations/Night`] });
+    });
+
+    it("says it is searching the folder until the search answers", async () => {
+      mockBrowse({ success: true, path: WORK }, "import");
+      let answer!: (result: ScanProjectsResult) => void;
+      api.scanProjects.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+      await renderTab();
+      await find();
+
+      expect(screen.getByRole("status")).toHaveTextContent(`Searching ${WORK}…`);
+      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeDisabled();
+
+      await act(async () => answer(found()));
+      expect(screen.queryByText(`Searching ${WORK}…`)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeEnabled();
+    });
+
+    it("adds found projects after the saved ones, once per folder, checking only the new ones", async () => {
+      localStorage.setItem(
+        CONFIGS_KEY,
+        JSON.stringify({
+          "wf-a": { workflowId: "wf-a", name: "Summer campaign", directoryPath: "/work/summer", generationsPath: null, lastSavedAt: 300 },
+        })
+      );
+      mockBrowse({ success: true, path: "/work" }, "import");
+      api.scanProjects.mockResolvedValue(
+        found({
+          root: "/work",
+          projects: [
+            // The same folder in another case: the same folder on macOS
+            { dir: "/Work/Summer", name: "Summer (found)", mediaCount: 4 },
+            { dir: "/work/winter", name: "Winter", mediaCount: 2 },
+          ],
+        })
+      );
+      api.startImport.mockResolvedValue(makeJob({ id: "import-3", type: "import" }));
+      await renderTab();
+      // Left unchecked before the search, and still unchecked after it
+      fireEvent.click(screen.getByRole("checkbox", { name: /Summer campaign/ }));
+      await find();
+
+      const boxes = screen.getAllByRole("checkbox");
+      expect(boxes).toHaveLength(2);
+      expect(boxes[0]).toHaveAccessibleName(/Summer campaign/);
+      expect(boxes[0]).not.toBeChecked();
+      expect(within(boxes[0].closest("label")!).getByText("4 files")).toBeInTheDocument();
+      expect(screen.queryByText("Summer (found)")).not.toBeInTheDocument();
+      expect(boxes[1]).toHaveAccessibleName(/Winter/);
+      expect(boxes[1]).toBeChecked();
+
+      fireEvent.click(screen.getByRole("button", { name: "Import 1" }));
+      await flush();
+      expect(api.startImport).toHaveBeenCalledWith({ projectDirs: ["/work/winter"] });
+    });
+
+    it("tells folders apart by case where the file system does", async () => {
+      localStorage.setItem(
+        CONFIGS_KEY,
+        JSON.stringify({
+          "wf-a": { workflowId: "wf-a", name: "Summer campaign", directoryPath: "/work/summer", generationsPath: null, lastSavedAt: 300 },
+        })
+      );
+      mockBrowse({ success: true, path: "/work" }, "import");
+      api.scanProjects.mockResolvedValue(found({ root: "/work", projects: [{ dir: "/work/Summer", name: "Other summer", mediaCount: 1 }] }));
+      await renderTab(makeStatus({ platform: "linux" }));
+      await find();
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+      expect(screen.getByRole("checkbox", { name: /Other summer/ })).toBeChecked();
+    });
+
+    it("says when the search stopped early and how many folders it couldn't read", async () => {
+      mockBrowse({ success: true, path: WORK }, "import");
+      api.scanProjects.mockResolvedValue(found({ truncated: true, unreadable: 3 }));
+      await renderTab();
+      await find();
+      expect(screen.getByRole("status")).toHaveTextContent(
+        `Found 2 projects in ${WORK}. The search stopped early; pick a smaller folder to see the rest. 3 folders couldn't be read.`
+      );
+    });
+
+    it("says when the folder holds no projects, and lists nothing", async () => {
+      mockBrowse({ success: true, path: "/Users/me/Empty" }, "import");
+      api.scanProjects.mockResolvedValue(found({ root: "/Users/me/Empty", projects: [] }));
+      await renderTab();
+      await find();
+      expect(screen.getByRole("status")).toHaveTextContent("No Node Banana projects in /Users/me/Empty.");
+      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+      expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+    });
+
+    it("does nothing when the picker is cancelled", async () => {
+      mockBrowse({ success: true, path: WORK }, "import");
+      api.scanProjects.mockResolvedValue(found());
+      await renderTab();
+      await find();
+      expect(screen.getByRole("status")).toHaveTextContent("Found 2 projects");
+
+      mockBrowse({ success: true, cancelled: true, path: null }, "import");
+      await find();
+      expect(api.scanProjects).toHaveBeenCalledTimes(1);
+      // The last search's answer stays
+      expect(screen.getByRole("status")).toHaveTextContent("Found 2 projects");
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    });
+
+    it("shows a search that failed inline", async () => {
+      mockBrowse({ success: true, path: "/Users/me/Gone" }, "import");
+      api.scanProjects.mockRejectedValue(new Error('"/Users/me/Gone" doesn\'t exist.'));
+      await renderTab();
+      await find();
+      expect(screen.getByRole("alert")).toHaveTextContent('"/Users/me/Gone" doesn\'t exist.');
+    });
+
+    it("searching the same folder again adds no rows and keeps what was unchecked", async () => {
+      mockBrowse({ success: true, path: WORK }, "import");
+      api.scanProjects.mockResolvedValue(found());
+      await renderTab();
+      await find();
+      fireEvent.click(screen.getByRole("checkbox", { name: /Night/ }));
+
+      // The project has more files by now
+      api.scanProjects.mockResolvedValue(
+        found({ projects: [{ dir: `${WORK}/Campaign`, name: "Spring campaign", mediaCount: 13 }, found().projects[1]] })
+      );
+      await find();
+
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+      expect(screen.getByRole("checkbox", { name: /Spring campaign/ })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: /Night/ })).not.toBeChecked();
+      expect(screen.getByText("13 files")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(`Found 2 projects in ${WORK}.`);
+    });
+
+    it("opens one folder picker at a time", async () => {
+      // A picker stays open until the user answers it
+      mockFetch.mockImplementation(() => new Promise(() => {}));
+      await renderTab();
+      await find();
+      expect(screen.getByRole("button", { name: "Choosing…" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Change…" })).toBeDisabled();
+    });
+
+    it("won't open the import picker while Change…'s is open", async () => {
+      mockFetch.mockImplementation(() => new Promise(() => {}));
+      await renderTab();
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      await flush();
+      expect(screen.getByRole("button", { name: "Find projects in a folder…" })).toBeDisabled();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the picker's own error", async () => {
+      mockBrowse({ success: false, error: "No folder picker on this system" }, "import");
+      await renderTab();
+      await find();
+      expect(screen.getByRole("alert")).toHaveTextContent("No folder picker on this system");
+      expect(api.scanProjects).not.toHaveBeenCalled();
+    });
+
+    it("won't import more folders at once than the server takes", async () => {
+      const many = Array.from({ length: 501 }, (_, i) => ({ dir: `${WORK}/p${i}`, name: `P${i}`, mediaCount: 1 }));
+      mockBrowse({ success: true, path: WORK }, "import");
+      api.scanProjects.mockResolvedValue(found({ projects: many, truncated: true }));
+      await renderTab();
+      await find();
+      const importButton = screen.getByRole("button", { name: "Import" });
+      expect(importButton).toBeDisabled();
+      expect(importButton).toHaveAttribute("title", "Import at most 500 projects at a time");
+      fireEvent.click(screen.getByRole("checkbox", { name: /^P0\b/ }));
+      expect(screen.getByRole("button", { name: "Import 500" })).toBeEnabled();
     });
   });
 
@@ -650,6 +868,34 @@ describe("library settings helpers", () => {
     expect(revealLabel("darwin")).toBe("Show in Finder");
     expect(revealLabel("win32")).toBe("Show in Explorer");
     expect(revealLabel("linux")).toBe("Show folder");
+  });
+
+  it("merges found projects into the import list, folding case on macOS and Windows", () => {
+    const rows = [{ dir: "/work/summer", name: "Summer" }];
+    const projects = [
+      { dir: "/Work/Summer", name: "Found summer", mediaCount: 3 },
+      { dir: "/work/winter", name: "Winter", mediaCount: 2 },
+    ];
+    expect(mergeFoundProjects(rows, projects, "darwin")).toEqual({
+      rows: [
+        { dir: "/work/summer", name: "Summer", mediaCount: 3 },
+        { dir: "/work/winter", name: "Winter", mediaCount: 2 },
+      ],
+      added: ["/work/winter"],
+    });
+    expect(mergeFoundProjects(rows, projects, "linux").added).toEqual(["/Work/Summer", "/work/winter"]);
+    expect(mergeFoundProjects([{ dir: "C:\\Work\\Summer", name: "S" }], [{ dir: "c:/work/summer/", name: "x", mediaCount: 1 }], "win32").added).toEqual([]);
+  });
+
+  it("describes a search and counts files", () => {
+    const result = { root: "/w", projects: [{ dir: "/w/a", name: "A", mediaCount: 1 }], truncated: false, unreadable: 1 };
+    expect(describeScan(result)).toBe("Found 1 project in /w. 1 folder couldn't be read.");
+    expect(describeScan({ ...result, projects: [], unreadable: 0, truncated: true })).toBe(
+      "No Node Banana projects in /w. The search stopped early; pick a smaller folder to see the rest."
+    );
+    expect(formatFileCount(1)).toBe("1 file");
+    expect(formatFileCount(2500)).toBe("2,500 files");
+    expect(formatFileCount(10_000)).toBe("10,000+ files");
   });
 
   it("lists project folders newest first, skipping configs without a folder", () => {
