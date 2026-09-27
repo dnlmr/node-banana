@@ -208,6 +208,27 @@ describe("findProjects", () => {
     expect(inside.projects).toEqual([]);
   });
 
+  it("leaves an excluded folder out however it is reached, through a link or not", async () => {
+    const library = path.join(root, "Node Banana");
+    const generations = path.join(library, "Generations");
+    fs.mkdirSync(generations, { recursive: true });
+    // Loose media would make the library itself look like a project.
+    fs.writeFileSync(path.join(generations, "loose.png"), makePng());
+    project(path.join(library, "Saved here"));
+    const linked = path.join(base, "Projects link");
+    linkDir(root, linked);
+
+    // The folder picked through a link (macOS's /tmp), the library as it is
+    const viaLink = await findProjects(linked, { exclude: [generations] });
+    expect(viaLink.projects.map((found) => found.dir)).toEqual([path.join(linked, "Node Banana", "Saved here")]);
+    // The library set through a link, the folder as it is
+    const direct = await findProjects(root, { exclude: [path.join(linked, "Node Banana", "Generations")] });
+    expect(dirs(direct.projects)).toEqual(["Node Banana/Saved here"]);
+    // And inside the library's own folder, through the link
+    const inside = await findProjects(path.join(linked, "Node Banana", "Generations"), { exclude: [generations] });
+    expect(inside.projects).toEqual([]);
+  });
+
   describe("names", () => {
     it("takes the name of the newest workflow file, ignoring JSON that isn't a workflow", async () => {
       const dir = project(path.join(root, "folder-name"), ["a.png"], {

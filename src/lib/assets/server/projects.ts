@@ -99,14 +99,21 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
   const limits = { ...SCAN_LIMITS, ...options.limits };
   const now = options.now ?? Date.now;
   const deadline = now() + limits.timeoutMs;
-  const exclude = options.exclude ?? [];
-  const excluded = new Set(exclude.map((dir) => pathKey(dir)));
   const fold = foldsCase(process.platform);
   const nameKey = (name: string) => (fold ? name.toLowerCase() : name);
+  // Excluded folders are compared by where they really are, so a root picked
+  // through a link (macOS's /tmp, a linked home) still leaves them out. No
+  // link below the root is followed, so a folder's real path is the root's
+  // real path plus the rest of it.
+  const real = (dir: string) => fs.realpath(dir).catch(() => dir);
+  const realRoot = await real(root);
+  const realKey = (dir: string) => pathKey(realRoot === root ? dir : path.join(realRoot, dir.slice(root.length)));
+  const exclude = await Promise.all((options.exclude ?? []).map(real));
+  const excluded = new Set(exclude.map((dir) => pathKey(dir)));
 
   const result: ScanProjectsResult = { root, projects: [], truncated: false, unreadable: 0 };
   // Searching inside the library's own data finds nothing an import could use.
-  if (exclude.some((dir) => isInsideRoot(dir, root, { allowEqual: true }))) return result;
+  if (exclude.some((dir) => isInsideRoot(dir, realRoot, { allowEqual: true }))) return result;
 
   const searchable = (dir: string, entry: Dirent, inProject: boolean): boolean => {
     // A Dirent describes the entry itself: a link to a folder is a link, never a folder.
@@ -117,7 +124,7 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
     // The import refuses system folders and over-long paths, so a project there could never be imported
     // (and one such folder would refuse the whole import).
     if (child.length > limits.maxPathLength) return false;
-    return !excluded.has(pathKey(child)) && validateWorkflowPath(child).valid;
+    return !excluded.has(realKey(child)) && validateWorkflowPath(child).valid;
   };
 
   const visit = async (dir: string, descend: boolean): Promise<Visit | "late" | "unreadable"> => {
@@ -132,7 +139,7 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
     let project: FoundProject | null = null;
     let unreadableGenerations = false;
     const generations = entries.find(
-      (entry) => entry.isDirectory() && nameKey(entry.name) === GENERATIONS && !excluded.has(pathKey(path.join(dir, entry.name))),
+      (entry) => entry.isDirectory() && nameKey(entry.name) === GENERATIONS && !excluded.has(realKey(path.join(dir, entry.name))),
     );
     if (generations) {
       const mediaCount = await countMedia(path.join(dir, generations.name), limits.maxMediaCount);
