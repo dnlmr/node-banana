@@ -438,6 +438,7 @@ All routes in `src/app/api/`:
 - `node-banana-agent-settings` - Agent harness, and model and thinking-effort choice per harness
 - `node-banana-agent-conversations` - Agent chat history (messages, the agent's summary, workflow name; newest 50, size-capped)
 - `node-banana-assets-tile-size` - Assets view tile size (S/M/L)
+- `node-banana-assets-rail-open` - Which filter groups in the Assets rail are open
 - `node-banana-assets-first-run-shown` - The one-time "Saved to …" hint after the first recorded asset has been shown
 
 The asset library's location and index live on disk, not in localStorage
