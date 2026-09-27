@@ -334,7 +334,6 @@ export function FloatingActionBar() {
     isRunning,
     currentNodeIds,
     executeWorkflow,
-    regenerateNode,
     executeSelectedNodes,
     stopWorkflow,
     mockTutorialExecution,
@@ -354,7 +353,6 @@ export function FloatingActionBar() {
     isRunning: state.isRunning,
     currentNodeIds: state.currentNodeIds,
     executeWorkflow: state.executeWorkflow,
-    regenerateNode: state.regenerateNode,
     executeSelectedNodes: state.executeSelectedNodes,
     stopWorkflow: state.stopWorkflow,
     mockTutorialExecution: state.mockTutorialExecution,
@@ -475,13 +473,6 @@ export function FloatingActionBar() {
   const handleRunFromSelected = () => {
     if (selectedNodeId) {
       executeWorkflow(selectedNodeId);
-      setRunMenuOpen(false);
-    }
-  };
-
-  const handleRunSelectedOnly = () => {
-    if (selectedNodeId) {
-      regenerateNode(selectedNodeId);
       setRunMenuOpen(false);
     }
   };
@@ -609,22 +600,13 @@ export function FloatingActionBar() {
               </MenuItem>
               <MenuItem
                 role="menuitem"
-                onClick={handleRunSelectedOnly}
-                disabled={!selectedNodeId}
-                title={!selectedNodeId ? "Select a single node first" : undefined}
-              >
-                <Play {...MENU_ICON} />
-                Run selected only
-                <KbdGroup keys={["⌥", "↵"]} className="ml-auto pl-3" />
-              </MenuItem>
-              <MenuItem
-                role="menuitem"
                 onClick={handleRunSelectedNodes}
                 disabled={selectedNodeIds.length === 0}
                 title={selectedNodeIds.length === 0 ? "Select one or more nodes first" : `Run ${selectedNodeIds.length} selected node${selectedNodeIds.length > 1 ? 's' : ''}`}
               >
                 <FastForward {...MENU_ICON} />
-                {selectedNodeIds.length > 0 ? `Run ${selectedNodeIds.length} selected` : "Run selected"}
+                {selectedNodeIds.length > 1 ? `Run ${selectedNodeIds.length} selected` : "Run selected"}
+                <KbdGroup keys={["⌥", "↵"]} className="ml-auto pl-3" />
               </MenuItem>
             </MenuSurface>
           )}

@@ -329,6 +329,7 @@ export function WorkflowCanvas() {
   const setWorkflowMetadata = useWorkflowStore((state) => state.setWorkflowMetadata);
   const setShortcutsDialogOpen = useWorkflowStore((state) => state.setShortcutsDialogOpen);
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
+  const executeSelectedNodes = useWorkflowStore((state) => state.executeSelectedNodes);
   const clearWorkflow = useWorkflowStore((state) => state.clearWorkflow);
   const setHoveredNodeId = useWorkflowStore((state) => state.setHoveredNodeId);
   const openAnnotationModal = useAnnotationStore((state) => state.openModal);
@@ -1721,12 +1722,12 @@ export function WorkflowCanvas() {
       return;
     }
 
-    // Run just the selected node (Alt/Option + Enter), as the header's kebab offers.
+    // Run the selected nodes (Alt/Option + Enter), as the run menu's "Run selected" does.
     if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "Enter") {
       const selected = nodes.filter((n) => n.selected);
-      if (selected.length === 1) {
+      if (selected.length > 0) {
         event.preventDefault();
-        regenerateNode(selected[0].id);
+        executeSelectedNodes(selected.map((n) => n.id));
       }
       return;
     }
@@ -1966,7 +1967,7 @@ export function WorkflowCanvas() {
 
         onNodesChange(changes);
       }
-  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, regenerateNode, setShortcutsDialogOpen, undo, redo]);
+  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, executeSelectedNodes, setShortcutsDialogOpen, undo, redo]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);

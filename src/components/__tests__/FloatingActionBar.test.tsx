@@ -7,7 +7,7 @@ import { ProviderSettings } from "@/types";
 // Mock the workflow store
 const mockAddNode = vi.fn();
 const mockExecuteWorkflow = vi.fn();
-const mockRegenerateNode = vi.fn();
+const mockExecuteSelectedNodes = vi.fn();
 const mockStopWorkflow = vi.fn();
 const mockValidateWorkflow = vi.fn();
 const mockSetEdgeStyle = vi.fn();
@@ -84,7 +84,7 @@ const createDefaultState = (overrides = {}) => ({
   isRunning: false,
   currentNodeIds: [],
   executeWorkflow: mockExecuteWorkflow,
-  regenerateNode: mockRegenerateNode,
+  executeSelectedNodes: mockExecuteSelectedNodes,
   stopWorkflow: mockStopWorkflow,
   validateWorkflow: mockValidateWorkflow,
   edgeStyle: "angular" as const,
@@ -787,7 +787,7 @@ describe("FloatingActionBar", () => {
 
       expect(screen.getByText("Run all")).toBeInTheDocument();
       expect(screen.getByText("Run from selected")).toBeInTheDocument();
-      expect(screen.getByText("Run selected only")).toBeInTheDocument();
+      expect(screen.getByText("Run selected")).toBeInTheDocument();
     });
 
     it("should call executeWorkflow when 'Run all' is clicked", async () => {
@@ -870,7 +870,7 @@ describe("FloatingActionBar", () => {
       expect(mockExecuteWorkflow).toHaveBeenCalledWith("node-1");
     });
 
-    it("should call regenerateNode when 'Run selected only' is clicked", async () => {
+    it("runs the selection when 'Run selected' is clicked", async () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           nodes: [{ id: "node-1", selected: true, type: "prompt" }],
@@ -888,9 +888,9 @@ describe("FloatingActionBar", () => {
       });
 
       fireEvent.click(screen.getByTitle("Run options"));
-      fireEvent.click(screen.getByText("Run selected only"));
+      fireEvent.click(screen.getByText("Run selected"));
 
-      expect(mockRegenerateNode).toHaveBeenCalledWith("node-1");
+      expect(mockExecuteSelectedNodes).toHaveBeenCalledWith(["node-1"]);
     });
   });
 });
