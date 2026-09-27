@@ -8,7 +8,8 @@
  * workflow store, `src/components/assets`). Design notes live in
  * `docs/asset-library.md`.
  *
- * On disk, under the library root (default `~/Pictures/Node Banana`):
+ * On disk, under the library root — the "Node Banana folder" (default
+ * `~/Documents/Node Banana`), which also holds projects (`<root>/<Project>/`):
  *
  *   Generations/YYYY-MM-DD/HHMMSS_<snippet>_<sha8>.<ext>   assets of workflows with no project
  *   .nodebanana/assets/<assetId>.json                      one sidecar per asset (AssetRecord)
@@ -23,7 +24,9 @@
  *   .nodebanana/lock, move.json, move-copied.ndjson        a running move, and what to undo if it stops part-way
  *
  * Assets of project-bound workflows are written to `<project>/generations/`
- * with the legacy `<snippet>_<md5>.<ext>` name and indexed in place.
+ * with the legacy `<snippet>_<md5>.<ext>` name and indexed in place. The
+ * projects the app knows about, wherever they are, are listed in
+ * `~/.node-banana/projects.json` (the project registry).
  */
 
 /* ------------------------------------------------------------------ */
@@ -429,7 +432,8 @@ export interface SetLibraryRootRequest {
   mode: "move" | "switch";
 }
 
-export type LibraryJobType = "move" | "import" | "cleanup" | "export";
+/** `projects`: move project folders into the Node Banana folder. */
+export type LibraryJobType = "move" | "import" | "cleanup" | "export" | "projects";
 
 export interface LibraryJobStatus {
   id: string;
@@ -443,6 +447,16 @@ export interface LibraryJobStatus {
   error?: string;
   startedAt: number;
   finishedAt?: number;
+  /** A projects move: the folders that moved, and where to. */
+  moved?: MovedProject[];
+}
+
+/** One folder a projects move handled. */
+export interface MovedProject {
+  from: string;
+  to: string;
+  /** The copy is in place and the library follows it, but some of the old folder could not be removed. */
+  leftovers?: boolean;
 }
 
 /** POST /api/assets/import: index the generations of existing project folders. */
@@ -466,6 +480,8 @@ export interface FoundProject {
   name: string;
   /** Media files directly in its `generations` folder, counted up to {@link FOUND_MEDIA_COUNT_CAP}. */
   mediaCount: number;
+  /** Size of the whole folder, as far as a bounded count got (moving it moves all of it). */
+  bytes?: number;
 }
 
 /** `FoundProject.mediaCount` stops counting here. */
@@ -480,6 +496,98 @@ export interface ScanProjectsResult {
   truncated: boolean;
   /** Folders that could not be read (no permission, gone); the search went on without them. */
   unreadable: number;
+  /**
+   * Every visible entry at the top of the folder is a project, holds
+   * projects, or is a loose workflow file: the folder looks like a Node
+   * Banana folder already, so "Make this my Node Banana folder" is the
+   * suggestion.
+   */
+  recommendUse?: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/* Projects                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A project the app knows about: a folder under the Node Banana folder,
+ * one the registry (`projects.json`) lists, or one a workflow row names.
+ */
+export interface KnownProject {
+  /** Absolute folder. */
+  dir: string;
+  /** The name in its newest workflow file, else the folder's own name. */
+  name: string;
+  /** Relative to the Node Banana folder ("/"-separated) when it is inside it, else null. */
+  relativePath: string | null;
+  inRoot: boolean;
+  /** mtime of its newest workflow file (ms), else of the folder. */
+  lastModified: number;
+  /** Media files directly in its `generations` folder, capped like {@link FoundProject.mediaCount}. */
+  mediaCount: number;
+}
+
+/** Known projects outside the Node Banana folder: what "Move them in" would move. */
+export interface ProjectsElsewhere {
+  /** Outermost folders only: a project inside another moves with it. */
+  count: number;
+  bytes: number;
+  /** By parent folder (`~`-shortened), largest first. */
+  groups: { label: string; count: number }[];
+}
+
+/** GET /api/assets/projects */
+export interface ProjectsOverview {
+  root: string;
+  /** Newest first. */
+  projects: KnownProject[];
+  elsewhere: ProjectsElsewhere | null;
+  offerDismissed: boolean;
+}
+
+/** POST /api/assets/projects/report: what this browser's localStorage knows, sent once per page load. */
+export interface ReportProjectsRequest {
+  /** The old default workflows folder (`node-banana-workflows-directory`). */
+  workflowsDir?: string | null;
+  projects: { dir: string; name?: string | null; lastOpenedAt?: number | null }[];
+}
+
+export interface ReportProjectsResult {
+  /** The Node Banana folder became (or is moving to) `workflowsDir`. */
+  adopted: boolean;
+  root: string | null;
+}
+
+/**
+ * POST /api/assets/projects/bring-in. `use`: `folder` becomes the Node
+ * Banana folder. `move`: the project folders move into it. `leave`: they
+ * stay where they are and are listed (and indexed) from there.
+ */
+export interface BringInProjectsRequest {
+  dirs: string[];
+  mode: "use" | "move" | "leave";
+  folder?: string;
+}
+
+export interface BringInProjectsResult {
+  root: string | null;
+  /** The move started, when there is one to follow. */
+  job: LibraryJobStatus | null;
+}
+
+/** POST /api/assets/projects/offer */
+export interface ProjectsOfferRequest {
+  dismissed: true;
+}
+
+/** GET /api/assets/projects/folder-name?name= */
+export interface ProjectFolderName {
+  /** The folder name a project of that name gets (sanitised, numbered past a taken one). */
+  folder: string;
+  /** `<root>/<folder>`. */
+  path: string;
+  /** A folder of the plain name was already there, so this one got a number. */
+  taken: boolean;
 }
 
 /** POST /api/assets/reveal: show an asset's file, or the library folder, in Finder/Explorer. */
@@ -584,6 +692,11 @@ export const ASSET_ROUTES = {
   scanProjects: "/api/assets/import/scan", // POST ScanProjectsRequest → ScanProjectsResult
   cleanup: "/api/assets/cleanup", // POST CleanupRequest → { job }
   exportAssets: "/api/assets/export", // POST ExportAssetsRequest → { job }
+  projects: "/api/assets/projects", // GET ProjectsOverview
+  reportProjects: "/api/assets/projects/report", // POST ReportProjectsRequest → ReportProjectsResult
+  bringInProjects: "/api/assets/projects/bring-in", // POST BringInProjectsRequest → BringInProjectsResult
+  projectsOffer: "/api/assets/projects/offer", // POST ProjectsOfferRequest → { ok }
+  projectFolderName: (name: string) => `/api/assets/projects/folder-name?name=${encodeURIComponent(name)}`, // GET ProjectFolderName
 } as const;
 
 /** Thumbnail widths the server renders. The client picks the smallest ≥ tile CSS width × devicePixelRatio. */

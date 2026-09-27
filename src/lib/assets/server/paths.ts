@@ -234,6 +234,11 @@ export function userConfigFile(ctx: PathContext): string {
   return pathApi(ctx.platform).join(ctx.homedir, ".node-banana", "library.json");
 }
 
+/** `~/.node-banana/projects.json`: the project registry, shared by both builds like library.json. */
+export function userRegistryFile(ctx: PathContext): string {
+  return pathApi(ctx.platform).join(ctx.homedir, ".node-banana", "projects.json");
+}
+
 /** Which cloud-sync client (if any) owns a folder, for the status warning. */
 export function detectSynced(root: string, ctx: PathContext): LibraryStatus["synced"] {
   const api = pathApi(ctx.platform);
@@ -308,6 +313,8 @@ export interface ResolvedLocation {
   cacheDir: string;
   /** Where a choice for this location is persisted (never under ~ when the env override is active). */
   configFile: string;
+  /** The project registry, `projects.json`, next to `configFile`. */
+  registryFile: string;
   /** The root came from library.json. */
   persisted: boolean;
 }
@@ -345,11 +352,13 @@ export async function resolveLibraryLocation(ctx: PathContext): Promise<Location
         defaultRoot,
         cacheDir: api.join(root, DATA_DIR_NAME, "cache"),
         configFile: api.join(root, DATA_DIR_NAME, "config.json"),
+        registryFile: api.join(root, DATA_DIR_NAME, "projects.json"),
         persisted: false,
       },
     };
   }
   const configFile = userConfigFile(ctx);
+  const registryFile = userRegistryFile(ctx);
   const cacheDir = platformCacheDir(ctx);
   const stored = await readLibraryConfig(configFile, ctx);
   if (stored) {
@@ -362,13 +371,14 @@ export async function resolveLibraryLocation(ctx: PathContext): Promise<Location
         ...(stored.fallbackReason ? { fallbackReason: stored.fallbackReason } : {}),
         cacheDir,
         configFile,
+        registryFile,
         persisted: true,
       },
     };
   }
   return {
     ok: true,
-    location: { root: defaultRoot, source: "default", defaultRoot, cacheDir, configFile, persisted: false },
+    location: { root: defaultRoot, source: "default", defaultRoot, cacheDir, configFile, registryFile, persisted: false },
   };
 }
 

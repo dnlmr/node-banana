@@ -50,6 +50,7 @@ describe("resolution order", () => {
     expect(result.location.root).toBe(path.posix.join(home, "Documents", "Node Banana"));
     expect(result.location.cacheDir).toBe(path.posix.join(home, "Library", "Caches", "Node Banana"));
     expect(result.location.configFile).toBe(path.posix.join(home, ".node-banana", "library.json"));
+    expect(result.location.registryFile).toBe(path.posix.join(home, ".node-banana", "projects.json"));
   });
 
   it("prefers library.json over the default, and the env override over both", async () => {
@@ -72,6 +73,7 @@ describe("resolution order", () => {
     if (!result.ok) return;
     expect(result.location.cacheDir).toBe(path.join(override, ".nodebanana", "cache"));
     expect(result.location.configFile).toBe(path.join(override, ".nodebanana", "config.json"));
+    expect(result.location.registryFile).toBe(path.join(override, ".nodebanana", "projects.json"));
     expect(fs.existsSync(path.join(home, ".node-banana"))).toBe(false);
     expect(fs.existsSync(path.join(override, ".nodebanana"))).toBe(true);
   });
