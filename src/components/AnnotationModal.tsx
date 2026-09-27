@@ -334,9 +334,24 @@ export function AnnotationModal() {
   const handleDone = useCallback(() => {
     if (!sourceNodeId) return;
     const flattenedImage = flattenImage();
+    // Something drawn is an edit worth keeping in the asset library; Done with
+    // no shapes, or with the same drawing as before, is not a new one
+    const store = annotations.length > 0 && flattenedImage ? useWorkflowStore.getState() : null;
+    const sourceNode = store?.nodes.find((n) => n.id === sourceNodeId);
+    const previousOutput = (sourceNode?.data as { outputImage?: unknown } | undefined)?.outputImage;
     updateNodeData(sourceNodeId, { annotations, outputImage: flattenedImage, outputImageRef: undefined });
+    if (store && flattenedImage !== previousOutput) {
+      store.recordUiAsset({
+        kind: "image",
+        origin: "edited",
+        media: flattenedImage,
+        mime: "image/png",
+        producer: { nodeId: sourceNodeId, nodeType: sourceNode?.type ?? "annotation", operation: "annotate" },
+        ...(image ? { width: image.width, height: image.height } : {}),
+      });
+    }
     closeModal();
-  }, [sourceNodeId, annotations, flattenImage, updateNodeData, closeModal]);
+  }, [sourceNodeId, annotations, image, flattenImage, updateNodeData, closeModal]);
 
   const renderShape = (shape: AnnotationShape, isPreview = false) => {
     const commonProps = {

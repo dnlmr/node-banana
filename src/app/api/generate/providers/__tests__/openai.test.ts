@@ -41,6 +41,17 @@ describe("OpenAI Images provider", () => {
     expect(result.outputs?.[0].data).toContain("data:image/jpeg;");
   });
 
+  it("reads a reference with no media type, or with parameters, by its bytes", async () => {
+    mockFetch.mockResolvedValue(success());
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+    await generateWithOpenAI("test", "key", input({
+      images: [`data:;base64,${png.toString("base64")}`, `data:image/png;charset=binary;base64,${png.toString("base64")}`],
+    }));
+    const files = (mockFetch.mock.calls[0][1].body as FormData).getAll("image[]") as File[];
+    expect(files.map(file => [file.name, file.type])).toEqual([["reference-1.png", "image/png"], ["reference-2.png", "image/png"]]);
+    expect(Buffer.from(await files[0].arrayBuffer()).equals(png)).toBe(true);
+  });
+
   it("uses schema-connected images when the ordinary images list is empty", async () => {
     mockFetch.mockResolvedValue(success());
     await generateWithOpenAI("test", "key", input({ images: [], dynamicInputs: { image: ["data:image/png;base64,b25l"] } }));

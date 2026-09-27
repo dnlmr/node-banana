@@ -37,7 +37,12 @@ import {
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
 import { useToast } from "@/components/Toast";
 import { logger } from "@/utils/logger";
-import { hasHistoryEntries, pruneMissingHistory } from "./utils/historyPruning";
+import { hasHistoryEntries, historyAssetIds, isHistoryEntryAvailable, pruneMissingHistory } from "./utils/historyPruning";
+import type { AssetExistence, AssetRunContext, RecordAssetInput, RecordedAssetHandle } from "@/lib/assets/types";
+import { beginRun, endRun, isRecorderEnabled, recordAsset } from "@/lib/assets/client/recorder";
+import { captureGraph } from "@/lib/assets/client/snapshot";
+import { newRunId } from "@/lib/assets/client/ids";
+import { fetchAssetExistence, upsertWorkflowEntry } from "@/lib/assets/client/api";
 import type { ProviderModel } from "@/lib/providers/types";
 import { isGenerateNodeType, modelSelectionData } from "./utils/modelSelection";
 import { externalizeWorkflowMedia, hydrateWorkflowMedia } from "@/utils/mediaStorage";
@@ -281,6 +286,12 @@ interface ClipboardData {
   edges: WorkflowEdge[];
 }
 
+/** A run as the asset library knows it, and the canvas it started on. */
+export interface CurrentAssetRun {
+  run: AssetRunContext;
+  canvasGeneration: number;
+}
+
 export interface WorkflowStore {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
@@ -403,6 +414,8 @@ export interface WorkflowStore {
   pausedAtNodeId: string | null;
   maxConcurrentCalls: number;  // Configurable concurrency limit (1-10)
   _abortController: AbortController | null;  // Internal: for cancellation
+  /** Internal: the run the asset library is recording, set with `_abortController`; null when it is not recording. */
+  _currentRun: CurrentAssetRun | null;
   _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal) => NodeExecutionContext;
   executeWorkflow: (startFromNodeId?: string) => Promise<void>;
   regenerateNode: (nodeId: string) => Promise<void>;
@@ -465,6 +478,15 @@ export interface WorkflowStore {
   isSaving: boolean;
   useExternalImageStorage: boolean;  // Store images as separate files vs embedded base64
   imageRefBasePath: string | null;  // Directory from which current imageRefs are valid
+
+  /** Give the live workflow an id if it has none, so its assets have a workflow to belong to. Returns the id. */
+  ensureWorkflowId: () => string;
+  /**
+   * Save what a UI action made (an annotation, a split) to the asset library,
+   * as one run of its own. Call it after the edit is applied. Returns a handle
+   * per input; none while the library is off.
+   */
+  recordUiAsset: (input: RecordAssetInput | RecordAssetInput[]) => RecordedAssetHandle[];
 
   // Auto-save actions
   setWorkflowMetadata: (id: string, name: string, path: string, generationsPath?: string | null) => void;
@@ -617,6 +639,104 @@ async function waitForPendingImageSyncs(timeout: number = 60000): Promise<void> 
   }
 }
 
+/**
+ * Start a run for the asset library, when it is recording: the workflow gets
+ * an id if it had none, the run gets its own, and the recorder holds the
+ * graph as the run starts. Null while the library is off — the run then
+ * saves the way it always has.
+ */
+function openAssetRun(get: () => WorkflowStore): CurrentAssetRun | null {
+  if (!isRecorderEnabled()) return null;
+  const workflowId = get().ensureWorkflowId();
+  const state = get();
+  const run: AssetRunContext = {
+    runId: newRunId(),
+    workflowId,
+    workflowName: state.workflowName,
+    projectDir: state.saveDirectoryPath,
+    startedAt: Date.now(),
+  };
+  try {
+    beginRun(run, captureGraph(state));
+  } catch (error) {
+    console.error("Failed to start recording the run:", error);
+    return null;
+  }
+  return { run, canvasGeneration: state.canvasGeneration };
+}
+
+/**
+ * The run a node's outputs are recorded under, and a recorder bound to it —
+ * captured when the node's context is built, so a later run (or none) never
+ * claims them. Nothing while the library is off.
+ */
+function assetRecordingFor(current: CurrentAssetRun | null): Pick<NodeExecutionContext, "assetRun" | "recordAsset"> {
+  if (!current || !isRecorderEnabled()) return {};
+  const { run } = current;
+  return { assetRun: run, recordAsset: (input) => recordAsset(input, run) };
+}
+
+/**
+ * End a run for the asset library, with the graph it ended on — unless the
+ * canvas it ran on was replaced (a load, a clear, a tab switch, a new id),
+ * when that graph is someone else's.
+ */
+function closeAssetRun(current: CurrentAssetRun, state: WorkflowStore): void {
+  const sameCanvas =
+    state.canvasGeneration === current.canvasGeneration && state.workflowId === current.run.workflowId;
+  try {
+    endRun(current.run.runId, sameCanvas ? captureGraph(state) : null);
+  } catch (error) {
+    console.error("Failed to finish recording the run:", error);
+  }
+}
+
+/**
+ * Tell the asset library which project a workflow belongs to: one write,
+ * after which every asset recorded under the id is classified with it.
+ * Best effort; a library that is off or unreachable changes nothing here.
+ * Stamped with now, so a run that started earlier and records late never
+ * puts back the name or folder it started with.
+ */
+function classifyWorkflow(workflowId: string, name: string | null, projectPath: string | null, forkedFrom?: string): void {
+  if (!isRecorderEnabled()) return;
+  const asOf = Date.now();
+  Promise.resolve()
+    .then(() => upsertWorkflowEntry(workflowId, { name, projectPath, ...(forkedFrom ? { forkedFrom } : {}), asOf }))
+    .catch((error) => {
+      console.warn("Failed to update the asset library's workflow entry:", error);
+    });
+}
+
+/** The producing node's custom title, when the caller did not give one. */
+function withProducerTitle(input: RecordAssetInput, nodes: WorkflowNode[]): RecordAssetInput {
+  if (input.producer.nodeTitle !== undefined) return input;
+  const title = (nodes.find((n) => n.id === input.producer.nodeId)?.data as { customTitle?: unknown } | undefined)?.customTitle;
+  if (typeof title !== "string" || !title.trim()) return input;
+  return { ...input, producer: { ...input.producer, nodeTitle: title.trim() } };
+}
+
+/** The ids a generations folder holds, or null when it could not be listed. */
+async function listGenerationIds(generationsPath: string): Promise<Set<string> | null> {
+  try {
+    const response = await fetch(`/api/list-generations?path=${encodeURIComponent(generationsPath)}`);
+    const result = await response.json();
+    if (!result?.success || !Array.isArray(result.ids)) return null;
+    return new Set<string>(result.ids);
+  } catch {
+    return null;
+  }
+}
+
+/** What the asset library says about these ids; every one "unknown" when it cannot say. */
+async function assetExistence(ids: string[]): Promise<Record<string, AssetExistence>> {
+  if (ids.length === 0) return {};
+  try {
+    return (await fetchAssetExistence(ids)) ?? {};
+  } catch {
+    return {};
+  }
+}
 
 // Re-export for backward compatibility
 export { generateWorkflowId, saveGenerateImageDefaults, saveNanoBananaDefaults } from "./utils/localStorage";
@@ -863,6 +983,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   pausedAtNodeId: null,
   maxConcurrentCalls: loadConcurrencySetting(),  // Default 3, configurable 1-10
   _abortController: null,  // Internal: for cancellation
+  _currentRun: null,
   globalImageHistory: [],
 
   // Auto-save initial state
@@ -2057,7 +2178,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
-            ? { ...n, data: { ...n.data, images: [image, ...((n.data as OutputGalleryNodeData).images || [])] } as WorkflowNodeData }
+            ? { ...n, data: { ...n.data, ...prependGalleryEntry(n.data as OutputGalleryNodeData, "images", "imageRefs", image) } as WorkflowNodeData }
             : n
         ) as WorkflowNode[],
         hasUnsavedChanges: true,
@@ -2067,13 +2188,14 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
-            ? { ...n, data: { ...n.data, videos: [video, ...((n.data as OutputGalleryNodeData).videos || [])] } as WorkflowNodeData }
+            ? { ...n, data: { ...n.data, ...prependGalleryEntry(n.data as OutputGalleryNodeData, "videos", "videoRefs", video) } as WorkflowNodeData }
             : n
         ) as WorkflowNode[],
         hasUnsavedChanges: true,
       }));
     },
     materializeSplitGridCells: (nodeId: string) => get().materializeSplitGridCells(nodeId),
+    ...assetRecordingFor(get()._currentRun),
     get: get as () => unknown,
   }),
 
@@ -2114,7 +2236,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
     };
-    set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController });
+    const assetRun = openAssetRun(get);
+    set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController, _currentRun: assetRun });
     // Nodes that had nothing to work with, named for the end-of-run summary
     const unreadyNodes: string[] = [];
 
@@ -2643,7 +2766,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     // Create AbortController so stopWorkflow() can cancel regeneration
     const abortController = new AbortController();
-    set({ isRunning: true, currentNodeIds: [nodeId], _abortController: abortController });
+    const assetRun = openAssetRun(get);
+    set({ isRunning: true, currentNodeIds: [nodeId], _abortController: abortController, _currentRun: assetRun });
 
     await logger.startSession();
     logger.info('node.execution', 'Regenerating node', {
@@ -2798,7 +2922,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     // Create AbortController for this execution run
     const abortController = new AbortController();
-    set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController });
+    const assetRun = openAssetRun(get);
+    set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController, _currentRun: assetRun });
 
     await logger.startSession();
     logger.info('node.execution', 'Executing selected nodes', {
@@ -3212,19 +3337,24 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   pruneMissingHistory: async () => {
-    const { generationsPath, nodes } = get();
-    if (!generationsPath || !hasHistoryEntries(nodes)) return;
-    let ids: string[];
-    try {
-      const response = await fetch(`/api/list-generations?path=${encodeURIComponent(generationsPath)}`);
-      const result = await response.json();
-      if (!result?.success || !Array.isArray(result.ids)) return;
-      ids = result.ids;
-    } catch {
-      // The folder could not be listed: keep the history rather than guess
-      return;
-    }
-    const pruned = pruneMissingHistory(get().nodes, new Set(ids));
+    const { generationsPath, nodes, canvasGeneration, workflowId } = get();
+    if (!hasHistoryEntries(nodes)) return;
+    // Entries with an asset id are asked about in the library (only while it
+    // is on: otherwise nothing can be said about them, and they stay); the
+    // rest, and the library's losses, in the generations folder
+    const assetIds = isRecorderEnabled() ? historyAssetIds(nodes) : [];
+    if (!generationsPath && assetIds.length === 0) return;
+    const [folderIds, assetStates] = await Promise.all([
+      // A folder that cannot be listed comes back null: its entries stay rather than be guessed away
+      generationsPath ? listGenerationIds(generationsPath) : Promise.resolve(null),
+      assetExistence(assetIds),
+    ]);
+    // The answers describe the canvas that asked. Another one (a tab switch,
+    // a load, a clear, a new id) is judged by its own prune, never by these.
+    const current = get();
+    if (current.canvasGeneration !== canvasGeneration || current.workflowId !== workflowId) return;
+    const sources = { folderIds, hasFolder: !!generationsPath, assetStates };
+    const pruned = pruneMissingHistory(get().nodes, (entry) => isHistoryEntryAvailable(entry, sources));
     if (!pruned.changed) return;
     set({ nodes: pruned.nodes, hasUnsavedChanges: true });
   },
@@ -3400,10 +3530,54 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     set({ globalImageHistory: [] });
   },
 
+  ensureWorkflowId: () => {
+    const existing = get().workflowId;
+    if (existing) return existing;
+    const id = generateWorkflowId();
+    set({ workflowId: id });
+    return id;
+  },
+
+  recordUiAsset: (input) => {
+    const inputs = Array.isArray(input) ? input : [input];
+    if (inputs.length === 0 || !isRecorderEnabled()) return [];
+    const workflowId = get().ensureWorkflowId();
+    const state = get();
+    const run: AssetRunContext = {
+      runId: newRunId(),
+      workflowId,
+      workflowName: state.workflowName,
+      projectDir: state.saveDirectoryPath,
+      startedAt: Date.now(),
+    };
+    try {
+      beginRun(run, captureGraph(state));
+    } catch (error) {
+      console.error("Failed to record assets:", error);
+      return [];
+    }
+    const handles: RecordedAssetHandle[] = [];
+    for (const item of inputs) {
+      try {
+        handles.push(recordAsset(withProducerTitle(item, state.nodes), run));
+      } catch (error) {
+        console.error("Failed to record asset:", error);
+      }
+    }
+    // The action has already been applied, so the graph now is how it ended
+    try {
+      endRun(run.runId, captureGraph(get()));
+    } catch (error) {
+      console.error("Failed to finish recording assets:", error);
+    }
+    return handles;
+  },
+
   // Auto-save actions
   setWorkflowMetadata: (id: string, name: string, path: string, generationsPath?: string | null) => {
     // Auto-derive generationsPath: use provided value, fall back to existing, then auto-derive
-    const currentGenPath = get().generationsPath;
+    const prev = get();
+    const currentGenPath = prev.generationsPath;
     const derivedGenerationsPath = generationsPath ?? currentGenPath ?? `${path}/generations`;
 
     set({
@@ -3412,6 +3586,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       saveDirectoryPath: path,
       generationsPath: derivedGenerationsPath,
     });
+    // The workflow's assets, including those made before it had a folder, now
+    // belong to this project. A workflow that already has a folder is left to
+    // the save that follows: only it knows whether the new folder is a fork,
+    // and filing the old id there first would hand its assets to the copy.
+    if (!prev.saveDirectoryPath || prev.workflowId !== id) classifyWorkflow(id, name, path);
   },
 
   setWorkflowName: (name: string) => {
@@ -3484,6 +3663,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         (imageRefBasePath === null && hasExistingRefs)
       );
 
+      // A save into another folder is a fork: the new id starts its own
+      // project, and the old id's assets stay with the old one
+      const forkedFrom = isNewDirectory ? workflowId : undefined;
       if (isNewDirectory) {
         // Generate new workflow ID for the duplicate - prevents localStorage collision
         // This ensures the new project has independent config and preserves the original
@@ -3619,6 +3801,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           lastSavedAt: timestamp,
           useExternalImageStorage,
         });
+        classifyWorkflow(workflowId, workflowName, saveDirectoryPath, forkedFrom);
 
         return true;
       } else {
@@ -3931,7 +4114,34 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
 });
 
+/**
+ * Puts one entry first in an Output Gallery's media list, with a blank in front
+ * of its refs so the refs stay aligned with the media they name.
+ */
+function prependGalleryEntry(
+  data: OutputGalleryNodeData,
+  key: "images" | "videos",
+  refsKey: "imageRefs" | "videoRefs",
+  entry: string,
+): Partial<OutputGalleryNodeData> {
+  const refs = data[refsKey];
+  return {
+    [key]: [entry, ...(data[key] || [])],
+    ...(refs?.length ? { [refsKey]: ["", ...refs] } : {}),
+  };
+}
+
 export const useWorkflowStore = create<WorkflowStore>()(workflowStoreImpl);
+
+// A run ends wherever `isRunning` drops — it finished, Stop was pressed, an
+// early return, or a load, clear or tab switch aborted it — so its asset run
+// is closed in this one place rather than on every one of those paths.
+useWorkflowStore.subscribe((state, previous) => {
+  if (!previous.isRunning || state.isRunning || !state._currentRun) return;
+  const current = state._currentRun;
+  useWorkflowStore.setState({ _currentRun: null });
+  closeAssetRun(current, state);
+});
 
 // Keep the mirrored Comfy Cloud key current: the ComfyUI settings tab saves
 // to its own localStorage key and announces it with this event.

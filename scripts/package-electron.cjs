@@ -78,7 +78,8 @@ async function main() {
     await fs.writeFile(path.join(runtime, 'package.json'), JSON.stringify({ name: pkg.name, version: pkg.version, private: true, dependencies: pkg.dependencies }));
     await fs.cp(path.join(root, 'electron/server.cjs'), path.join(runtime, 'server.cjs'));
     await fs.mkdir(path.join(runtime, 'lib'));
-    await fs.cp(path.join(root, 'electron/lib/diagnostics.cjs'), path.join(runtime, 'lib/diagnostics.cjs'));
+    // Every module server.cjs requires from lib/.
+    for (const file of ['diagnostics.cjs', 'bridge.cjs']) await fs.cp(path.join(root, 'electron/lib', file), path.join(runtime, 'lib', file));
     await fs.writeFile(path.join(runtime, 'runtime.json'), JSON.stringify({ version: 1, buildId: `${pkg.version}-${randomUUID()}`, arch: process.arch }));
     await fs.mkdir(app);
     await fs.cp(path.join(root, 'electron'), path.join(app, 'electron'), { recursive: true, verbatimSymlinks: true, filter });
@@ -98,7 +99,7 @@ async function main() {
         const bundled = context.electronPlatformName === 'darwin'
           ? path.join(context.appOutDir, 'Node Banana.app/Contents/Resources/runtime')
           : path.join(context.appOutDir, 'resources', 'runtime');
-        for (const file of ['.next/BUILD_ID', 'node_modules/next/package.json', 'node_modules/sharp/package.json', 'public/banana_icon.png', 'server.cjs']) await fs.access(path.join(bundled, file));
+        for (const file of ['.next/BUILD_ID', 'node_modules/next/package.json', 'node_modules/sharp/package.json', 'public/banana_icon.png', 'server.cjs', 'lib/diagnostics.cjs', 'lib/bridge.cjs']) await fs.access(path.join(bundled, file));
       },
       npmRebuild: false, asar: true,
       mac: { target: process.argv.includes('--dir') ? [{ target: 'dir', arch: ['arm64'] }] : [{ target: 'dir', arch: ['arm64'] }, { target: 'dmg', arch: ['arm64'] }, { target: 'zip', arch: ['arm64'] }],

@@ -165,6 +165,8 @@ export interface ImageHistoryItem {
 export interface CarouselImageItem {
   generation?: ImageGenerationMetadata;
   id: string;
+  /** The asset library's id for this output; the carousel loads it from the library first. */
+  assetId?: string;
   timestamp: number;
   prompt: string;
   aspectRatio: AspectRatio;
@@ -176,6 +178,8 @@ export interface CarouselImageItem {
  */
 export interface CarouselVideoItem {
   id: string;
+  /** The asset library's id for this output; the carousel loads it from the library first. */
+  assetId?: string;
   timestamp: number;
   prompt: string;
   model: string; // Model ID for video (not ModelType since external providers)
@@ -273,6 +277,8 @@ export interface Generate3DNodeData extends BaseNodeData {
  */
 export interface CarouselAudioItem {
   id: string;
+  /** The asset library's id for this output; the carousel loads it from the library first. */
+  assetId?: string;
   timestamp: number;
   prompt: string;
   model: string; // Model ID for audio (not ModelType since external providers)

@@ -48,6 +48,7 @@ Node Banana is a node-based visual workflow editor for AI image generation. User
 | LLM text generation API route | `src/app/api/llm/route.ts` |
 | Cost calculations | `src/utils/costCalculator.ts` |
 | Grid splitting utility | `src/utils/gridSplitter.ts` |
+| Asset library (always-on saving, Assets view) | `src/lib/assets/`, `src/components/assets/`, `docs/asset-library.md` |
 
 ### State Management
 
@@ -140,6 +141,7 @@ Returns `{ images: string[], text: string | null }`.
 - `H` - Stack selected nodes horizontally
 - `V` - Stack selected nodes vertically
 - `G` - Arrange selected nodes in grid
+- `A` - Show or hide the Assets view (bare A; Shift+letters add nodes). In Assets: arrows, Enter, Space, `Cmd/Ctrl + A`, Delete (Trash), `Cmd/Ctrl + Z` (undo the last asset action), `F` (fullscreen detail), Esc
 - `?` - Show keyboard shortcuts
 
 ## Adding New Node Types
@@ -365,6 +367,44 @@ in. `NB_CODEX_EFFORT` overrides Codex's reasoning effort (default `medium`).
 When the canvas rules in `WorkflowCanvas.tsx` or a node's sockets change,
 update `src/lib/agent/graph/catalog.ts` / `handles.ts` too (the server's copy).
 
+## Asset Library
+
+Every generated and edited asset is saved to disk as it is made, with or
+without a project, and indexed for the Assets view (bare `A`). The library
+root is the "Node Banana folder": it defaults to `~/Documents/Node Banana`
+(Windows: `Documents\Node Banana`, or `%USERPROFILE%\Node Banana` when
+Documents syncs to OneDrive; Linux: `XDG_DOCUMENTS_DIR`) and holds projects
+saved by name (`<root>/<Project>/`), `Generations/` for unsaved workflows
+and the hidden `.nodebanana/` metadata. Project workflows still write into
+`<project>/generations/` and are indexed in place. See
+`docs/asset-library.md` for the layout, recording, snapshots, deletion and
+projects.
+
+- Known projects (the root's own, the project registry
+  `~/.node-banana/projects.json`, workflow rows) are listed by
+  `GET /api/assets/projects`. Each page load reports its localStorage's
+  project folders once (`reportProjects`), which may adopt the old workflows
+  folder as the root; known projects' generations are auto-indexed by a quiet
+  import job; the `projects` job moves folders into the root and rewrites
+  every path that pointed at them.
+
+- Executors record through `ctx.recordAsset` (present only while the library
+  is available); a new media-producing node should call it from its success
+  path with the model that actually ran and the resolved prompt, and put the
+  returned `assetId` into its carousel entry. Without it, project workflows
+  fall back to `/api/save-generation`.
+- `/api/assets/*` answer only Node Banana's own page on this computer
+  (`src/lib/assets/server/guard.ts`, same stamp as the agent routes);
+  `NB_LIBRARY_ALLOWED_HOSTS` opts other hosts in. The older routes that
+  read, write, list or reveal files by path (`/api/workflow`,
+  `/api/workflow-images`, `/api/list-workflows`, `/api/save-generation`,
+  `/api/load-generation`, `/api/list-generations`, `/api/open-file`,
+  `/api/open-directory`, `/api/browse-directory`) sit behind the same guard,
+  so a new route that takes a path should too.
+- `NODE_BANANA_ASSET_LIBRARY` pins the library root (tests must set it, or use
+  the server test hooks; scripted Electron runs get one under their temp
+  profile automatically).
+
 ## API Routes
 
 All routes in `src/app/api/`:
@@ -389,6 +429,14 @@ All routes in `src/app/api/`:
 | `/api/agent/chat` | 10 min | Run one agent turn (AI SDK UI message stream) |
 | `/api/agent/status` | 1 min | Each harness: installed, signed in, subscription billing, models |
 | `/api/agent/sign-in` | 1 min | Start a harness's own sign-in flow |
+| `/api/assets` | 10 min | List assets (GET, keyset pages) / start recording one (POST → upload ticket, or a server download for URLs) |
+| `/api/assets/uploads/[id]` | 10 min | Stream an asset's bytes (PUT) |
+| `/api/assets/[id]` (`/file`, `/poster`, `/workflow`) | default | Read/patch an asset, stream its file (Range), store a video poster, get its run snapshot |
+| `/api/assets/thumb/[sha256]` | default | 320/640 px webp thumbnails (204 when none) |
+| `/api/assets/facets`, `/bulk`, `/exists`, `/reveal` | default | Filter counts, bulk tag/favourite/trash/restore/delete, carousel existence, Show in Finder/Explorer |
+| `/api/assets/media`, `/runs/[id]`, `/workflows/[id]` | default | Snapshot media, run snapshots, workflow classification |
+| `/api/assets/library`, `/jobs/[id]`, `/import`, `/import/scan`, `/cleanup`, `/export` | default | Library status/location, background jobs (move, import projects, clean up, export), finding the projects under a folder to import |
+| `/api/assets/projects` (`/report`, `/bring-in`, `/offer`, `/folder-name`) | default | Known projects and the "live elsewhere" offer, the page load's project report, bringing projects in (use, move, leave), a new project's folder name |
 
 ## localStorage Keys
 
@@ -401,6 +449,14 @@ All routes in `src/app/api/`:
 - `node-banana-comfy-apps` - Saved Comfy nodes (workflow + contract + settings)
 - `node-banana-agent-settings` - Agent harness, and model and thinking-effort choice per harness
 - `node-banana-agent-conversations` - Agent chat history (messages, the agent's summary, workflow name; newest 50, size-capped)
+- `node-banana-assets-tile-size` - Assets view tile size (S/M/L)
+- `node-banana-assets-rail-open` - Which filter groups in the Assets rail are open
+- `node-banana-assets-first-run-shown` - The one-time "Saved to …" hint after the first recorded asset has been shown
+
+The asset library's location and index live on disk, not in localStorage
+(the desktop and web origins do not share it): `~/.node-banana/library.json`
+and `<library>/.nodebanana/`, and the project registry in
+`~/.node-banana/projects.json`.
 
 ## Git Workflow
 

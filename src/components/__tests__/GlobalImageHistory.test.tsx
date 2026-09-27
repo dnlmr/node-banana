@@ -25,6 +25,15 @@ vi.mock("@/store/workflowStore", () => ({
   },
 }));
 
+// The asset library as the recorder last saw it. Most tests below cover the
+// full list in its sidebar, which is what "Show all" opens without a library.
+const libraryStatus = vi.hoisted(() => ({ current: null as { available: boolean } | null }));
+vi.mock("@/lib/assets/client/recorder", () => ({
+  getRecorderLibraryStatus: () => libraryStatus.current,
+}));
+
+import { useAssetStore } from "@/store/assetStore";
+
 // Helper to create mock history items
 const createHistoryItem = (overrides: Partial<ImageHistoryItem> = {}): ImageHistoryItem => ({
   id: `item-${Math.random().toString(36).substring(7)}`,
@@ -46,9 +55,61 @@ const createDefaultState = (overrides: { globalImageHistory?: ImageHistoryItem[]
 describe("GlobalImageHistory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    libraryStatus.current = { available: false };
+    useAssetStore.setState({ appView: "canvas" });
     // Default: empty history
     mockUseWorkflowStore.mockImplementation((selector) => {
       return selector(createDefaultState());
+    });
+  });
+
+  describe("Assets hand-off", () => {
+    const fifteen = () => Array.from({ length: 15 }, (_, i) => createHistoryItem({ id: `item-${i}` }));
+
+    it("always offers Open Assets under the recent grid", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: [createHistoryItem()] })));
+      render(<GlobalImageHistory />);
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByRole("button", { name: "Open Assets" }));
+      expect(useAssetStore.getState().appView).toBe("assets");
+      // The drop-down closes on the way
+      expect(screen.queryByRole("dialog", { name: "Recent generations" })).not.toBeInTheDocument();
+    });
+
+    it("opens Assets from Show all when the library is there", () => {
+      libraryStatus.current = { available: true };
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: fifteen() })));
+      render(<GlobalImageHistory />);
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByText("Show all · 15"));
+      expect(useAssetStore.getState().appView).toBe("assets");
+      expect(screen.queryByText("All History (15)")).not.toBeInTheDocument();
+    });
+
+    it("opens Assets from Show all before the library has answered", () => {
+      libraryStatus.current = null;
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: fifteen() })));
+      render(<GlobalImageHistory />);
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByText("Show all · 15"));
+      expect(useAssetStore.getState().appView).toBe("assets");
+    });
+
+    it("says clearing the list keeps the files", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: [createHistoryItem()] })));
+      render(<GlobalImageHistory />);
+      fireEvent.click(screen.getByRole("button"));
+      expect(screen.getByText("Clear list")).toHaveAttribute("title", "Files stay in Assets");
+    });
+
+    it("closes its sidebar when the view switches to Assets", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: fifteen() })));
+      render(<GlobalImageHistory />);
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByText("Show all · 15"));
+      expect(screen.getByText("All History (15)")).toBeInTheDocument();
+      act(() => useAssetStore.getState().setAppView("assets"));
+      expect(screen.queryByText("All History (15)")).not.toBeInTheDocument();
     });
   });
 
@@ -213,8 +274,8 @@ describe("GlobalImageHistory", () => {
       const triggerButton = screen.getByRole("button");
       fireEvent.click(triggerButton);
 
-      // 1 trigger + Clear + 12 thumbnails + Show all
-      expect(screen.getAllByRole("button").length).toBe(15);
+      // 1 trigger + Clear list + 12 thumbnails + Show all + Open Assets
+      expect(screen.getAllByRole("button").length).toBe(16);
       expect(screen.getAllByRole("img").length).toBe(12);
     });
 
@@ -276,7 +337,7 @@ describe("GlobalImageHistory", () => {
       // Let's create a scenario with overflow
     });
 
-    it("should show Clear All button in sidebar", () => {
+    it("should show Clear list in the sidebar", () => {
       const history = Array.from({ length: 15 }, (_, i) =>
         createHistoryItem({ id: `item-${i}` })
       );
@@ -291,10 +352,10 @@ describe("GlobalImageHistory", () => {
       // Open sidebar
       fireEvent.click(screen.getByText("Show all · 15"));
 
-      expect(screen.getByText("Clear All")).toBeInTheDocument();
+      expect(screen.getByText("Clear list")).toBeInTheDocument();
     });
 
-    it("should call clearGlobalHistory when Clear All is clicked", () => {
+    it("should call clearGlobalHistory when Clear list is clicked in the sidebar", () => {
       const history = Array.from({ length: 15 }, (_, i) =>
         createHistoryItem({ id: `item-${i}` })
       );
@@ -309,7 +370,7 @@ describe("GlobalImageHistory", () => {
       // Open sidebar
       fireEvent.click(screen.getByText("Show all · 15"));
       // Clear all
-      fireEvent.click(screen.getByText("Clear All"));
+      fireEvent.click(screen.getByText("Clear list"));
 
       expect(mockClearGlobalHistory).toHaveBeenCalled();
     });
@@ -438,7 +499,7 @@ describe("GlobalImageHistory", () => {
 
       render(<GlobalImageHistory />);
       fireEvent.click(screen.getByRole("button"));
-      fireEvent.click(screen.getByText("Clear"));
+      fireEvent.click(screen.getByText("Clear list"));
 
       expect(mockClearGlobalHistory).toHaveBeenCalled();
     });

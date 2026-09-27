@@ -3,12 +3,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
 // Use vi.hoisted so mock fns are available during vi.mock() hoisting
-const { mockExecFileAsync, mockStat, mockPlatform, mockHomedir } = vi.hoisted(() => ({
+const { mockExecFileAsync, mockStat, mockPlatform, mockHomedir, mockGuard, mockLibraryStatus } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   mockStat: vi.fn(),
   mockPlatform: vi.fn(),
   mockHomedir: vi.fn(),
+  mockGuard: vi.fn(),
+  mockLibraryStatus: vi.fn(),
 }));
+
+// The guard itself is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: mockGuard }));
+vi.mock("@/lib/assets/server", () => ({ getLibraryStatus: mockLibraryStatus }));
 
 vi.mock(import("child_process"), async (importOriginal) => {
   const actual = await importOriginal();
@@ -66,81 +72,33 @@ describe("/api/open-file route", () => {
     vi.clearAllMocks();
     mockPlatform.mockReturnValue("darwin");
     mockHomedir.mockReturnValue("/Users/testuser");
+    mockLibraryStatus.mockResolvedValue({ available: true, root: "/Users/testuser/Pictures/Node Banana" });
   });
 
-  describe("localhost guard", () => {
-    it("should return 403 for non-localhost x-forwarded-for", async () => {
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { "x-forwarded-for": "203.0.113.50", host: "localhost:3000" }
-      );
+  describe("request guard", () => {
+    it("returns the guard's refusal before reading the body or the disk", async () => {
+      const refusal = new Response(JSON.stringify({ error: "refused", code: "forbidden" }), { status: 403 });
+      mockGuard.mockReturnValueOnce(refusal);
+      const request = createMockRequest({ filePath: "/Users/testuser/file.glb" });
 
       const response = await POST(request);
-      const data = await response.json();
 
-      expect(response.status).toBe(403);
-      expect(data.error).toBe("Forbidden: localhost only");
+      expect(response).toBe(refusal);
+      expect(request.json).not.toHaveBeenCalled();
+      expect(mockStat).not.toHaveBeenCalled();
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
     });
 
-    it("should return 403 for non-localhost host header", async () => {
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { host: "example.com" }
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(403);
-      expect(data.error).toBe("Forbidden: localhost only");
-    });
-
-    it("should allow requests from 127.0.0.1 x-forwarded-for", async () => {
+    it("goes on when the guard lets the request through", async () => {
       mockStat.mockResolvedValue({ isFile: () => true });
       mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
 
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { "x-forwarded-for": "127.0.0.1", host: "localhost:3000" }
-      );
-
+      const request = createMockRequest({ filePath: "/Users/testuser/file.glb" });
       const response = await POST(request);
-      const data = await response.json();
 
+      expect(mockGuard).toHaveBeenCalledWith(request);
       expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-    });
-
-    it("should allow requests from ::1 x-forwarded-for", async () => {
-      mockStat.mockResolvedValue({ isFile: () => true });
-      mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
-
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { "x-forwarded-for": "::1", host: "localhost:3000" }
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-    });
-
-    it("should allow requests with localhost host header", async () => {
-      mockStat.mockResolvedValue({ isFile: () => true });
-      mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
-
-      const request = createMockRequest(
-        { filePath: "/Users/testuser/file.glb" },
-        { host: "localhost:3000" }
-      );
-
-      const response = await POST(request);
-      const data = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
+      expect((await response.json()).success).toBe(true);
     });
   });
 
@@ -186,6 +144,90 @@ describe("/api/open-file route", () => {
       expect(response.status).toBe(403);
       expect(data.error).toBe("Path is outside allowed directory");
     });
+
+    const EXTERNAL_LIBRARY = "/Volumes/External/Node Banana";
+    const revealOk = () => {
+      mockStat.mockResolvedValue({ isFile: () => true });
+      mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
+    };
+    const reveal = async (body: Record<string, unknown>) => {
+      const response = await POST(createMockRequest(body));
+      return { status: response.status, data: await response.json() };
+    };
+
+    it("reveals a file in the asset library when the library lives outside home", async () => {
+      revealOk();
+      mockLibraryStatus.mockResolvedValue({ available: true, root: EXTERNAL_LIBRARY });
+      const filePath = `${EXTERNAL_LIBRARY}/Generations/2026-09-27/101500_cube_deadbeef.glb`;
+
+      const { status, data } = await reveal({ filePath });
+
+      expect(status).toBe(200);
+      expect(data.success).toBe(true);
+      expect(mockExecFileAsync).toHaveBeenCalledWith("open", ["-R", filePath]);
+    });
+
+    it("reveals a file in an unavailable library whose folder is still known", async () => {
+      revealOk();
+      mockLibraryStatus.mockResolvedValue({ available: false, reason: "Read-only", root: EXTERNAL_LIBRARY });
+
+      const { status } = await reveal({ filePath: `${EXTERNAL_LIBRARY}/Generations/model.glb` });
+
+      expect(status).toBe(200);
+    });
+
+    it("reveals a file inside the project folder the page names", async () => {
+      revealOk();
+      const filePath = "/Volumes/Work/Cubes/generations/model.glb";
+
+      const { status } = await reveal({ filePath, projectPath: "/Volumes/Work/Cubes" });
+
+      expect(status).toBe(200);
+      expect(mockExecFileAsync).toHaveBeenCalledWith("open", ["-R", filePath]);
+    });
+
+    it("does not ask the library about a file under home", async () => {
+      revealOk();
+
+      expect((await reveal({ filePath: "/Users/testuser/generations/model.glb" })).status).toBe(200);
+      expect(mockLibraryStatus).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a sibling folder that only shares the library's prefix", `${EXTERNAL_LIBRARY} 2/model.glb`, {}],
+      ["a path that climbs out of the library", `${EXTERNAL_LIBRARY}/Generations/../../secret.glb`, {}],
+      ["a path that climbs out of the project", "/Volumes/Work/Cubes/../Other/model.glb", { projectPath: "/Volumes/Work/Cubes" }],
+      ["a file outside a named project", "/Volumes/Work/Other/model.glb", { projectPath: "/Volumes/Work/Cubes" }],
+      ["a project folder that is a filesystem root", "/etc/passwd", { projectPath: "/" }],
+      ["a relative project folder", "/etc/passwd", { projectPath: "etc" }],
+      ["a project folder that is not a string", "/etc/passwd", { projectPath: ["/etc"] }],
+    ])("refuses %s", async (_label, filePath, extra) => {
+      revealOk();
+      mockLibraryStatus.mockResolvedValue({ available: true, root: EXTERNAL_LIBRARY });
+
+      const { status, data } = await reveal({ filePath, ...extra });
+
+      expect(status).toBe(403);
+      expect(data.error).toBe("Path is outside allowed directory");
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
+    });
+
+    it("refuses a path outside home when the library cannot say where it is", async () => {
+      revealOk();
+      mockLibraryStatus.mockRejectedValue(new Error("boom"));
+
+      expect((await reveal({ filePath: `${EXTERNAL_LIBRARY}/model.glb` })).status).toBe(403);
+    });
+
+    it.runIf(process.platform === "darwin" || process.platform === "win32")(
+      "compares folders case-insensitively where the filesystem does",
+      async () => {
+        revealOk();
+        mockLibraryStatus.mockResolvedValue({ available: true, root: EXTERNAL_LIBRARY });
+
+        expect((await reveal({ filePath: "/volumes/external/node banana/Generations/model.glb" })).status).toBe(200);
+      },
+    );
   });
 
   describe("file validation", () => {

@@ -5,8 +5,13 @@ const { existsSync } = require('node:fs');
 const path = require('node:path');
 const next = require('next');
 const { createRedactor } = require('./lib/diagnostics.cjs');
+const { browseDirectoryTitle, createBridgeClient } = require('./lib/bridge.cjs');
 const redactor = createRedactor();
 globalThis.__nodeBananaRedact = value => redactor.redact(value);
+// Native actions (reveal, trash, a folder picker) for route code, answered by
+// main; see DesktopServerBridge in src/lib/assets/types.ts.
+const bridge = createBridgeClient({ post: message => process.parentPort.postMessage(message) });
+globalThis.__nodeBananaDesktop = { request: (type, payload) => bridge.request(type, payload) };
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = '127.0.0.1';
@@ -21,16 +26,10 @@ const origin = `http://${hostname}:${port}`;
 const AGENT_LOCAL_HEADER = 'x-nb-agent-local';
 const agentLocalSecret = randomBytes(32).toString('hex');
 process.env.NB_AGENT_LOCAL_SECRET = agentLocalSecret;
-const directoryRequests = new Map();
-let requestId = 0;
 
 process.parentPort.on('message', ({ data }) => {
-  if (data.type === 'secrets') { redactor.add(data.values); return; }
-  const resolve = directoryRequests.get(data.id);
-  if (resolve) {
-    directoryRequests.delete(data.id);
-    resolve(data.result);
-  }
+  if (data?.type === 'secrets') { redactor.add(data.values); return; }
+  bridge.receive(data);
 });
 
 function authorized(req) {
@@ -52,16 +51,11 @@ async function start() {
     delete req.headers['x-node-banana-desktop'];
     req.headers[AGENT_LOCAL_HEADER] = agentLocalSecret;
     try {
-      if (req.method === 'GET' && new URL(req.url, origin).pathname === '/api/browse-directory') {
-        const id = ++requestId;
-        const result = await new Promise((resolve) => {
-          directoryRequests.set(id, resolve);
-          res.on('close', () => {
-            directoryRequests.delete(id);
-            resolve({ success: true, cancelled: true, path: null });
-          });
-          process.parentPort.postMessage({ type: 'choose-directory', id });
-        });
+      const url = req.method === 'GET' ? new URL(req.url, origin) : undefined;
+      if (url?.pathname === '/api/browse-directory') {
+        const picker = bridge.pickDirectory({ title: browseDirectoryTitle(url.searchParams) });
+        res.on('close', () => picker.cancel({ success: true, cancelled: true, path: null }));
+        const result = await picker.result;
         if (!res.destroyed) {
           res.writeHead(result.success ? 200 : 500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));

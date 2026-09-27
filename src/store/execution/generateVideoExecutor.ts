@@ -11,6 +11,16 @@ import { pollGenerateTask } from "./pollTaskCompletion";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
 import { MissingInputError } from "./missingInput";
+import {
+  assetCost,
+  assetModel,
+  assetParameters,
+  assetProducer,
+  followRecording,
+  parameterFraming,
+  recordOutput,
+  resolvedPrompt,
+} from "./assetRecording";
 
 export interface GenerateVideoOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -160,10 +170,27 @@ export async function executeGenerateVideo(
         const timestamp = Date.now();
         const videoId = `${timestamp}`;
 
-        // The carousel reloads entries from the generations folder, so only a
-        // generation that is being saved there gets an entry.
+        // fal bills a flat amount per run
+        const runCost = modelToUse.provider === "fal" && modelToUse.pricing ? modelToUse.pricing.amount : null;
+        const parameters = requestPayload.parameters;
+        const recorded = recordOutput(ctx, {
+          // Some video models answer with a still
+          kind: videoData ? "video" : "image",
+          origin: "generated",
+          media: outputContent,
+          prompt: resolvedPrompt(text, dynamicInputs),
+          model: assetModel(modelToUse),
+          parameters: assetParameters(parameters),
+          ...parameterFraming(parameters),
+          cost: assetCost(runCost),
+          producer: assetProducer(ctx),
+        });
+
+        // The carousel reloads its entries from the asset library, or from the
+        // generations folder, so only a generation saved to one gets an entry.
         const newHistoryItem = {
           id: videoId,
+          ...(recorded ? { assetId: recorded.assetId } : {}),
           timestamp,
           prompt: text || "",
           model: modelToUse.modelId || "",
@@ -174,7 +201,7 @@ export async function executeGenerateVideo(
           outputVideo: outputContent,
           status: "complete",
           error: null,
-          ...(generationsPath ? { videoHistory: updatedHistory, selectedVideoHistoryIndex: 0 } : {}),
+          ...(generationsPath || recorded ? { videoHistory: updatedHistory, selectedVideoHistoryIndex: 0 } : {}),
         });
 
         // Push this result to downstream outputGallery nodes so a batch run
@@ -198,46 +225,56 @@ export async function executeGenerateVideo(
         }
 
         // Track cost
-        if (modelToUse.provider === "fal" && modelToUse.pricing) {
-          addIncurredCost(modelToUse.pricing.amount);
+        if (runCost !== null) {
+          addIncurredCost(runCost);
         }
 
-        // Auto-save to generations folder if configured
-        if (generationsPath) {
-          const saveContent = videoData
-            ? { video: videoData }
-            : { image: result.image };
+        // The save to the generations folder: a project's only save without
+        // the asset library, and its fallback when a recording fails
+        const saveToFolder = generationsPath
+          ? () => {
+              const saveContent = videoData
+                ? { video: videoData }
+                : { image: result.image };
 
-          const savePromise = fetch("/api/save-generation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              directoryPath: generationsPath,
-              ...saveContent,
-              prompt: text,
-              imageId: videoId,
-            }),
-          })
-            .then((res) => res.json())
-            .then((saveResult) => {
-              if (saveResult.success && saveResult.imageId && saveResult.imageId !== videoId) {
-                const currentNode = getNodes().find((n) => n.id === node.id);
-                if (currentNode) {
-                  const currentData = currentNode.data as GenerateVideoNodeData;
-                  const histCopy = [...(currentData.videoHistory || [])];
-                  const entryIndex = histCopy.findIndex((h) => h.id === videoId);
-                  if (entryIndex !== -1) {
-                    histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
-                    updateNodeData(node.id, { videoHistory: histCopy });
+              return fetch("/api/save-generation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  directoryPath: generationsPath,
+                  ...saveContent,
+                  prompt: text,
+                  imageId: videoId,
+                }),
+              })
+                .then((res) => res.json())
+                .then((saveResult) => {
+                  if (saveResult.success && saveResult.imageId && saveResult.imageId !== videoId) {
+                    const currentNode = getNodes().find((n) => n.id === node.id);
+                    if (currentNode) {
+                      const currentData = currentNode.data as GenerateVideoNodeData;
+                      const histCopy = [...(currentData.videoHistory || [])];
+                      const entryIndex = histCopy.findIndex((h) => h.id === videoId);
+                      if (entryIndex !== -1) {
+                        histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
+                        updateNodeData(node.id, { videoHistory: histCopy });
+                      }
+                    }
                   }
-                }
-              }
-            })
-            .catch((err) => {
-              console.error("Failed to save video generation:", err);
-            });
+                })
+                .catch((err) => {
+                  console.error("Failed to save video generation:", err);
+                });
+            }
+          : null;
 
-          trackSaveGeneration(videoId, savePromise);
+        if (recorded) {
+          // The recorder writes a project's generations into its folder; the
+          // carousel entry then takes the file's name, as a save there always did.
+          followRecording(ctx, "videoHistory", videoId, recorded, saveToFolder);
+        } else if (saveToFolder) {
+          // No asset library: auto-save to the generations folder
+          trackSaveGeneration(videoId, saveToFolder());
         }
       } else {
         updateNodeData(node.id, {

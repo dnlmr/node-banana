@@ -19,6 +19,12 @@ describe("CarouselControls", () => {
     expect(onNext).toHaveBeenCalled();
   });
 
+  it("marks no item current when the output shown is not in the list", () => {
+    const { container } = render(<CarouselControls index={-1} count={3} onPrev={() => {}} onNext={() => {}} />);
+    expect(screen.getByText("– / 3")).toBeInTheDocument();
+    expect(container.querySelectorAll(".bg-neutral-300")).toHaveLength(0);
+  });
+
   it("uses the noun in titles and disables while loading", () => {
     render(<CarouselControls index={0} count={2} onPrev={() => {}} onNext={() => {}} noun="video" loading />);
     expect(screen.getByTitle("Previous video")).toBeDisabled();

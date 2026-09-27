@@ -14,6 +14,7 @@ import { saveComfySettings, getComfySettings } from "@/lib/comfy/settings";
 import { EnvironmentImport } from '@/components/settings/EnvironmentImport';
 import { isDesktop, comfySecretFields } from '@/lib/desktop/credentials';
 import { ConnectionSettings } from "@/components/settings/ConnectionSettings";
+import { LibrarySettingsTab } from "@/components/settings/LibrarySettingsTab";
 import {
   Dialog,
   DialogButton,
@@ -32,7 +33,11 @@ import {
   DialogTextButton,
   splitPanelClass,
 } from "@/components/ui/Dialog";
-import { Field, Segmented, Select, Slider, Switch, TextInput, labelClass, type SegmentedOption } from "@/components/ui/Controls";
+import { Field, Segmented, Select, Slider, Switch, TextInput, helpClass, labelClass, type SegmentedOption } from "@/components/ui/Controls";
+import { getRecorderLibraryStatus } from "@/lib/assets/client/recorder";
+import { fetchProjectFolderName } from "@/lib/assets/client/api";
+import type { ProjectFolderName } from "@/lib/assets/types";
+import { shortenHomePath } from "@/components/assets/projectsFormat";
 import { APP_VERSION } from "@/lib/appVersion";
 import { cn } from "@/components/nodes/ui/cn";
 import { ComfyMark } from "@/components/icons/ComfyMark";
@@ -86,11 +91,12 @@ const getProviderIcon = (provider: ProviderType) => {
   }
 };
 
-export type SettingsTab = "project" | "providers" | "comfy" | "nodeDefaults" | "canvas" | "noodles";
+export type SettingsTab = "project" | "library" | "providers" | "comfy" | "nodeDefaults" | "canvas" | "noodles";
 
 /** The rail's entries, with each page's heading and one-line subtitle. */
 const SETTINGS_PAGES: { id: SettingsTab; label: string; title: string; description: string }[] = [
   { id: "project", label: "Project", title: "Project", description: "Name, location and how the file is written." },
+  { id: "library", label: "Storage", title: "Storage", description: "Where your projects and generations are saved." },
   { id: "providers", label: "Providers", title: "Providers", description: "API keys for the model providers this project can call." },
   { id: "comfy", label: "ComfyUI", title: "ComfyUI", description: "Where Comfy app nodes run." },
   { id: "nodeDefaults", label: "Node defaults", title: "Node defaults", description: "Applied when a node is added from the bar or a shortcut." },
@@ -135,6 +141,12 @@ interface ProjectSetupModalProps {
   mode: "new" | "settings";
   /** Page to open on in settings mode; the menu's API keys entry passes "providers". */
   initialTab?: SettingsTab;
+  /**
+   * Bumped by the host when something outside the dialog asks for a page
+   * (the first-run hint, the Assets view): an open dialog moves to
+   * `initialTab` again instead of staying where the user left it.
+   */
+  pageRequest?: number;
 }
 
 export function ProjectSetupModal({
@@ -143,6 +155,7 @@ export function ProjectSetupModal({
   onSave,
   mode,
   initialTab,
+  pageRequest,
 }: ProjectSetupModalProps) {
   const sanitizeProjectFolderName = (projectName: string): string => {
     return projectName
@@ -179,6 +192,7 @@ export function ProjectSetupModal({
   };
 
   const {
+    workflowId,
     workflowName,
     saveDirectoryPath,
     useExternalImageStorage,
@@ -207,6 +221,13 @@ export function ProjectSetupModal({
   const [isValidating, setIsValidating] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "Choose another location…": the project goes in a directory of the user's
+  // choosing instead of a folder of its own inside the Node Banana folder
+  const [customLocation, setCustomLocation] = useState(true);
+  // The folder the name gets inside the Node Banana folder, as the server numbers it
+  const [folderTarget, setFolderTarget] = useState<ProjectFolderName | null>(null);
+  // The chosen folder already holds a different workflow: replace it, or save beside it
+  const [folderConflict, setFolderConflict] = useState<{ path: string; existingName: string | null } | null>(null);
 
   // Provider tab state
   const [localProviders, setLocalProviders] = useState<ProviderSettings>(providerSettings);
@@ -268,6 +289,11 @@ export function ProjectSetupModal({
         setDirectoryPath(getLastProjectBaseDir() || "");
         setExternalStorage(true);
       }
+      // A project goes in the Node Banana folder unless it already lives
+      // somewhere, or there is no Node Banana folder to put it in.
+      const openingStatus = getRecorderLibraryStatus();
+      setCustomLocation(!(openingStatus?.available && openingStatus.root) || (mode === "settings" && !!saveDirectoryPath));
+      setFolderTarget(null);
 
       // Sync local providers state
       editedProviderKeys.current.clear();
@@ -285,6 +311,7 @@ export function ProjectSetupModal({
         comfy: !!providerSettings.providers.comfy?.apiKey,
       });
       setError(null);
+      setFolderConflict(null);
 
       // Load node defaults
       setLocalNodeDefaults(loadNodeDefaults());
@@ -306,6 +333,47 @@ export function ProjectSetupModal({
     // Provider edits/imports must not reset other unsaved settings drafts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, mode, workflowName, saveDirectoryPath, useExternalImageStorage, canvasNavigationSettings]);
+
+  // A page asked for while the dialog is already open: go there, keep the drafts.
+  useEffect(() => {
+    if (isOpen && mode === "settings" && initialTab && pageRequest !== undefined) setActiveTab(initialTab);
+    // Only a new request moves the page; the open effect above handles opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRequest]);
+
+  // Where the name lands in the Node Banana folder, asked as it is typed
+  const recorderStatus = getRecorderLibraryStatus();
+  const libraryRoot = recorderStatus?.available ? recorderStatus.root : null;
+  const folderQuery = isOpen && activeTab === "project" && !customLocation && libraryRoot ? name.trim() || "my-project" : null;
+  useEffect(() => {
+    if (folderQuery === null) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetchProjectFolderName(folderQuery, controller.signal)
+        .then((target) => {
+          if (!controller.signal.aborted) setFolderTarget(target);
+        })
+        .catch(() => {
+          // The line falls back to the plain name; saving asks again
+        });
+    }, 150);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [folderQuery]);
+
+  /** "Choose another location…" and back: a chosen directory starts at the Node Banana folder. */
+  const toggleCustomLocation = () => {
+    if (customLocation) {
+      setCustomLocation(false);
+    } else {
+      if (!directoryPath.trim() && libraryRoot) setDirectoryPath(libraryRoot);
+      setCustomLocation(true);
+    }
+    setError(null);
+    setFolderConflict(null);
+  };
 
   const handleBrowse = async () => {
     setIsBrowsing(true);
@@ -336,18 +404,53 @@ export function ProjectSetupModal({
     }
   };
 
-  const handleSaveProject = async () => {
-    if (!name.trim()) {
+  /** The Node Banana workflow a folder already holds, if any. */
+  const findWorkflowInFolder = async (folder: string): Promise<{ id: string | null; name: string | null } | null> => {
+    try {
+      const response = await fetch(`/api/workflow?path=${encodeURIComponent(folder)}&load=true`);
+      const result = await response.json();
+      if (!result?.success || !result.workflow) return null;
+      const { id, name: existingName } = result.workflow as { id?: unknown; name?: unknown };
+      return {
+        id: typeof id === "string" ? id : null,
+        name: typeof existingName === "string" && existingName ? existingName : null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  /** "Fox" → "Fox 2", "Fox 2" → "Fox 3". */
+  const nextProjectName = (projectName: string): string => {
+    const trimmed = projectName.trim();
+    const numbered = trimmed.match(/^(.*\S)\s+(\d+)$/);
+    return numbered ? `${numbered[1]} ${Number(numbered[2]) + 1}` : `${trimmed} 2`;
+  };
+
+  const saveProject = async (projectName: string, replaceExisting: boolean) => {
+    if (!projectName.trim()) {
       setError("Project name is required");
       return;
     }
 
-    if (!directoryPath.trim()) {
+    const inFolder = !customLocation && !!libraryRoot;
+    if (!inFolder && !directoryPath.trim()) {
       setError("Project directory is required");
       return;
     }
 
-    const fullProjectPath = ensureProjectSubfolderPath(directoryPath, name);
+    let fullProjectPath: string;
+    if (inFolder) {
+      // Asked afresh: a folder may have appeared since the name was typed
+      try {
+        fullProjectPath = (await fetchProjectFolderName(projectName.trim())).path;
+      } catch (err) {
+        setError(`Could not find a folder for the project: ${err instanceof Error ? err.message : "Unknown error"}`);
+        return;
+      }
+    } else {
+      fullProjectPath = ensureProjectSubfolderPath(directoryPath, projectName);
+    }
 
     if (!(fullProjectPath.startsWith("/") || /^[A-Za-z]:[\\\/]/.test(fullProjectPath) || fullProjectPath.startsWith("\\\\"))) {
       setError("Project directory must be an absolute path (starting with /, a drive letter, or a UNC path)");
@@ -356,6 +459,7 @@ export function ProjectSetupModal({
 
     setIsValidating(true);
     setError(null);
+    setFolderConflict(null);
 
     try {
       // Validate path shape when it already exists
@@ -370,12 +474,29 @@ export function ProjectSetupModal({
         return;
       }
 
-      const id = mode === "new" ? generateWorkflowId() : useWorkflowStore.getState().workflowId || generateWorkflowId();
+      // A canvas that has never had a folder keeps its id when it becomes a
+      // project, so what it already generated belongs to the project too. One
+      // that already has a folder becomes a new workflow.
+      const id = mode === "new"
+        ? (saveDirectoryPath ? generateWorkflowId() : workflowId || generateWorkflowId())
+        : useWorkflowStore.getState().workflowId || generateWorkflowId();
+
+      // Saving over another workflow's folder would overwrite it; ask first.
+      // The folder this workflow already lives in is its own, whatever its file says.
+      if (result.exists && !replaceExisting && fullProjectPath !== saveDirectoryPath) {
+        const existing = await findWorkflowInFolder(fullProjectPath);
+        if (existing && existing.id !== id) {
+          setFolderConflict({ path: fullProjectPath, existingName: existing.name });
+          setIsValidating(false);
+          return;
+        }
+      }
+
       // Update external storage setting
       setUseExternalImageStorage(externalStorage);
-      // Remember the base directory for next time
-      setLastProjectBaseDir(directoryPath);
-      onSave(id, name.trim(), fullProjectPath);
+      // Remember a chosen base directory for next time
+      if (!inFolder) setLastProjectBaseDir(directoryPath);
+      onSave(id, projectName.trim(), fullProjectPath);
       setIsValidating(false);
     } catch (err) {
       setError(
@@ -383,6 +504,15 @@ export function ProjectSetupModal({
       );
       setIsValidating(false);
     }
+  };
+
+  const handleSaveProject = () => saveProject(name, false);
+
+  /** Keep the other workflow, and save this one as "<name> 2" in a folder of its own. */
+  const handleSaveBeside = () => {
+    const next = nextProjectName(name);
+    setName(next);
+    saveProject(next, false);
   };
 
   const handleSaveProviders = () => {
@@ -440,6 +570,9 @@ export function ProjectSetupModal({
   const handleSave = () => {
     if (activeTab === "project") {
       handleSaveProject();
+    } else if (activeTab === "library") {
+      // Storage actions apply as they are made; there is nothing to save.
+      onClose();
     } else if (activeTab === "providers") {
       handleSaveProviders();
     } else if (activeTab === "comfy") {
@@ -482,6 +615,11 @@ export function ProjectSetupModal({
   if (!isOpen) return null;
 
   const page = SETTINGS_PAGES.find((p) => p.id === activeTab) ?? SETTINGS_PAGES[0];
+  // The folder the project is saved in, inside the Node Banana folder
+  const folderPath = libraryRoot
+    ? folderTarget?.path ?? joinPathForPlatform(libraryRoot, sanitizeProjectFolderName(name) || "my-project")
+    : null;
+  const takenFolder = folderTarget?.taken ? folderTarget.folder.replace(/ \d+$/, "") : null;
   const llmProvider = localNodeDefaults.llm?.provider || "google";
   const llmTemperature = localNodeDefaults.llm?.temperature ?? 0.7;
   const llmMaxTokens = localNodeDefaults.llm?.maxTokens ?? 8192;
@@ -492,6 +630,8 @@ export function ProjectSetupModal({
     <Dialog
       open={isOpen}
       onClose={onClose}
+      // In a body portal, so it still opens while its host is hidden (the Assets view)
+      portal
       className={cn(splitPanelClass, "w-[840px] h-[560px] max-w-[92vw] max-h-[85vh]")}
       panelProps={{ onKeyDown: handleKeyDown }}
     >
@@ -531,13 +671,25 @@ export function ProjectSetupModal({
                 placeholder="my-project"
                 autoFocus
               />
+              {!customLocation && folderPath && (
+                <>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <p className="min-w-0 text-xs leading-4 text-neutral-500">
+                      Saves to <span className="font-mono text-[11px] text-neutral-400 break-all">{shortenHomePath(folderPath)}</span>
+                    </p>
+                    <DialogTextButton className="-mr-1.5 shrink-0 text-xs" onClick={toggleCustomLocation}>
+                      Choose another location…
+                    </DialogTextButton>
+                  </div>
+                  {takenFolder && (
+                    <p className={helpClass}>There’s already a “{takenFolder}” folder there, so this one gets a number.</p>
+                  )}
+                </>
+              )}
             </Field>
 
-            <Field
-              id="project-directory"
-              label="Project directory"
-              help="Workflow files and images will be saved here. Subfolders for inputs and generations will be auto-created."
-            >
+            {customLocation && (
+            <Field id="project-directory" label="Project directory">
               <div className="flex gap-2">
                 <TextInput
                   id="project-directory"
@@ -556,7 +708,18 @@ export function ProjectSetupModal({
                   {isBrowsing ? "..." : "Browse"}
                 </DialogButton>
               </div>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <p className="min-w-0 text-xs leading-4 text-neutral-500">
+                  Only this project is saved here. Its generations still show in Assets.
+                </p>
+                {libraryRoot && (
+                  <DialogTextButton className="-mr-1.5 shrink-0 text-xs" onClick={toggleCustomLocation}>
+                    Use the Node Banana folder
+                  </DialogTextButton>
+                )}
+              </div>
             </Field>
+            )}
 
             <DialogRow
               title="Embed images as base64"
@@ -571,8 +734,29 @@ export function ProjectSetupModal({
             </DialogRow>
 
             {error && <DialogStatus tone="error">{error}</DialogStatus>}
+
+            {folderConflict && folderConflict.path === ensureProjectSubfolderPath(directoryPath, name) && (
+              <div role="alert" className="flex flex-col gap-2.5">
+                <DialogStatus tone="neutral">Folder already has a workflow</DialogStatus>
+                <p className="text-xs leading-4 text-neutral-400">
+                  {folderConflict.existingName ? `“${folderConflict.existingName}”` : "Another workflow"} is saved in{" "}
+                  {folderConflict.path}. Replace it with this one, or keep it and save this workflow in a new folder.
+                </p>
+                <div className="flex gap-2">
+                  <DialogButton variant="outline" size="md" onClick={() => saveProject(name, true)} disabled={isValidating}>
+                    Replace
+                  </DialogButton>
+                  <DialogButton variant="outline" size="md" onClick={handleSaveBeside} disabled={isValidating}>
+                    Save as “{nextProjectName(name)}”
+                  </DialogButton>
+                </div>
+              </div>
+            )}
           </div>
         )}
+
+        {/* Storage Tab Content */}
+        {activeTab === "library" && <LibrarySettingsTab onLeave={onClose} />}
 
         {/* Providers Tab Content */}
         {activeTab === "providers" && (
@@ -929,9 +1113,11 @@ export function ProjectSetupModal({
         </DialogPageBody>
 
         <DialogPageFooter>
-          <DialogButton variant="ghost" size="md" onClick={onClose}>
-            Cancel
-          </DialogButton>
+          {activeTab !== "library" && (
+            <DialogButton variant="ghost" size="md" onClick={onClose}>
+              Cancel
+            </DialogButton>
+          )}
           <DialogButton
             variant="primary"
             size="md"
@@ -940,7 +1126,7 @@ export function ProjectSetupModal({
           >
             {activeTab === "project"
               ? (isValidating ? "Validating..." : mode === "new" ? "Create" : "Save")
-              : "Save"
+              : activeTab === "library" ? "Done" : "Save"
             }
           </DialogButton>
         </DialogPageFooter>

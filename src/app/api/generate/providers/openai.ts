@@ -2,6 +2,8 @@
 import type { GenerationInput, GenerationOutput } from "@/lib/providers/types";
 import { estimateOpenAIImage25Cost, validateOpenAIImageParameters } from "@/lib/providers/openaiImages";
 import type { ImageGenerationMetadata } from "@/types/api";
+import { decodeBase64, parseDataUrl } from "@/utils/dataUrl";
+import { mimeOfExtension, sniffExtension } from "@/utils/mediaSniff";
 
 const OPENAI_API_BASE = "https://api.openai.com/v1/images";
 const OPENAI_IMAGE_TIMEOUT_MS = 240_000;
@@ -26,20 +28,23 @@ function referenceBlob(image: string): { blob: Blob; extension: string } {
   if (typeof image !== "string" || /^https?:/i.test(image)) {
     throw new Error("OpenAI references must contain image data. Load the image into an Image Input node first.");
   }
-  const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(image);
-  const mimeType = match?.[1] ?? "image/png";
-  const base64 = match?.[2] ?? image;
-  if (!(mimeType in IMAGE_MIME_TYPES) || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
-    throw new Error("OpenAI references must be base64-encoded PNG, JPEG or WebP images.");
-  }
-  if (base64.length > Math.ceil(MAX_REFERENCE_BYTES / 3) * 4) {
+  // A data: URL's header is at most ~1 KB; checked before decoding so an oversized payload is never decoded.
+  if (image.length > Math.ceil(MAX_REFERENCE_BYTES / 3) * 4 + 1024) {
     throw new Error("Each OpenAI reference image must be smaller than 50 MB.");
   }
-  const bytes = Buffer.from(base64, "base64");
+  // Any declared type (or none, or with parameters); raw base64 is taken as PNG unless its bytes say otherwise.
+  const isDataUrl = image.slice(0, 5).toLowerCase() === "data:";
+  const decoded = isDataUrl ? parseDataUrl(image) : { mime: "", bytes: decodeBase64(image) };
+  const sniffed = decoded?.bytes ? sniffExtension(decoded.bytes, "image") : null;
+  const mimeType = sniffed ? (mimeOfExtension(sniffed) ?? sniffed) : decoded?.mime || "image/png";
+  if (!decoded?.bytes || !(mimeType in IMAGE_MIME_TYPES)) {
+    throw new Error("OpenAI references must be base64-encoded PNG, JPEG or WebP images.");
+  }
+  const bytes = decoded.bytes;
   if (!bytes.length || bytes.length >= MAX_REFERENCE_BYTES) {
     throw new Error("Each OpenAI reference image must contain image data and be smaller than 50 MB.");
   }
-  return { blob: new Blob([bytes], { type: mimeType }), extension: IMAGE_MIME_TYPES[mimeType as keyof typeof IMAGE_MIME_TYPES] };
+  return { blob: new Blob([bytes as BlobPart], { type: mimeType }), extension: IMAGE_MIME_TYPES[mimeType as keyof typeof IMAGE_MIME_TYPES] };
 }
 
 function getUsage(data: OpenAIImageResponse): ImageGenerationMetadata["usage"] {

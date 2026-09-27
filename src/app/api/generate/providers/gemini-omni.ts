@@ -2,6 +2,8 @@ import { GoogleGenAI } from "@google/genai";
 import { setTimeout as delay } from "node:timers/promises";
 import type { GenerationOutput } from "@/lib/providers/types";
 import { GEMINI_OMNI_PARAMETERS, isGeminiOmni } from "@/lib/providers/geminiOmni";
+import { parseDataUrl } from "@/utils/dataUrl";
+import { kindOfExtension, mimeOfExtension, sniffExtension } from "@/utils/mediaSniff";
 
 type MediaKind = "image" | "video" | "audio";
 type OmniContent = { type: MediaKind; data?: string; uri?: string; mime_type?: string } | { type: "text"; text: string };
@@ -45,10 +47,12 @@ export async function generateWithGeminiOmni(
     signal.throwIfAborted();
     let data: Buffer;
     let mime: string;
-    const inline = source.match(/^data:([^;,]+);base64,([\s\S]+)$/);
-    if (inline) {
-      mime = inline[1];
-      data = Buffer.from(inline[2], "base64");
+    if (source.slice(0, 5).toLowerCase() === "data:") {
+      // Any declared type, parameters, or none; only the payload is decoded.
+      const inline = parseDataUrl(source);
+      if (!inline) throw new Error(`Invalid ${type} input: the data URL could not be read.`);
+      mime = inline.mime;
+      data = Buffer.from(inline.bytes.buffer, inline.bytes.byteOffset, inline.bytes.byteLength);
     } else {
       const url = new URL(source);
       if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Media must be a data URL or HTTP(S) URL.");
@@ -56,6 +60,11 @@ export async function generateWithGeminiOmni(
       if (!response.ok) throw new Error(`Unable to download ${type} input (${response.status}).`);
       mime = response.headers.get("content-type")?.split(";")[0] ?? "";
       data = Buffer.from(await response.arrayBuffer());
+    }
+    if (!mime.startsWith(`${type}/`)) {
+      // No usable declared type (none, application/octet-stream): the bytes may still prove one.
+      const sniffed = sniffExtension(data, type);
+      if (sniffed && kindOfExtension(sniffed) === type) mime = mimeOfExtension(sniffed, type) ?? mime;
     }
     if (!mime.startsWith(`${type}/`) || data.length === 0) throw new Error(`Invalid ${type} input: expected ${type} media.`);
     if (type === "image" && data.length < 10 * 1024 * 1024) {

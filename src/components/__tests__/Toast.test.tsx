@@ -211,6 +211,57 @@ describe("Toast", () => {
     });
   });
 
+  describe("Actions", () => {
+    it("renders no action buttons by default", () => {
+      act(() => {
+        useToast.getState().show("Plain message");
+      });
+
+      render(<Toast />);
+
+      expect(screen.getAllByRole("button").map((button) => button.getAttribute("title"))).toEqual([
+        "Copy message",
+        "Dismiss",
+      ]);
+    });
+
+    it("runs an action and dismisses the toast when it is chosen", () => {
+      const onShow = vi.fn();
+      const onChange = vi.fn();
+      act(() => {
+        useToast.getState().show("Saved to Pictures › Node Banana", "info", false, null, [
+          { label: "Show", onClick: onShow },
+          { label: "Change…", onClick: onChange },
+        ]);
+      });
+
+      render(<Toast />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onShow).not.toHaveBeenCalled();
+      expect(screen.queryByText("Saved to Pictures › Node Banana")).not.toBeInTheDocument();
+    });
+
+    it("stays up longer when it has actions", () => {
+      act(() => {
+        useToast.getState().show("With actions", "info", false, null, [{ label: "Show", onClick: vi.fn() }]);
+      });
+
+      render(<Toast />);
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(screen.getByText("With actions")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(screen.queryByText("With actions")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Details Section", () => {
     it("should show 'Show details' button when details are provided", () => {
       act(() => {
@@ -411,5 +462,28 @@ describe("useToast Store", () => {
 
       expect(useToast.getState().details).toBe(null);
     });
+
+    it("should reset actions to null", () => {
+      act(() => {
+        useToast.getState().show("Test message", "info", false, null, [{ label: "Show", onClick: () => {} }]);
+      });
+
+      expect(useToast.getState().actions).toHaveLength(1);
+
+      act(() => {
+        useToast.getState().hide();
+      });
+
+      expect(useToast.getState().actions).toBe(null);
+    });
+  });
+
+  it("replaces an earlier toast's actions when a plain one is shown", () => {
+    act(() => {
+      useToast.getState().show("First", "info", false, null, [{ label: "Show", onClick: () => {} }]);
+      useToast.getState().show("Second", "error");
+    });
+
+    expect(useToast.getState().actions).toBe(null);
   });
 });

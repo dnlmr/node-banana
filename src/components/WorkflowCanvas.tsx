@@ -81,6 +81,7 @@ import { NodePlaceholder, useNodeMounted } from "./nodes/nodeCulling";
 import { detectAndSplitGrid } from "@/utils/gridSplitter";
 import { logger } from "@/utils/logger";
 import { WelcomeModal } from "./quickstart";
+import { useBringInRequest } from "./quickstart/useBringInRequest";
 import { ProjectSetupModal } from "./ProjectSetupModal";
 import { ChatPanel } from "./ChatPanel";
 import { EditOperation } from "@/lib/chat/editOperations";
@@ -101,6 +102,7 @@ import { selectCanvasOverview, setCanvasPanningClass } from "@/utils/canvasPerfo
 import { SplitGridTemplateModal } from "./splitgrid/SplitGridTemplateModal";
 import { createPortal } from "react-dom";
 import { useAnnotationStore } from "@/store/annotationStore";
+import { useAssetStore } from "@/store/assetStore";
 import { TutorialOverlay } from "./onboarding/TutorialOverlay";
 import { useFTUXStore } from "@/store/ftuxStore";
 
@@ -324,6 +326,7 @@ export function WorkflowCanvas() {
   const executeWorkflow = useWorkflowStore((state) => state.executeWorkflow);
   const setShowQuickstart = useWorkflowStore((state) => state.setShowQuickstart);
   const quickstartView = useWorkflowStore((state) => state.quickstartView);
+  useBringInRequest();
   const setNavigationTarget = useWorkflowStore((state) => state.setNavigationTarget);
   const applyEditOperations = useWorkflowStore((state) => state.applyEditOperations);
   const setWorkflowMetadata = useWorkflowStore((state) => state.setWorkflowMetadata);
@@ -349,6 +352,8 @@ export function WorkflowCanvas() {
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [isAgentMounted, setIsAgentMounted] = useState(false);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
+  // The agent window is portaled above everything, so the Assets view cannot cover it
+  const assetsShown = useAssetStore((state) => state.appView === "assets");
   const [isMinimapVisible, setIsMinimapVisible] = useState(true);
   const agentButtonBottom = getAgentButtonBottom({
     margin: MINIMAP_GEOMETRY.margin,
@@ -1244,27 +1249,47 @@ export function WorkflowCanvas() {
           });
         });
 
-        // Create ImageInput nodes arranged in a grid matching the layout
+        // Create ImageInput nodes arranged in a grid matching the layout,
+        // holding their cells from the start
         images.forEach((imageData: string, index: number) => {
           const row = Math.floor(index / grid.cols);
           const col = index % grid.cols;
 
-          const nodeId = addNode("imageInput", {
-            x: flowPosition.x + col * (nodeWidth + gap),
-            y: flowPosition.y + row * (nodeHeight + gap),
-          });
+          const nodeId = addNode(
+            "imageInput",
+            {
+              x: flowPosition.x + col * (nodeWidth + gap),
+              y: flowPosition.y + row * (nodeHeight + gap),
+            },
+            { image: imageData, filename: `split-${row + 1}-${col + 1}.png` }
+          );
 
           // Get dimensions from the split image
           const img = new Image();
           img.onload = () => {
             updateNodeData(nodeId, {
-              image: imageData,
-              filename: `split-${row + 1}-${col + 1}.png`,
               dimensions: { width: img.width, height: img.height },
             });
           };
           img.src = imageData;
         });
+
+        // Keep the cells in the asset library as one edit of the source
+        // node's image, once they are on the canvas, so the workflow saved
+        // with them shows the split nodes
+        const sourceModel = sourceNodeData?.selectedModel;
+        useWorkflowStore.getState().recordUiAsset(
+          images.map((imageData: string, index: number) => ({
+            kind: "image" as const,
+            origin: "edited" as const,
+            media: imageData,
+            ...(sourceModel
+              ? { model: { provider: sourceModel.provider, modelId: sourceModel.modelId, displayName: sourceModel.displayName } }
+              : {}),
+            parameters: { rows: grid.rows, cols: grid.cols, row: Math.floor(index / grid.cols) + 1, col: (index % grid.cols) + 1 },
+            producer: { nodeId: sourceNodeId, nodeType: sourceNode.type ?? "unknown", operation: "splitToNodes", batchIndex: index },
+          }))
+        );
 
       } catch (error) {
         console.error("[SplitGrid] Error:", error);
@@ -1701,6 +1726,8 @@ export function WorkflowCanvas() {
 
   // Keyboard shortcuts for copy/paste and stacking selected nodes
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
+    // The canvas is hidden behind the Assets view: none of its keys apply
+    if (useAssetStore.getState().appView !== "canvas") return;
     // Ignore if user is typing in an input field (including the edge label
     // field, which lives in React Flow's label layer)
     const active = document.activeElement;
@@ -1729,6 +1756,26 @@ export function WorkflowCanvas() {
         event.preventDefault();
         executeSelectedNodes(selected.map((n) => n.id));
       }
+      return;
+    }
+
+    // A (bare) shows the Assets view; Shift+letters add nodes. Not while a
+    // dialog, the annotation editor or the tutorial is up over the canvas, nor
+    // while a menu or dropdown is open: it would stay mounted (and keep its
+    // document key listener, e.g. Enter adding a node) under the Assets view.
+    if (
+      event.key.toLowerCase() === "a" &&
+      !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat &&
+      !useWorkflowStore.getState().isModalOpen &&
+      !useAnnotationStore.getState().isModalOpen &&
+      !useFTUXStore.getState().tutorialActive &&
+      !connectionDrop &&
+      !nodeSearchMenu &&
+      !document.querySelector('[role="menu"], [role="listbox"], [data-dialog-overlay]') &&
+      !(event.target instanceof Element && event.target.closest('[role="dialog"]'))
+    ) {
+      event.preventDefault();
+      useAssetStore.getState().setAppView("assets");
       return;
     }
 
@@ -1967,7 +2014,7 @@ export function WorkflowCanvas() {
 
         onNodesChange(changes);
       }
-  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, executeSelectedNodes, setShortcutsDialogOpen, undo, redo]);
+  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, executeSelectedNodes, setShortcutsDialogOpen, undo, redo, connectionDrop, nodeSearchMenu]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -2613,10 +2660,10 @@ export function WorkflowCanvas() {
         selectedNodeIds={selectedNodeIds}
       />
 
-      {/* Agent window - floats above the agent button */}
+      {/* Agent window - floats above the agent button; hidden (not closed) while Assets shows */}
       {isAgentMounted && (
         <AgentPanel
-          open={isAgentOpen}
+          open={isAgentOpen && !assetsShown}
           onClose={closeAgent}
           buttonRight={MINIMAP_GEOMETRY.margin}
           buttonBottom={agentButtonBottom}
