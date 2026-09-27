@@ -20,6 +20,7 @@ import {
   putRun,
   revealAsset,
   revealLibraryRoot,
+  scanProjects,
   startImport,
   uploadAssetBytes,
   uploadMedia,
@@ -227,6 +228,35 @@ describe("asset api", () => {
     await expect(fetchJob("j1")).resolves.toEqual(job);
     await expect(fetchJob("gone")).resolves.toBeNull();
     await expect(cancelJob("j1")).resolves.toBeUndefined();
+  });
+
+  it("asks the scan route to search a folder and reads its answer", async () => {
+    const found = {
+      root: "/work",
+      projects: [{ dir: "/work/Campaign", name: "Campaign", mediaCount: 12 }],
+      truncated: true,
+      unreadable: 2,
+    };
+    const { calls } = stubFetch(() => jsonResponse(found));
+    await expect(scanProjects("/work/")).resolves.toEqual(found);
+    expect(calls[0]).toMatchObject({ url: "/api/assets/import/scan", method: "POST" });
+    expect(calls[0].headers["content-type"]).toBe("application/json");
+    expect(jsonBody(calls[0])).toEqual({ root: "/work/" });
+  });
+
+  it("fills a partial scan answer and drops rows it can't use", async () => {
+    stubFetch(() => jsonResponse({ projects: [{ dir: "/a", name: "A" }, { dir: 5 }, null, "x"] }));
+    await expect(scanProjects("/work")).resolves.toEqual({
+      root: "/work",
+      projects: [{ dir: "/a", name: "A", mediaCount: 0 }],
+      truncated: false,
+      unreadable: 0,
+    });
+  });
+
+  it("rejects a refused scan with the route's reason", async () => {
+    stubFetch(() => jsonResponse({ error: '"/gone" doesn\'t exist.', code: "not_found" }, { status: 404 }));
+    await expect(scanProjects("/gone")).rejects.toMatchObject({ status: 404, code: "not_found", message: '"/gone" doesn\'t exist.' });
   });
 
   it("fills a partial bulk answer", async () => {

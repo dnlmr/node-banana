@@ -22,6 +22,7 @@ import {
   type AssetWorkflowResult,
   type CleanupRequest,
   type ExportAssetsRequest,
+  type FoundProject,
   type ImportProjectsRequest,
   type LibraryJobStatus,
   type LibraryStatus,
@@ -31,6 +32,7 @@ import {
   type RecordAssetRequest,
   type RecordAssetResult,
   type RevealRequest,
+  type ScanProjectsResult,
   type SetLibraryRootRequest,
   type UploadTicket,
   type WorkflowEntryUpdate,
@@ -310,6 +312,27 @@ async function startJob(url: string, request: unknown): Promise<LibraryJobStatus
 
 export async function startImport(request: ImportProjectsRequest): Promise<LibraryJobStatus> {
   return startJob(ASSET_ROUTES.importProjects, request);
+}
+
+/** The Node Banana projects under `root`, nested ones included; malformed rows are dropped. */
+export async function scanProjects(root: string): Promise<ScanProjectsResult> {
+  const body = await sendJson<Partial<ScanProjectsResult>>(ASSET_ROUTES.scanProjects, "POST", { root });
+  const projects = Array.isArray(body.projects)
+    ? body.projects.filter(
+        (project): project is FoundProject =>
+          isRecord(project) && typeof project.dir === "string" && typeof project.name === "string",
+      )
+    : [];
+  return {
+    root: typeof body.root === "string" ? body.root : root,
+    projects: projects.map((project) => ({
+      dir: project.dir,
+      name: project.name,
+      mediaCount: typeof project.mediaCount === "number" ? project.mediaCount : 0,
+    })),
+    truncated: body.truncated === true,
+    unreadable: typeof body.unreadable === "number" ? body.unreadable : 0,
+  };
 }
 
 export async function startCleanup(request: CleanupRequest): Promise<LibraryJobStatus> {
