@@ -19,6 +19,8 @@ import { AssetsView } from "@/components/assets/AssetsView";
 import { watchFirstRecording } from "@/components/assets/FirstRunHint";
 import { unloadWarning } from "@/components/assets/unloadWarning";
 import { initAssetLibrary, pendingRecordings } from "@/lib/assets/client/recorder";
+import { fetchLibraryStatus, reportProjects } from "@/lib/assets/client/api";
+import { collectProjectReport } from "@/lib/assets/client/projects";
 
 export default function Home() {
   return <DesktopSession><Editor /></DesktopSession>;
@@ -26,6 +28,22 @@ export default function Home() {
 
 /** One library init per page load, however often the effect below runs (Strict Mode runs it twice). */
 let libraryInit: ReturnType<typeof initAssetLibrary> | null = null;
+/** The projects this page's localStorage remembers go to the server once per page load. */
+let projectsReport: Promise<void> | null = null;
+
+/**
+ * Sends the report once the library is known to work. When the server
+ * adopted the old workflows folder as the Node Banana folder, the status
+ * the page holds is stale, so it is asked for again.
+ */
+function reportProjectsOnce(): Promise<void> {
+  projectsReport ??= reportProjects(collectProjectReport())
+    .then(async (result) => {
+      if (result.adopted) useAssetStore.getState().setLibrary(await fetchLibraryStatus());
+    })
+    .catch((error) => console.warn("Couldn't report projects to the asset library:", error));
+  return projectsReport;
+}
 
 function Editor() {
   const initializeAutoSave = useWorkflowStore(
@@ -52,6 +70,7 @@ function Editor() {
         if (cancelled) return;
         useAssetStore.getState().setLibrary(status);
         stopHint = watchFirstRecording(status);
+        if (status?.available) void reportProjectsOnce();
       })
       .catch((error) => console.warn("Asset library unavailable:", error));
     return () => {

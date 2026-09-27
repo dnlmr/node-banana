@@ -20,17 +20,25 @@ import {
   type AssetPatch,
   type AssetView,
   type AssetWorkflowResult,
+  type BringInProjectsRequest,
+  type BringInProjectsResult,
   type CleanupRequest,
   type ExportAssetsRequest,
   type FoundProject,
   type ImportProjectsRequest,
+  type KnownProject,
   type LibraryJobStatus,
   type LibraryStatus,
   type LibraryWorkflowEntry,
+  type ProjectFolderName,
+  type ProjectsElsewhere,
+  type ProjectsOverview,
   type PutRunRequest,
   type PutRunResult,
   type RecordAssetRequest,
   type RecordAssetResult,
+  type ReportProjectsRequest,
+  type ReportProjectsResult,
   type RevealRequest,
   type ScanProjectsResult,
   type SetLibraryRootRequest,
@@ -329,9 +337,11 @@ export async function scanProjects(root: string): Promise<ScanProjectsResult> {
       dir: project.dir,
       name: project.name,
       mediaCount: typeof project.mediaCount === "number" ? project.mediaCount : 0,
+      ...(typeof project.bytes === "number" ? { bytes: project.bytes } : {}),
     })),
     truncated: body.truncated === true,
     unreadable: typeof body.unreadable === "number" ? body.unreadable : 0,
+    ...(typeof body.recommendUse === "boolean" ? { recommendUse: body.recommendUse } : {}),
   };
 }
 
@@ -350,6 +360,78 @@ export async function fetchJob(jobId: string): Promise<LibraryJobStatus | null> 
 
 export async function cancelJob(jobId: string): Promise<void> {
   await send(ASSET_ROUTES.job(jobId), { method: "DELETE" });
+}
+
+/* Projects ----------------------------------------------------------- */
+
+function knownProject(value: unknown): KnownProject | null {
+  if (!isRecord(value) || typeof value.dir !== "string" || typeof value.name !== "string") return null;
+  const relativePath = typeof value.relativePath === "string" ? value.relativePath : null;
+  return {
+    dir: value.dir,
+    name: value.name,
+    relativePath,
+    inRoot: value.inRoot === true || (value.inRoot === undefined && relativePath !== null),
+    lastModified: typeof value.lastModified === "number" ? value.lastModified : 0,
+    mediaCount: typeof value.mediaCount === "number" ? value.mediaCount : 0,
+  };
+}
+
+function projectsElsewhere(value: unknown): ProjectsElsewhere | null {
+  if (!isRecord(value) || typeof value.count !== "number" || value.count <= 0) return null;
+  const groups = Array.isArray(value.groups)
+    ? value.groups.filter(
+        (group): group is { label: string; count: number } =>
+          isRecord(group) && typeof group.label === "string" && typeof group.count === "number",
+      )
+    : [];
+  return {
+    count: value.count,
+    bytes: typeof value.bytes === "number" ? value.bytes : 0,
+    groups: groups.map(({ label, count }) => ({ label, count })),
+  };
+}
+
+/** Every project the app knows about, newest first; malformed rows are dropped. */
+export async function fetchProjects(signal?: AbortSignal): Promise<ProjectsOverview> {
+  const body = await getJson<Partial<Record<keyof ProjectsOverview, unknown>>>(ASSET_ROUTES.projects, signal);
+  return {
+    root: typeof body.root === "string" ? body.root : "",
+    projects: Array.isArray(body.projects)
+      ? body.projects.map(knownProject).filter((project): project is KnownProject => project !== null)
+      : [],
+    elsewhere: projectsElsewhere(body.elsewhere),
+    offerDismissed: body.offerDismissed === true,
+  };
+}
+
+/** Tells the server what this page's localStorage remembers (once per page load). */
+export async function reportProjects(request: ReportProjectsRequest): Promise<ReportProjectsResult> {
+  const body = await sendJson<Partial<ReportProjectsResult>>(ASSET_ROUTES.reportProjects, "POST", request);
+  return { adopted: body.adopted === true, root: typeof body.root === "string" ? body.root : null };
+}
+
+/** Use the folder, move the projects in, or list them where they are; `job` is the move to follow. */
+export async function bringInProjects(request: BringInProjectsRequest): Promise<BringInProjectsResult> {
+  const body = await sendJson<Partial<BringInProjectsResult>>(ASSET_ROUTES.bringInProjects, "POST", request);
+  return {
+    root: typeof body.root === "string" ? body.root : null,
+    job: isRecord(body.job) && typeof body.job.id === "string" ? (body.job as unknown as LibraryJobStatus) : null,
+  };
+}
+
+/** "Keep where they are": the offer to move projects in is not made again. */
+export async function dismissProjectsOffer(): Promise<void> {
+  await sendJson(ASSET_ROUTES.projectsOffer, "POST", { dismissed: true });
+}
+
+/** The folder a new project called `name` would be saved in. */
+export async function fetchProjectFolderName(name: string, signal?: AbortSignal): Promise<ProjectFolderName> {
+  const body = await getJson<Partial<ProjectFolderName>>(ASSET_ROUTES.projectFolderName(name), signal);
+  if (typeof body.folder !== "string" || typeof body.path !== "string") {
+    throw new AssetApiError("The asset library sent an unreadable answer.", 200);
+  }
+  return { folder: body.folder, path: body.path, taken: body.taken === true };
 }
 
 /** URL helpers (no request). */

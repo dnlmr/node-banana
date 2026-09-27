@@ -4,8 +4,10 @@ import {
   assetFileUrl,
   assetThumbUrl,
   beginRecord,
+  bringInProjects,
   bulkAssets,
   cancelJob,
+  dismissProjectsOffer,
   fetchAsset,
   fetchAssetBlob,
   fetchAssetExistence,
@@ -14,10 +16,13 @@ import {
   fetchFacets,
   fetchJob,
   fetchLibraryStatus,
+  fetchProjectFolderName,
+  fetchProjects,
   mediaHas,
   parseRetryAfter,
   patchAsset,
   putRun,
+  reportProjects,
   revealAsset,
   revealLibraryRoot,
   scanProjects,
@@ -254,6 +259,17 @@ describe("asset api", () => {
     });
   });
 
+  it("keeps a scan's sizes and its suggestion to use the folder", async () => {
+    stubFetch(() => jsonResponse({ root: "/w", projects: [{ dir: "/w/A", name: "A", mediaCount: 1, bytes: 99 }], recommendUse: true }));
+    await expect(scanProjects("/w")).resolves.toEqual({
+      root: "/w",
+      projects: [{ dir: "/w/A", name: "A", mediaCount: 1, bytes: 99 }],
+      truncated: false,
+      unreadable: 0,
+      recommendUse: true,
+    });
+  });
+
   it("rejects a refused scan with the route's reason", async () => {
     stubFetch(() => jsonResponse({ error: '"/gone" doesn\'t exist.', code: "not_found" }, { status: 404 }));
     await expect(scanProjects("/gone")).rejects.toMatchObject({ status: 404, code: "not_found", message: '"/gone" doesn\'t exist.' });
@@ -280,5 +296,60 @@ describe("asset api", () => {
     expect(parseRetryAfter("Thu, 01 Jan 1970 00:00:05 GMT", 1000)).toBe(4000);
     expect(parseRetryAfter("999999")).toBe(600_000);
     expect(parseRetryAfter("soon")).toBeUndefined();
+  });
+
+  describe("projects", () => {
+    it("reads the overview, dropping rows it can't use and an empty elsewhere", async () => {
+      const { calls } = stubFetch(() =>
+        jsonResponse({
+          root: "/nb",
+          projects: [
+            { dir: "/nb/A", name: "A", relativePath: "A", inRoot: true, lastModified: 5, mediaCount: 2 },
+            { dir: "/old/B", name: "B" },
+            { name: "no dir" },
+          ],
+          elsewhere: { count: 1, bytes: 10, groups: [{ label: "~/old", count: 1 }, { label: 3 }] },
+          offerDismissed: true,
+        }),
+      );
+      await expect(fetchProjects()).resolves.toEqual({
+        root: "/nb",
+        projects: [
+          { dir: "/nb/A", name: "A", relativePath: "A", inRoot: true, lastModified: 5, mediaCount: 2 },
+          { dir: "/old/B", name: "B", relativePath: null, inRoot: false, lastModified: 0, mediaCount: 0 },
+        ],
+        elsewhere: { count: 1, bytes: 10, groups: [{ label: "~/old", count: 1 }] },
+        offerDismissed: true,
+      });
+      expect(calls[0]).toMatchObject({ url: "/api/assets/projects", method: "GET" });
+
+      stubFetch(() => jsonResponse({ root: "/nb", projects: [], elsewhere: { count: 0, bytes: 0, groups: [] } }));
+      await expect(fetchProjects()).resolves.toMatchObject({ elsewhere: null, offerDismissed: false });
+    });
+
+    it("reports, brings in and dismisses through their routes", async () => {
+      const job = { id: "j1", type: "projects", state: "running", done: 0, total: 1, bytesDone: 0, bytesTotal: 0, startedAt: 1 };
+      const { calls } = stubFetch(({ url }) => {
+        if (url.endsWith("/report")) return jsonResponse({ adopted: true, root: "/w" });
+        if (url.endsWith("/bring-in")) return jsonResponse({ root: "/nb", job }, { status: 202 });
+        return jsonResponse({ ok: true });
+      });
+      const report = { workflowsDir: "/w", projects: [{ dir: "/p", name: "P", lastOpenedAt: 1 }] };
+      await expect(reportProjects(report)).resolves.toEqual({ adopted: true, root: "/w" });
+      expect(jsonBody(calls[0])).toEqual(report);
+      await expect(bringInProjects({ dirs: ["/p"], mode: "move" })).resolves.toEqual({ root: "/nb", job });
+      expect(calls[1]).toMatchObject({ url: "/api/assets/projects/bring-in", method: "POST" });
+      await expect(dismissProjectsOffer()).resolves.toBeUndefined();
+      expect(calls[2]).toMatchObject({ url: "/api/assets/projects/offer", method: "POST" });
+      expect(jsonBody(calls[2])).toEqual({ dismissed: true });
+    });
+
+    it("asks for a new project's folder name, encoded", async () => {
+      const { calls } = stubFetch(() => jsonResponse({ folder: "A B 2", path: "/nb/A B 2", taken: true }));
+      await expect(fetchProjectFolderName("A/B")).resolves.toEqual({ folder: "A B 2", path: "/nb/A B 2", taken: true });
+      expect(calls[0].url).toBe("/api/assets/projects/folder-name?name=A%2FB");
+      stubFetch(() => jsonResponse({}));
+      await expect(fetchProjectFolderName("x")).rejects.toBeInstanceOf(AssetApiError);
+    });
   });
 });
