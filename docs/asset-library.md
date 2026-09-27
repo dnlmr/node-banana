@@ -172,11 +172,13 @@ adds every project under a folder you pick, however deeply nested
 `generations/` holds at least one media file; it is named from its newest
 workflow file, else its folder. The search goes up to eight levels down,
 never follows links, and skips hidden folders, `node_modules`, `__pycache__`,
-system folders, the library's own `Generations/`, `.nodebanana/` and
-thumbnail cache, and a project's `generations/`, `inputs/`, `outputs/` and
-`.images/` (its other subfolders are still searched, since projects nest). It
-stops after 20,000 folders, 500 projects or 15 seconds and says so, and says
-how many folders it couldn't read.
+system folders and paths over 1,024 characters (the import refuses both),
+the library's own `Generations/`, `.nodebanana/` and thumbnail cache (also
+when either is reached through a link), and a project's `generations/`,
+`inputs/`, `outputs/` and `.images/` (its other subfolders are still
+searched, since projects nest). It
+stops after 20,000 folders, 500 projects or 15 seconds (even when a folder
+never answers) and says so, and says how many folders it couldn't read.
 
 ## Access
 
