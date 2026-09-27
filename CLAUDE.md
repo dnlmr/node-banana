@@ -326,8 +326,9 @@ Point the live tier at a local ComfyUI with
 ## Agent
 
 The agent is a chat window opened from the labelled pill in the canvas's
-top-right corner, beside the recent-generations button; the window hangs under
-the pill down to the navigator. The recent-generations drop-down and the
+top-right corner, beside the recent-generations button; the window takes the
+pill's place (the pill is hidden while it is open) and runs down to the
+navigator. The recent-generations drop-down and the
 notification stack hang from the window's right edge while the agent window
 is closed, and move left of it while it is open (`anchorRight` on
 `GlobalImageHistory`, published as `--nb-history-right`). The pill shows the mark of the harness that

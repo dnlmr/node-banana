@@ -2607,8 +2607,10 @@ export function WorkflowCanvas() {
           className={tutorialActive && lockedFeatures ? "opacity-30 pointer-events-none" : ""}
         />
         <CanvasMinimap disabled={tutorialActive && lockedFeatures} onMinimapVisibleChange={setIsMinimapVisible} />
+        {/* The window takes the pill's place while it is open; its own header closes it. */}
+        {!isAgentOpen && (
         <AgentButton
-          open={isAgentOpen}
+          open={false}
           harness={agentPresence?.harnessChosen ? agentPresence.harness : null}
           busy={isAgentBusy}
           attention={agentPresence?.attention ?? false}
@@ -2618,6 +2620,7 @@ export function WorkflowCanvas() {
           onWidthChange={setAgentButtonWidth}
           style={{ right: AGENT_BUTTON_MARGIN, top: AGENT_BUTTON_MARGIN }}
         />
+        )}
         <FloatingNodeHeaders
           nodes={allNodes}
           hints={readinessHints}
