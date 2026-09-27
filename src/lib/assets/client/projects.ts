@@ -31,3 +31,19 @@ export function collectProjectReport(): ReportProjectsRequest {
   }
   return { workflowsDir, projects };
 }
+
+/**
+ * `dir` with the folder `from` swapped for `to`, when it is `from` or
+ * inside it; else null. Either separator counts (the app writes
+ * `<dir>/generations` on Windows too); a trailing one on `from` is ignored.
+ */
+export function rebaseProjectPath(from: string, to: string, dir: string | null | undefined): string | null {
+  if (typeof dir !== "string" || !dir) return null;
+  const base = from.replace(/[\\/]+$/, "");
+  if (!base) return null;
+  if (dir === base || dir === from) return to;
+  if (dir.startsWith(base) && (dir[base.length] === "/" || dir[base.length] === "\\")) {
+    return to.replace(/[\\/]+$/, "") + dir.slice(base.length);
+  }
+  return null;
+}

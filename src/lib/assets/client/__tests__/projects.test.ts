@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { STORAGE_KEY, WORKFLOWS_DIRECTORY_KEY } from "@/store/utils/localStorage";
-import { collectProjectReport } from "../projects";
+import { collectProjectReport, rebaseProjectPath } from "../projects";
 
 afterEach(() => {
   localStorage.clear();
@@ -30,5 +30,15 @@ describe("collectProjectReport", () => {
     expect(collectProjectReport()).toEqual({ workflowsDir: null, projects: [] });
     localStorage.setItem(STORAGE_KEY, "{not json");
     expect(collectProjectReport()).toEqual({ workflowsDir: null, projects: [] });
+  });
+});
+
+describe("rebaseProjectPath", () => {
+  it("swaps the folder for the new one, for it and what is inside it", () => {
+    expect(rebaseProjectPath("/old/Cats", "/nb/Cats", "/old/Cats")).toBe("/nb/Cats");
+    expect(rebaseProjectPath("/old/Cats/", "/nb/Cats", "/old/Cats/generations")).toBe("/nb/Cats/generations");
+    expect(rebaseProjectPath("C:\\old\\Cats", "D:\\nb\\Cats", "C:\\old\\Cats/generations")).toBe("D:\\nb\\Cats/generations");
+    expect(rebaseProjectPath("/old/Cats", "/nb/Cats", "/old/Cats 2")).toBeNull();
+    expect(rebaseProjectPath("/old/Cats", "/nb/Cats", null)).toBeNull();
   });
 });

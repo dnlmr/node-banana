@@ -22,6 +22,7 @@ import { cn } from "@/components/nodes/ui/cn";
 import { formatBytes, formatCount, shortLibraryPath } from "@/components/assets/assetFormat";
 import { shortenHomePath } from "@/components/assets/projectsFormat";
 import { bringInProjects, cancelJob, fetchJob, fetchProjects, scanProjects } from "@/lib/assets/client/api";
+import { followMovedProjects } from "@/lib/assets/client/movedProjects";
 import type { FoundProject, LibraryJobStatus, ScanProjectsResult } from "@/lib/assets/types";
 import { APP_VERSION } from "@/lib/appVersion";
 import { QuickstartBackButton } from "./QuickstartBackButton";
@@ -147,6 +148,7 @@ export function BringInView({ onBack, onClose, onDone }: BringInViewProps) {
     const timer = window.setTimeout(async () => {
       try {
         const next = await fetchJob(job.id);
+        followMovedProjects(next);
         if (!alive.current || !next) return;
         setPhase((current) => (current.kind === "moving" ? { ...current, job: next } : current));
       } catch {

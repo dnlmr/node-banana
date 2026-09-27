@@ -20,6 +20,7 @@ import { watchFirstRecording } from "@/components/assets/FirstRunHint";
 import { unloadWarning } from "@/components/assets/unloadWarning";
 import { initAssetLibrary, pendingRecordings } from "@/lib/assets/client/recorder";
 import { fetchLibraryStatus, reportProjects } from "@/lib/assets/client/api";
+import { watchMovedProjects } from "@/lib/assets/client/movedProjects";
 import { collectProjectReport } from "@/lib/assets/client/projects";
 
 export default function Home() {
@@ -69,6 +70,8 @@ function Editor() {
       .then((status) => {
         if (cancelled) return;
         useAssetStore.getState().setLibrary(status);
+        // A projects move (from any screen) repoints the open canvas and saved configs at the new folders
+        watchMovedProjects(status);
         stopHint = watchFirstRecording(status);
         if (status?.available) void reportProjectsOnce();
       })

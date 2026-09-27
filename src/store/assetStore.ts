@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import * as api from "@/lib/assets/client/api";
+import { followMovedProjects } from "@/lib/assets/client/movedProjects";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import { sameQuery } from "@/lib/assets/query";
 import type {
@@ -1208,6 +1209,8 @@ export const useAssetStore = create<AssetStoreState>((set, get) => {
         jobTimer = setTimeout(async () => {
           try {
             const next = (await api.fetchJob(current.id)) ?? { ...current, state: "failed" as const, error: "The job was lost" };
+            // Each project a move finishes: the open canvas and the saved configs follow it at once
+            followMovedProjects(next);
             if (get().job?.id !== current.id) return;
             set({ job: next });
             void poll(next);

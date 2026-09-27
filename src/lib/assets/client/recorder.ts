@@ -52,6 +52,7 @@ import {
 import { mapWithConcurrency, withRetry } from "./async";
 import { createEmitter } from "./emitter";
 import { newAssetId } from "./ids";
+import { rebaseProjectPath } from "./projects";
 import { libraryOffForGood } from "./libraryStatus";
 import { dataUrlMime, dataUrlToBlob, isBlobUrl, isDataUrl, isMediaString } from "./mediaBlob";
 import { ensurePoster } from "./poster";
@@ -530,6 +531,17 @@ function settle(state: RunState | undefined, result: RecordAssetResult | null): 
     if (state.recorded === 1) startRunSnapshot(state);
   }
   if (state.ended && state.pending === 0) finishRun(state);
+}
+
+/**
+ * A project folder moved (a projects move): runs still recording into it
+ * record into its new place, so nothing lands in the old folder again.
+ */
+export function rebaseRunProjects(from: string, to: string): void {
+  for (const { run } of runs.values()) {
+    const moved = rebaseProjectPath(from, to, run.projectDir);
+    if (moved) run.projectDir = moved;
+  }
 }
 
 export function beginRun(run: AssetRunContext, graph: CapturedGraph): void {

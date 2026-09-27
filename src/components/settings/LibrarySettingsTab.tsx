@@ -14,6 +14,7 @@ import {
   setLibraryRoot,
   startCleanup,
 } from "@/lib/assets/client/api";
+import { followMovedProjects } from "@/lib/assets/client/movedProjects";
 import { applyLibraryStatus } from "@/lib/assets/client/recorder";
 import {
   FOUND_MEDIA_COUNT_CAP,
@@ -432,6 +433,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
           return;
         }
         setJob(next);
+        followMovedProjects(next);
         if (next.state !== "running") {
           jobEnded.current(next);
           return;
