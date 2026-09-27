@@ -437,6 +437,27 @@ describe("records already in the library", () => {
   });
 });
 
+describe("records whose file changed", () => {
+  it("are left alone when the file is no longer the size recorded, since a mark is never undone", async () => {
+    // Emptied, or replaced by other bytes (a copy still being written, a tool that truncates first):
+    // whatever those bytes are, they are not what the record describes.
+    const emptied = write("r/emptied.png", png);
+    const emptiedRecord = projectRecord(emptied, "image", "png", "image/png");
+    fs.writeFileSync(emptied, Buffer.alloc(0));
+    const replaced = write("r/replaced.mp4", TINY_MP4);
+    const replacedRecord = projectRecord(replaced, "video", "mp4", "video/mp4");
+    fs.writeFileSync(replaced, damagedMp4.subarray(0, 200));
+    const library = await __assetLibraryForTests();
+    for (const value of [emptiedRecord, replacedRecord]) await library.addRecord(value);
+
+    expect(await findUnreadable(library)).toEqual([]);
+    expect(await assessReadable(emptied, "image", png.length)).toBe("unknown");
+    expect(await assessReadable(replaced, "video", TINY_MP4.length)).toBe("unknown");
+    // At the size recorded, the same test still answers.
+    expect(await assessReadable(replaced, "video", 200)).toBe("unreadable");
+  });
+});
+
 describe("thumbnails", () => {
   it("mark an image unreadable when its file can't be decoded", async () => {
     if (!hasSharp) return;

@@ -96,7 +96,8 @@ any of these after zero padding all count, since a player may still open
 them.
 
 When the answer can't be sure (the file can't be read right now, a probe
-timed out, sharp won't load), nothing is marked.
+timed out, sharp won't load, or an existing record's file is no longer the
+size the record says), nothing is marked. A mark is never undone.
 
 It is checked when a recording arrives (the file and record are still
 written), during "Import existing projects" (such files are skipped, and the

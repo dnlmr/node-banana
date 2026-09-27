@@ -314,12 +314,10 @@ async function markUnreadable(rt: Runtime, library: AssetLibrary, ids: readonly 
 async function markUndecodable(rt: Runtime, sha256: string, file: string): Promise<void> {
   const library = rt.library;
   if (!library) return;
-  const ids = library
-    .recordsWithHash(sha256)
-    .filter((record) => record.kind === "image" && !record.unreadable)
-    .map((record) => record.id);
-  if (!ids.length || (await assessReadable(file, "image")) !== "unreadable") return;
-  await markUnreadable(rt, library, ids);
+  const records = library.recordsWithHash(sha256).filter((record) => record.kind === "image" && !record.unreadable);
+  // Same hash, same size: a file of another size is no longer these records' bytes.
+  if (!records.length || (await assessReadable(file, "image", records[0].bytes)) !== "unreadable") return;
+  await markUnreadable(rt, library, records.map((record) => record.id));
 }
 
 /** Undoes a move of this library that stopped part-way, and says so in the library status. */

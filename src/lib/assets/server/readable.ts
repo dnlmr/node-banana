@@ -125,11 +125,17 @@ async function sharpVerdict(file: string): Promise<Readability> {
   }
 }
 
-/** Whether the file at `file`, recorded as `kind`, is media anything can open (see the module notes). */
-export async function assessReadable(file: string, kind: AssetKind): Promise<Readability> {
+/**
+ * Whether the file at `file`, recorded as `kind`, is media anything can open
+ * (see the module notes). With `expectedBytes` (a record's size), a file of
+ * another size is `unknown`: it is not the content the record describes —
+ * replaced, cut short or still being written — and a mark is never undone.
+ */
+export async function assessReadable(file: string, kind: AssetKind, expectedBytes?: number): Promise<Readability> {
   if (kind === "3d") return "readable";
   let head: Buffer;
   try {
+    if (expectedBytes !== undefined && (await fs.stat(file)).size !== expectedBytes) return "unknown";
     head = await readHead(file, HEAD_BYTES);
   } catch {
     return "unknown";
@@ -194,7 +200,7 @@ export async function findUnreadable(library: AssetLibrary, concurrency = SWEEP_
     for (const record of records) {
       const file = library.filePath(record);
       if (!file) continue;
-      const verdict = await assessReadable(file, record.kind);
+      const verdict = await assessReadable(file, record.kind, record.bytes);
       if (verdict === "readable") return [];
       if (verdict === "unreadable") {
         return library
