@@ -28,6 +28,7 @@ import {
 import { Ingestor } from "../ingest";
 import { JobRunner, runExport, runImport, runMove, validateMoveTarget, type JobContext } from "../jobs";
 import { AssetLibrary } from "../library";
+import { newAssetId } from "../../client/ids";
 import { installBridge, makePng, makeWav, md5, meta, sha256, streamOf, tempDir, TINY_MP4 } from "./helpers";
 
 let base: string;
@@ -617,6 +618,56 @@ describe("import", () => {
     // Running it again finds nothing new.
     const again = await finished(await startImport({ projectDirs: [project] }));
     expect(again.message).toBe("Imported 0 files.");
+  });
+
+  it("takes one asset per content: copies of the same bytes under other names are skipped, the oldest kept", async () => {
+    const project = path.join(base, "Gallery Project");
+    const generations = path.join(project, "generations");
+    fs.mkdirSync(generations, { recursive: true });
+    const png = makePng(6, 6, 41);
+    const at = (minutes: number) => new Date(2026, 8, 27, 7, minutes, 0);
+    for (const [name, minute] of [["img-late.png", 30], ["img-first.png", 6], ["img-middle.png", 21]] as const) {
+      fs.writeFileSync(path.join(generations, name), png);
+      fs.utimesSync(path.join(generations, name), at(minute), at(minute));
+    }
+    fs.writeFileSync(path.join(generations, "other.png"), makePng(6, 6, 42));
+
+    const job = await finished(await startImport({ projectDirs: [project] }));
+    expect(job.message).toBe("Imported 2 files. 2 copies of files already imported skipped.");
+    const names = (await listAssets({})).assets.map((asset) => asset.filename).sort();
+    expect(names).toEqual(["img-first.png", "other.png"]);
+    // The copies stay on disk; they are just not assets of their own
+    expect(fs.readdirSync(generations).sort()).toEqual(["img-first.png", "img-late.png", "img-middle.png", "other.png"]);
+  });
+
+  it("forgets imported records that repeat the same bytes in the same folder, keeping files and anything touched", async () => {
+    const project = path.join(base, "Old Copies");
+    const generations = path.join(project, "generations");
+    fs.mkdirSync(generations, { recursive: true });
+    const png = makePng(6, 6, 51);
+    for (const name of ["a.png", "b.png", "c.png", "d.png"]) fs.writeFileSync(path.join(generations, name), png);
+    await finished(await startImport({ projectDirs: [project] }));
+    const library = await __assetLibraryForTests();
+    const [kept] = library.allRecords();
+    // What earlier imports did: one record per copy
+    for (const [index, name] of ["b.png", "c.png", "d.png"].entries()) {
+      await library.addRecord({
+        ...kept!,
+        id: newAssetId(kept!.createdAt + index + 1),
+        file: { root: "external", path: path.join(generations, name) },
+        filename: name,
+        createdAt: kept!.createdAt + index + 1,
+      });
+    }
+    const tagged = library.allRecords().find((record) => record.filename === "c.png")!;
+    await patchAsset(tagged.id, { tags: ["keep"] });
+    expect(library.allRecords()).toHaveLength(4);
+
+    // One record per content is left: the tagged one, since tagging is the user's own work
+    expect(await library.forgetDuplicateImports()).toBe(3);
+    expect(library.allRecords().map((record) => record.filename)).toEqual(["c.png"]);
+    expect(fs.readdirSync(generations).sort()).toEqual(["a.png", "b.png", "c.png", "d.png"]);
+    expect(await library.forgetDuplicateImports()).toBe(0);
   });
 
   it("files a folder under its own id when its workflow id already belongs to another project", async () => {

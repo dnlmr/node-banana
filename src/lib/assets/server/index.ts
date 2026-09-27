@@ -1142,6 +1142,11 @@ async function autoIndexPass(rt: Runtime): Promise<void> {
   const location = result.location;
   const library = libraryFor(rt, location);
   await library.ready();
+  if (!rt.paused && !rt.jobs.isRunning) {
+    // Clears the copies earlier imports took in as assets of their own (see forgetDuplicateImports)
+    const forgotten = await library.forgetDuplicateImports().catch(() => 0);
+    if (forgotten) console.log(`[assets] forgot ${forgotten} duplicate imported records (files kept)`);
+  }
   const registry = registryFor(rt, location);
   const projects = await knownProjects(location, library, registry);
   const indexed = new Map((await registry.read()).projects.map((project) => [pathKey(project.dir), project.indexedStamp]));

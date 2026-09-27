@@ -390,6 +390,8 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
         // Vanished; skip.
       }
     }
+    // Oldest first, so of several copies of the same bytes the first one made is the one kept
+    files.sort((a, b) => a.mtime - b.mtime || a.file.localeCompare(b.file));
     plan.push({ projectDir: dir, files });
   }
   ctx.update({
@@ -399,6 +401,7 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
 
   let imported = 0;
   let unreadable = 0;
+  let duplicates = 0;
   let failed = 0;
   for (const { projectDir, files } of plan) {
     const workflow = await readProjectWorkflow(projectDir);
@@ -425,7 +428,11 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
       ctx.checkCancelled();
       try {
         const record = await importedRecord(file, mtime, { workflow, workflowId, workflowName, runId }, ctx.signal);
-        if (record) {
+        if (record && hasCopyInFolder(library, record, file)) {
+          // The same bytes under another name in this folder (older saves wrote gallery
+          // images again on every save): one asset, not one per copy.
+          duplicates++;
+        } else if (record) {
           // Published, so a move in the other build waits for this record and refuses the next one.
           const saved = await library.writing(() => library.addRecord(record));
           deps.thumbs?.enqueue(saved, file);
@@ -443,9 +450,18 @@ export async function runImport(ctx: JobContext, deps: ImportDeps, projectDirs: 
   }
   const parts = [`Imported ${imported} ${imported === 1 ? "file" : "files"}.`];
   if (unreadable) parts.push(`${unreadable} unreadable ${unreadable === 1 ? "file" : "files"} skipped.`);
+  if (duplicates) parts.push(`${duplicates} ${duplicates === 1 ? "copy" : "copies"} of files already imported skipped.`);
   if (failed) parts.push(`${failed} could not be read.`);
   if (skippedDirs) parts.push(`${skippedDirs} ${skippedDirs === 1 ? "folder has" : "folders have"} no generations folder.`);
   return parts.join(" ");
+}
+
+/** Another record, not in the Trash, holds these bytes in the same folder as `file`. */
+function hasCopyInFolder(library: AssetLibrary, record: AssetRecord, file: string): boolean {
+  const folder = pathKey(path.dirname(file));
+  return library
+    .recordsWithHash(record.sha256)
+    .some((other) => other.trashedAt === undefined && other.file.root === "external" && pathKey(path.dirname(other.file.path)) === folder);
 }
 
 /** Checks and normalises the folders of an import request. */

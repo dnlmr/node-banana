@@ -1396,6 +1396,52 @@ export class AssetLibrary {
   }
 
   /**
+   * Forgets imported records that repeat another record of the same bytes in
+   * the same folder: older project saves wrote one image several times under
+   * new names, and each copy was imported as an asset of its own. A folder
+   * keeps one record per content: a live recording if there is one, else the
+   * earliest import. Only records nobody has touched go (no tags, not a
+   * favourite, not in the Trash). Files are never deleted; the records are
+   * index entries rebuilt by an import. Returns how many were forgotten.
+   */
+  async forgetDuplicateImports(): Promise<number> {
+    await this.ready();
+    const groups = new Map<string, AssetRecord[]>();
+    for (const record of this.sorted) {
+      if (record.file.root !== "external" || record.trashedAt !== undefined) continue;
+      const key = `${pathKey(path.dirname(record.file.path), this.platform)}\0${record.sha256}`;
+      const group = groups.get(key);
+      if (group) group.push(record);
+      else groups.set(key, [record]);
+    }
+    const surplus: string[] = [];
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const untouched = (record: AssetRecord) => record.imported === true && !record.favorite && record.tags.length === 0;
+      const keep =
+        group.find((record) => !untouched(record)) ??
+        [...group].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0]!;
+      for (const record of group) if (record !== keep && untouched(record)) surplus.push(record.id);
+    }
+    if (!surplus.length) return 0;
+    const lines: string[] = [];
+    await mapConcurrent(surplus, 8, (id) =>
+      this.mutate(id, async () => {
+        const current = await this.readSidecar(id);
+        // Changed since the scan above (tagged, favourited, trashed elsewhere): keep it.
+        if (!current || current.imported !== true || current.favorite || current.tags.length || current.trashedAt !== undefined) return;
+        await unlinkWithRetry(this.sidecarPath(id));
+        this.removeFromIndex(id);
+        this.tombstones.add(id);
+        this.missing.delete(id);
+        lines.push(this.journalLine("del", id));
+      }),
+    );
+    await this.publish(lines);
+    return lines.length;
+  }
+
+  /**
    * Marks records whose file's bytes nothing can read (see readable.ts): the
    * sidecar says `unreadable`, then a journal line tells other processes.
    * The record and its file are kept; it just isn't listed any more. Returns
