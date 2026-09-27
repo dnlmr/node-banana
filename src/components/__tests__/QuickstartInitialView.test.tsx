@@ -55,7 +55,7 @@ describe("QuickstartInitialView", () => {
       );
 
       expect(screen.getByText("New project")).toBeInTheDocument();
-      expect(screen.getByText("Load workflow")).toBeInTheDocument();
+      expect(screen.getByText("Open project")).toBeInTheDocument();
       expect(screen.getByText("Templates")).toBeInTheDocument();
       expect(screen.getByText("Start with Agent")).toBeInTheDocument();
     });
@@ -71,7 +71,7 @@ describe("QuickstartInitialView", () => {
       );
 
       expect(screen.getByText("Start a new workflow")).toBeInTheDocument();
-      expect(screen.getByText("Open existing file")).toBeInTheDocument();
+      expect(screen.getByText("From your Node Banana folder")).toBeInTheDocument();
       expect(screen.getByText("Pre-built workflows")).toBeInTheDocument();
       expect(screen.getByText("Start with Agent")).toBeInTheDocument();
     });
@@ -107,7 +107,7 @@ describe("QuickstartInitialView", () => {
     });
   });
 
-  describe("Load Workflow Option", () => {
+  describe("Open Project Option", () => {
     it("should call onSelectLoad when clicked", () => {
       render(
         <QuickstartInitialView
@@ -118,7 +118,7 @@ describe("QuickstartInitialView", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Load workflow"));
+      fireEvent.click(screen.getByText("Open project"));
 
       expect(mockOnSelectLoad).toHaveBeenCalledTimes(1);
     });
@@ -221,6 +221,39 @@ describe("QuickstartInitialView", () => {
       expect(docsLink).toHaveAttribute("href", "https://node-banana-docs.vercel.app/");
       expect(docsLink).toHaveAttribute("target", "_blank");
       expect(docsLink).toHaveAttribute("rel", "noopener noreferrer");
+    });
+  });
+
+  describe("Bring In Row", () => {
+    it("is left out when no handler is given", () => {
+      render(
+        <QuickstartInitialView
+          onNewProject={mockOnNewProject}
+          onSelectTemplates={mockOnSelectTemplates}
+          onStartWithAgent={mockOnStartWithAgent}
+          onSelectLoad={mockOnSelectLoad}
+        />
+      );
+
+      expect(screen.queryByText("Bring in your projects")).not.toBeInTheDocument();
+    });
+
+    it("asks whether Node Banana was used before and calls onBringIn", () => {
+      const onBringIn = vi.fn();
+      render(
+        <QuickstartInitialView
+          onNewProject={mockOnNewProject}
+          onSelectTemplates={mockOnSelectTemplates}
+          onStartWithAgent={mockOnStartWithAgent}
+          onSelectLoad={mockOnSelectLoad}
+          onBringIn={onBringIn}
+        />
+      );
+
+      expect(screen.getByText("Used Node Banana before?")).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Bring in your projects"));
+
+      expect(onBringIn).toHaveBeenCalledTimes(1);
     });
   });
 

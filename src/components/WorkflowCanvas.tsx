@@ -81,6 +81,7 @@ import { NodePlaceholder, useNodeMounted } from "./nodes/nodeCulling";
 import { detectAndSplitGrid } from "@/utils/gridSplitter";
 import { logger } from "@/utils/logger";
 import { WelcomeModal } from "./quickstart";
+import { useBringInRequest } from "./quickstart/useBringInRequest";
 import { ProjectSetupModal } from "./ProjectSetupModal";
 import { ChatPanel } from "./ChatPanel";
 import { EditOperation } from "@/lib/chat/editOperations";
@@ -325,6 +326,7 @@ export function WorkflowCanvas() {
   const executeWorkflow = useWorkflowStore((state) => state.executeWorkflow);
   const setShowQuickstart = useWorkflowStore((state) => state.setShowQuickstart);
   const quickstartView = useWorkflowStore((state) => state.quickstartView);
+  useBringInRequest();
   const setNavigationTarget = useWorkflowStore((state) => state.setNavigationTarget);
   const applyEditOperations = useWorkflowStore((state) => state.applyEditOperations);
   const setWorkflowMetadata = useWorkflowStore((state) => state.setWorkflowMetadata);
