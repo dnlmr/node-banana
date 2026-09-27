@@ -92,6 +92,13 @@ export async function externalizeWorkflowMedia(
     const results = await Promise.all(
       batch.map((node, batchIndex) =>
         externalizeNodeMedia(node, workflowPath, savedImageIds, savedMediaIds)
+          // A node whose media can't be written out (bytes the server refuses to
+          // decode, a failed write) keeps it inline, as an unsaved workflow does,
+          // rather than failing the whole save.
+          .catch((error) => {
+            console.warn(`[mediaStorage] Kept ${node.id}'s media in the workflow file:`, error instanceof Error ? error.message : error);
+            return node;
+          })
           .then(result => ({ index: i + batchIndex, result }))
       )
     );
