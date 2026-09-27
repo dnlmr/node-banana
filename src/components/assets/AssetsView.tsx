@@ -18,6 +18,7 @@ import { AssetsRail } from "./AssetsRail";
 import { BulkBar } from "./BulkBar";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { EmptyState } from "./EmptyState";
+import { ProjectsOffer } from "./ProjectsOffer";
 import { BulkTagEditor } from "./TagEditor";
 import { copyPrompt, leaveFullscreen, recordsOf, removeSelection, selectionOf } from "./assetActions";
 import type { GridDirection } from "./masonryLayout";
@@ -286,6 +287,7 @@ export function AssetsView() {
       </div>
       <main className="relative flex min-w-0 flex-1 flex-col" inert={detailOpen}>
         <AssetsHeader />
+        <ProjectsOffer />
         {showGrid ? (
           <AssetGrid />
         ) : status === "loading" || status === "idle" ? (

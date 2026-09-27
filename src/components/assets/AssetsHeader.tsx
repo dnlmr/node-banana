@@ -43,11 +43,11 @@ const EDGE = 8;
 const SORT_TRIGGER = "data-assets-sort-trigger";
 
 /** The quiet 28px surface every header control shares. */
-const toolClass = cn(
+export const toolClass = cn(
   "flex h-7 items-center gap-1.5 rounded-[7px] border px-2.5 font-display text-xs font-medium tracking-[-0.01em] transition-colors",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection",
 );
-const quietTool = "border-white/[0.09] bg-white/[0.03] text-neutral-300 hover:border-white/[0.18] hover:text-neutral-100";
+export const quietTool = "border-white/[0.09] bg-white/[0.03] text-neutral-300 hover:border-white/[0.18] hover:text-neutral-100";
 
 /** How many assets the Library view holds before filters, for "37 of 383". */
 function viewTotal(view: AssetLibraryView, facets: AssetFacets | null): number | null {

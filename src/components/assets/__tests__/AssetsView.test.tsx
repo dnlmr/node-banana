@@ -14,6 +14,9 @@ const api = vi.hoisted(() => ({
   startImport: vi.fn(),
   fetchJob: vi.fn(),
   cancelJob: vi.fn(),
+  fetchProjects: vi.fn(),
+  bringInProjects: vi.fn(),
+  dismissProjectsOffer: vi.fn(),
   assetFileUrl: (id: string, download = false) => `/api/assets/${id}/file${download ? "?download=1" : ""}`,
   assetThumbUrl: (sha: string, width: number) => `/api/assets/thumb/${sha}?w=${width}`,
 }));
@@ -150,6 +153,8 @@ beforeEach(() => {
   useAssetStore.setState({ ...initial, appView: "assets" }, true);
   api.fetchFacets.mockResolvedValue(facets());
   api.fetchLibraryStatus.mockResolvedValue(library());
+  api.fetchProjects.mockResolvedValue({ root: "/Users/me/Pictures/Node Banana", projects: [], elsewhere: null, offerDismissed: false });
+  api.dismissProjectsOffer.mockResolvedValue(undefined);
   // A key test may trash through the view without caring about the result
   api.bulkAssets.mockResolvedValue({ affected: 0, ids: [], errors: [] });
   openWorkflow.openWorkflowBlockedReason.mockReturnValue(null);
@@ -538,6 +543,61 @@ describe("AssetsView", () => {
     await waitFor(() => expect(tile("imp1")).toBeInTheDocument(), { timeout: 3000 });
     expect(screen.queryByText(/Importing/)).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Imported 4 files");
+  });
+
+  describe("projects in other folders", () => {
+    const ROOT = "/Users/me/Pictures/Node Banana";
+    const outside = ["/Users/me/test-files/test workflows/A", "/Users/me/pet-hype"];
+    const overview = {
+      root: ROOT,
+      projects: [
+        { dir: `${ROOT}/Fox`, name: "Fox", relativePath: "Fox", inRoot: true, lastModified: 2, mediaCount: 0 },
+        ...outside.map((dir) => ({ dir, name: dir, relativePath: null, inRoot: false, lastModified: 1, mediaCount: 0 })),
+      ],
+      elsewhere: {
+        count: 2,
+        bytes: 0,
+        groups: [
+          { label: "~/test-files/test workflows", count: 1 },
+          { label: "~/pet-hype", count: 1 },
+        ],
+      },
+      offerDismissed: false,
+    };
+    const offer = () => screen.findByRole("region", { name: "Projects in other folders" });
+
+    it("offers to move them in, and follows the move in the header", async () => {
+      api.fetchProjects.mockResolvedValue(overview);
+      const running = { id: "p1", type: "projects" as const, state: "running" as const, done: 189, total: 860, bytesDone: 0, bytesTotal: 0, startedAt: 1 };
+      api.bringInProjects.mockResolvedValue({ root: ROOT, job: running });
+      api.fetchJob.mockResolvedValue(running);
+      await renderView();
+      expect(await offer()).toHaveTextContent(
+        "2 projects live in other folders" +
+          "test-files › test workflows and pet-hype. Move them into your Node Banana folder to keep everything in one place."
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Move them in" }));
+      await waitFor(() => expect(screen.getByText("Moving projects 189 of 860")).toBeInTheDocument());
+      expect(api.bringInProjects).toHaveBeenCalledWith({ dirs: outside, mode: "move" });
+      expect(screen.queryByRole("region", { name: "Projects in other folders" })).not.toBeInTheDocument();
+    });
+
+    it("keeps them where they are, says where to change that, and does not offer again", async () => {
+      api.fetchProjects.mockResolvedValue(overview);
+      await renderView();
+      fireEvent.click(within(await offer()).getByRole("button", { name: "Keep where they are" }));
+      await waitFor(() => expect(api.dismissProjectsOffer).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("region", { name: "Projects in other folders" })).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("They stay where they are. Settings › Storage can move them later.");
+    });
+
+    it("makes no offer once it was declined", async () => {
+      api.fetchProjects.mockResolvedValue({ ...overview, offerDismissed: true });
+      await renderView();
+      await waitFor(() => expect(api.fetchProjects).toHaveBeenCalled());
+      expect(screen.queryByRole("region", { name: "Projects in other folders" })).not.toBeInTheDocument();
+    });
   });
 
   describe("fullscreen detail", () => {
