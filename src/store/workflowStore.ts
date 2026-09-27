@@ -2178,7 +2178,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
-            ? { ...n, data: { ...n.data, images: [image, ...((n.data as OutputGalleryNodeData).images || [])] } as WorkflowNodeData }
+            ? { ...n, data: { ...n.data, ...prependGalleryEntry(n.data as OutputGalleryNodeData, "images", "imageRefs", image) } as WorkflowNodeData }
             : n
         ) as WorkflowNode[],
         hasUnsavedChanges: true,
@@ -2188,7 +2188,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
-            ? { ...n, data: { ...n.data, videos: [video, ...((n.data as OutputGalleryNodeData).videos || [])] } as WorkflowNodeData }
+            ? { ...n, data: { ...n.data, ...prependGalleryEntry(n.data as OutputGalleryNodeData, "videos", "videoRefs", video) } as WorkflowNodeData }
             : n
         ) as WorkflowNode[],
         hasUnsavedChanges: true,
@@ -4113,6 +4113,23 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
 });
+
+/**
+ * Puts one entry first in an Output Gallery's media list, with a blank in front
+ * of its refs so the refs stay aligned with the media they name.
+ */
+function prependGalleryEntry(
+  data: OutputGalleryNodeData,
+  key: "images" | "videos",
+  refsKey: "imageRefs" | "videoRefs",
+  entry: string,
+): Partial<OutputGalleryNodeData> {
+  const refs = data[refsKey];
+  return {
+    [key]: [entry, ...(data[key] || [])],
+    ...(refs?.length ? { [refsKey]: ["", ...refs] } : {}),
+  };
+}
 
 export const useWorkflowStore = create<WorkflowStore>()(workflowStoreImpl);
 

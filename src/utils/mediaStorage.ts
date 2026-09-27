@@ -52,6 +52,14 @@ export function generateMediaId(prefix: "img" | "vid" | "aud" = "img"): string {
 }
 
 /**
+ * The id of a file named after its content: saving the same bytes again, on
+ * this save or a later one, lands on the same file instead of a new copy.
+ */
+export function contentMediaId(prefix: "img" | "vid" | "aud", contentHash: string): string {
+  return `${prefix}-${contentHash.slice(0, 20)}`;
+}
+
+/**
  * Generate a unique image ID for external storage (backward compat)
  */
 export function generateImageId(): string {
@@ -684,8 +692,9 @@ async function saveImageAndGetId(
     return inFlightSaves.get(hash)!;
   }
 
-  // Use existing ID if provided (for consistency with imageHistory), otherwise generate new
-  const imageId = existingId || generateImageId();
+  // Use existing ID if provided (for consistency with imageHistory), otherwise one named
+  // after the content, so a later save of the same image reuses its file
+  const imageId = existingId || contentMediaId("img", computeContentHash(imageData));
 
   const savePromise = (async () => {
     const response = await fetchWithTimeout(
