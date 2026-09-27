@@ -7,7 +7,7 @@ import { ProviderSettings } from "@/types";
 // Mock the workflow store
 const mockAddNode = vi.fn();
 const mockExecuteWorkflow = vi.fn();
-const mockRegenerateNode = vi.fn();
+const mockExecuteSelectedNodes = vi.fn();
 const mockStopWorkflow = vi.fn();
 const mockValidateWorkflow = vi.fn();
 const mockSetEdgeStyle = vi.fn();
@@ -84,7 +84,7 @@ const createDefaultState = (overrides = {}) => ({
   isRunning: false,
   currentNodeIds: [],
   executeWorkflow: mockExecuteWorkflow,
-  regenerateNode: mockRegenerateNode,
+  executeSelectedNodes: mockExecuteSelectedNodes,
   stopWorkflow: mockStopWorkflow,
   validateWorkflow: mockValidateWorkflow,
   edgeStyle: "angular" as const,
@@ -785,12 +785,12 @@ describe("FloatingActionBar", () => {
 
       fireEvent.click(screen.getByTitle("Run options"));
 
-      expect(screen.getByText("Run entire workflow")).toBeInTheDocument();
-      expect(screen.getByText("Run from selected node")).toBeInTheDocument();
-      expect(screen.getByText("Run selected node only")).toBeInTheDocument();
+      expect(screen.getByText("Run all")).toBeInTheDocument();
+      expect(screen.getByText("Run from selected")).toBeInTheDocument();
+      expect(screen.getByText("Run selected")).toBeInTheDocument();
     });
 
-    it("should call executeWorkflow when 'Run entire workflow' is clicked", async () => {
+    it("should call executeWorkflow when 'Run all' is clicked", async () => {
       render(
         <TestWrapper>
           <FloatingActionBar />
@@ -802,12 +802,12 @@ describe("FloatingActionBar", () => {
       });
 
       fireEvent.click(screen.getByTitle("Run options"));
-      fireEvent.click(screen.getByText("Run entire workflow"));
+      fireEvent.click(screen.getByText("Run all"));
 
       expect(mockExecuteWorkflow).toHaveBeenCalled();
     });
 
-    it("should disable 'Run from selected node' when no node is selected", async () => {
+    it("should disable 'Run from selected' when no node is selected", async () => {
       render(
         <TestWrapper>
           <FloatingActionBar />
@@ -820,11 +820,11 @@ describe("FloatingActionBar", () => {
 
       fireEvent.click(screen.getByTitle("Run options"));
 
-      const runFromSelectedButton = screen.getByText("Run from selected node").closest("button");
+      const runFromSelectedButton = screen.getByText("Run from selected").closest("button");
       expect(runFromSelectedButton).toBeDisabled();
     });
 
-    it("should enable 'Run from selected node' when a single node is selected", async () => {
+    it("should enable 'Run from selected' when a single node is selected", async () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           nodes: [{ id: "node-1", selected: true, type: "prompt" }],
@@ -843,11 +843,11 @@ describe("FloatingActionBar", () => {
 
       fireEvent.click(screen.getByTitle("Run options"));
 
-      const runFromSelectedButton = screen.getByText("Run from selected node").closest("button");
+      const runFromSelectedButton = screen.getByText("Run from selected").closest("button");
       expect(runFromSelectedButton).not.toHaveClass("cursor-not-allowed");
     });
 
-    it("should call executeWorkflow with node id when 'Run from selected node' is clicked", async () => {
+    it("should call executeWorkflow with node id when 'Run from selected' is clicked", async () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           nodes: [{ id: "node-1", selected: true, type: "prompt" }],
@@ -865,12 +865,12 @@ describe("FloatingActionBar", () => {
       });
 
       fireEvent.click(screen.getByTitle("Run options"));
-      fireEvent.click(screen.getByText("Run from selected node"));
+      fireEvent.click(screen.getByText("Run from selected"));
 
       expect(mockExecuteWorkflow).toHaveBeenCalledWith("node-1");
     });
 
-    it("should call regenerateNode when 'Run selected node only' is clicked", async () => {
+    it("runs the selection when 'Run selected' is clicked", async () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           nodes: [{ id: "node-1", selected: true, type: "prompt" }],
@@ -888,9 +888,9 @@ describe("FloatingActionBar", () => {
       });
 
       fireEvent.click(screen.getByTitle("Run options"));
-      fireEvent.click(screen.getByText("Run selected node only"));
+      fireEvent.click(screen.getByText("Run selected"));
 
-      expect(mockRegenerateNode).toHaveBeenCalledWith("node-1");
+      expect(mockExecuteSelectedNodes).toHaveBeenCalledWith(["node-1"]);
     });
   });
 });

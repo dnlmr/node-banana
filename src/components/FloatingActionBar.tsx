@@ -334,7 +334,6 @@ export function FloatingActionBar() {
     isRunning,
     currentNodeIds,
     executeWorkflow,
-    regenerateNode,
     executeSelectedNodes,
     stopWorkflow,
     mockTutorialExecution,
@@ -354,7 +353,6 @@ export function FloatingActionBar() {
     isRunning: state.isRunning,
     currentNodeIds: state.currentNodeIds,
     executeWorkflow: state.executeWorkflow,
-    regenerateNode: state.regenerateNode,
     executeSelectedNodes: state.executeSelectedNodes,
     stopWorkflow: state.stopWorkflow,
     mockTutorialExecution: state.mockTutorialExecution,
@@ -479,13 +477,6 @@ export function FloatingActionBar() {
     }
   };
 
-  const handleRunSelectedOnly = () => {
-    if (selectedNodeId) {
-      regenerateNode(selectedNodeId);
-      setRunMenuOpen(false);
-    }
-  };
-
   const handleRunSelectedNodes = () => {
     if (selectedNodeIds.length > 0) {
       executeSelectedNodes(selectedNodeIds);
@@ -586,7 +577,7 @@ export function FloatingActionBar() {
 
           {/* Dropdown menu */}
           {runMenuOpen && !isRunning && (
-            <MenuSurface floating={false} role="menu" data-tutorial="floating-run-menu" className="absolute bottom-full right-0 z-20 mb-2 min-w-[196px] py-1">
+            <MenuSurface floating={false} role="menu" data-tutorial="floating-run-menu" className="absolute bottom-full right-0 z-20 mb-2 min-w-[220px] py-1 [&_button]:whitespace-nowrap">
               <MenuItem
                 role="menuitem"
                 onClick={() => {
@@ -595,7 +586,7 @@ export function FloatingActionBar() {
                 }}
               >
                 <PlayIcon />
-                Run entire workflow
+                Run all
                 <KbdGroup keys={[modKey, "↵"]} className="ml-auto pl-3" />
               </MenuItem>
               <MenuItem
@@ -605,17 +596,7 @@ export function FloatingActionBar() {
                 title={!selectedNodeId ? "Select a single node first" : undefined}
               >
                 <ChevronsRight {...MENU_ICON} />
-                Run from selected node
-              </MenuItem>
-              <MenuItem
-                role="menuitem"
-                onClick={handleRunSelectedOnly}
-                disabled={!selectedNodeId}
-                title={!selectedNodeId ? "Select a single node first" : undefined}
-              >
-                <Play {...MENU_ICON} />
-                Run selected node only
-                <KbdGroup keys={["⌥", "↵"]} className="ml-auto pl-3" />
+                Run from selected
               </MenuItem>
               <MenuItem
                 role="menuitem"
@@ -624,9 +605,8 @@ export function FloatingActionBar() {
                 title={selectedNodeIds.length === 0 ? "Select one or more nodes first" : `Run ${selectedNodeIds.length} selected node${selectedNodeIds.length > 1 ? 's' : ''}`}
               >
                 <FastForward {...MENU_ICON} />
-                {selectedNodeIds.length > 0
-                  ? `Run ${selectedNodeIds.length} selected node${selectedNodeIds.length !== 1 ? 's' : ''}`
-                  : 'Run selected nodes'}
+                {selectedNodeIds.length > 1 ? `Run ${selectedNodeIds.length} selected` : "Run selected"}
+                <KbdGroup keys={["⌥", "↵"]} className="ml-auto pl-3" />
               </MenuItem>
             </MenuSurface>
           )}
