@@ -4,6 +4,10 @@
  * direct `generations` subfolder holding at least one media file, however
  * deeply it is nested. Nothing is written.
  *
+ * The same walk lists the projects in the Node Banana folder itself
+ * (`match: "project"`), where a project is any folder with a Node Banana
+ * workflow file or a `generations` folder, media or not.
+ *
  * The walk is breadth-first and bounded (depth, folders visited, projects
  * found, time), so a whole drive answers in seconds and says it stopped
  * early rather than hanging. It never follows a symbolic link or a Windows
@@ -58,7 +62,18 @@ export interface ScanOptions {
   home?: string;
   /** The platform whose folder conventions apply (tests). */
   platform?: NodeJS.Platform;
+  /**
+   * `media` (the import's): a `generations` folder holding media.
+   * `project` (the Node Banana folder's list): a workflow file or a
+   * `generations` folder; each project found carries `lastModified`.
+   */
+  match?: "media" | "project";
+  /** Whether the folder searched can itself be a project (default true). */
+  includeRoot?: boolean;
 }
+
+/** A project as {@link findProjects} reports it; `lastModified` only with `match: "project"`. */
+export type ScannedProject = FoundProject & { lastModified?: number };
 
 /** Folders read at once. A network drive answers each one slowly. */
 const SCAN_CONCURRENCY = 8;
@@ -85,6 +100,10 @@ const PROJECT_MEDIA_DIRS = new Set([GENERATIONS, "inputs", "outputs", ".images"]
 /** A workflow file names itself near its start (list-workflows reads as much). */
 const WORKFLOW_HEAD_BYTES = 1024;
 const NAME_FIELD = /"name"\s*:\s*"((?:\\.|[^"\\])*)"/;
+/** Where a workflow file's `edges` is looked for when its head doesn't have it: the end of the file. */
+const WORKFLOW_TAIL_BYTES = 256 * 1024;
+/** Workflow candidates read per folder: a folder of JSON data is not worth reading through. */
+const MAX_WORKFLOW_CANDIDATES = 16;
 
 /** The folder to search: absolute, no `..`, resolved, and a folder that exists. */
 export async function resolveScanRoot(value: unknown): Promise<string> {
@@ -103,7 +122,7 @@ export async function resolveScanRoot(value: unknown): Promise<string> {
 
 /** What reading one folder found. */
 interface Visit {
-  project: FoundProject | null;
+  project: ScannedProject | null;
   /** Subfolders to search next. */
   children: string[];
   /** Its generations folder could not be read. */
@@ -114,8 +133,13 @@ interface Visit {
  * Every project under `root` (itself included), sorted by path. `root`
  * must already be resolved ({@link resolveScanRoot}).
  */
-export async function findProjects(root: string, options: ScanOptions = {}): Promise<ScanProjectsResult> {
+export async function findProjects(
+  root: string,
+  options: ScanOptions = {},
+): Promise<ScanProjectsResult & { projects: ScannedProject[] }> {
   const limits = { ...SCAN_LIMITS, ...options.limits };
+  const match = options.match ?? "media";
+  const includeRoot = options.includeRoot ?? true;
   const now = options.now ?? Date.now;
   const deadline = now() + limits.timeoutMs;
   const platform = options.platform ?? process.platform;
@@ -133,7 +157,7 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
   const exclude = await Promise.all((options.exclude ?? []).map(real));
   const excluded = new Set(exclude.map((dir) => pathKey(dir)));
 
-  const result: ScanProjectsResult = { root, projects: [], truncated: false, unreadable: 0 };
+  const result: ScanProjectsResult & { projects: ScannedProject[] } = { root, projects: [], truncated: false, unreadable: 0 };
   // Searching inside the library's own data finds nothing an import could use.
   if (exclude.some((dir) => isInsideRoot(dir, realRoot, { allowEqual: true }))) return result;
 
@@ -161,15 +185,28 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
       return "unreadable";
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    let project: FoundProject | null = null;
+    let project: ScannedProject | null = null;
     let unreadableGenerations = false;
     const generations = entries.find(
       (entry) => entry.isDirectory() && entry.name === GENERATIONS && !excluded.has(realKey(path.join(dir, entry.name))),
     );
+    let mediaCount: number | null = 0;
     if (generations) {
-      const mediaCount = await countMedia(path.join(dir, generations.name), limits.maxMediaCount);
+      mediaCount = await countMedia(path.join(dir, generations.name), limits.maxMediaCount);
       if (mediaCount === null) unreadableGenerations = true;
-      else if (mediaCount > 0) project = { dir, name: await projectName(dir, entries), mediaCount };
+    }
+    if (match === "media") {
+      if (mediaCount) project = { dir, name: (await newestWorkflow(dir, entries, false))?.name ?? path.basename(dir), mediaCount };
+    } else if (includeRoot || dir !== root) {
+      const workflow = await newestWorkflow(dir, entries, true);
+      if (workflow || generations) {
+        project = {
+          dir,
+          name: workflow?.name ?? path.basename(dir),
+          mediaCount: mediaCount ?? 0,
+          lastModified: workflow?.mtime ?? (await folderMtime(dir)),
+        };
+      }
     }
     const children = descend
       ? entries
@@ -266,25 +303,32 @@ async function countMedia(dir: string, cap: number): Promise<number | null> {
 }
 
 /**
- * The name in the newest workflow file directly in `dir`, else the folder's
- * own name. Only the head of each file is read: a workflow with its media
- * inline can run to hundreds of megabytes.
+ * The newest Node Banana workflow file directly in `dir`: its name (else the
+ * folder's own name) and mtime; null when there is none. Only the head of
+ * each file is read, and with `strict` the tail too (where `edges` is): a
+ * workflow with its media inline can run to hundreds of megabytes.
  */
-async function projectName(dir: string, entries: readonly Dirent[]): Promise<string> {
+async function newestWorkflow(
+  dir: string,
+  entries: readonly Dirent[],
+  strict: boolean,
+): Promise<{ name: string; mtime: number } | null> {
   const fallback = path.basename(dir);
   const files = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"));
   const dated = await mapConcurrent(files, SCAN_CONCURRENCY, async (entry) => {
     const file = path.join(dir, entry.name);
     try {
-      return { file, mtime: (await fs.stat(file)).mtimeMs };
+      const stat = await fs.stat(file);
+      return { file, mtime: stat.mtimeMs, size: stat.size };
     } catch {
       return null;
     }
   });
   const newestFirst = dated
-    .filter((candidate): candidate is { file: string; mtime: number } => candidate !== null)
-    .sort((a, b) => b.mtime - a.mtime || (a.file < b.file ? -1 : 1));
-  for (const { file } of newestFirst) {
+    .filter((candidate): candidate is { file: string; mtime: number; size: number } => candidate !== null)
+    .sort((a, b) => b.mtime - a.mtime || (a.file < b.file ? -1 : 1))
+    .slice(0, MAX_WORKFLOW_CANDIDATES);
+  for (const { file, mtime, size } of newestFirst) {
     let head: string;
     try {
       head = (await readHead(file, WORKFLOW_HEAD_BYTES)).toString("utf8");
@@ -292,10 +336,78 @@ async function projectName(dir: string, entries: readonly Dirent[]): Promise<str
       continue;
     }
     if (!head.includes('"version"') || !head.includes('"nodes"')) continue;
+    if (strict && !head.includes('"edges"') && !(await tailIncludes(file, size, '"edges"'))) continue;
     const match = NAME_FIELD.exec(head);
-    return (match && jsonString(match[1]).trim()) || fallback;
+    return { name: (match && jsonString(match[1]).trim()) || fallback, mtime };
   }
-  return fallback;
+  return null;
+}
+
+/** Whether the last {@link WORKFLOW_TAIL_BYTES} of a file hold `needle`. */
+async function tailIncludes(file: string, size: number, needle: string): Promise<boolean> {
+  const length = Math.min(size, WORKFLOW_TAIL_BYTES);
+  let handle: import("fs").promises.FileHandle | undefined;
+  try {
+    handle = await fs.open(file, "r");
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+    return buffer.subarray(0, bytesRead).toString("utf8").includes(needle);
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function folderMtime(dir: string): Promise<number> {
+  try {
+    return (await fs.stat(dir)).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * One folder as a project of the Node Banana folder's list (`match:
+ * "project"`): its name, newest workflow time and media count; null when it
+ * holds neither a workflow file nor a `generations` folder (or, with
+ * `requireWorkflow`, no workflow file).
+ */
+export async function inspectProject(
+  dir: string,
+  options: { requireWorkflow?: boolean; maxMediaCount?: number } = {},
+): Promise<ScannedProject | null> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const workflow = await newestWorkflow(dir, entries, true);
+  const generations = entries.some((entry) => entry.isDirectory() && entry.name === GENERATIONS);
+  if (!workflow && (options.requireWorkflow || !generations)) return null;
+  const mediaCount = generations
+    ? ((await countMedia(path.join(dir, GENERATIONS), options.maxMediaCount ?? SCAN_LIMITS.maxMediaCount)) ?? 0)
+    : 0;
+  return {
+    dir,
+    name: workflow?.name ?? path.basename(dir),
+    mediaCount,
+    lastModified: workflow?.mtime ?? (await folderMtime(dir)),
+  };
+}
+
+/** Whether `file` is a Node Banana workflow file (by its head and tail, never parsed whole). */
+export async function isWorkflowFile(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(file);
+    if (!stat.isFile()) return false;
+    const head = (await readHead(file, WORKFLOW_HEAD_BYTES)).toString("utf8");
+    if (!head.includes('"version"') || !head.includes('"nodes"')) return false;
+    return head.includes('"edges"') || (await tailIncludes(file, stat.size, '"edges"'));
+  } catch {
+    return false;
+  }
 }
 
 /** The value of a JSON string literal's body, escapes and all. */
