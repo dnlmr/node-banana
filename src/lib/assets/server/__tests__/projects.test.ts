@@ -229,6 +229,48 @@ describe("findProjects", () => {
     expect(inside.projects).toEqual([]);
   });
 
+  describe("folders that are not the user's", () => {
+    it("never searches the home folder's app data (macOS Library, Windows AppData)", async () => {
+      project(path.join(root, "Library", "Caches", "Some App"));
+      project(path.join(root, "Documents", "Cars"));
+      project(path.join(root, "AppData", "Roaming", "Tool"));
+      const mac = await findProjects(root, { home: root, platform: "darwin" });
+      expect(dirs(mac.projects)).toEqual(["AppData/Roaming/Tool", "Documents/Cars"]);
+      const windows = await findProjects(root, { home: root, platform: "win32" });
+      expect(dirs(windows.projects)).toEqual(["Documents/Cars", "Library/Caches/Some App"]);
+      // Only the home folder's own: a Library folder elsewhere is searched
+      const elsewhere = await findProjects(root, { home: path.join(base, "someone-else"), platform: "darwin" });
+      expect(dirs(elsewhere.projects)).toContain("Library/Caches/Some App");
+    });
+
+    it("never searches macOS packages such as the Photos library or apps", async () => {
+      project(path.join(root, "Photos Library.photoslibrary", "resources"));
+      project(path.join(root, "Tool.app", "Contents"));
+      project(path.join(root, "Cars"));
+      const mac = await findProjects(root, { platform: "darwin" });
+      expect(dirs(mac.projects)).toEqual(["Cars"]);
+      const linux = await findProjects(root, { platform: "linux" });
+      expect(dirs(linux.projects)).toEqual(["Cars", "Photos Library.photoslibrary/resources", "Tool.app/Contents"]);
+    });
+
+    it("never searches Windows' own folders at a drive's root", async () => {
+      project(path.join(root, "$Recycle.Bin", "S-1-5-21"));
+      project(path.join(root, "System Volume Information", "x"));
+      project(path.join(root, "Cars"));
+      const windows = await findProjects(root, { platform: "win32" });
+      expect(dirs(windows.projects)).toEqual(["Cars"]);
+    });
+  });
+
+  it("needs a folder named exactly generations, the one an import reads", async () => {
+    const dir = path.join(root, "Shouting");
+    fs.mkdirSync(path.join(dir, "Generations"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "Generations", "one.png"), makePng(2, 2, 1));
+    project(path.join(root, "Cars"));
+    const result = await findProjects(root);
+    expect(dirs(result.projects)).toEqual(["Cars"]);
+  });
+
   describe("names", () => {
     it("takes the name of the newest workflow file, ignoring JSON that isn't a workflow", async () => {
       const dir = project(path.join(root, "folder-name"), ["a.png"], {

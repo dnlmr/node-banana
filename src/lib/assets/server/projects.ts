@@ -15,6 +15,7 @@
  */
 
 import { promises as fs, type Dirent } from "fs";
+import os from "os";
 import path from "path";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 import { FOUND_MEDIA_COUNT_CAP, MAX_IMPORT_PROJECTS, type FoundProject, type ScanProjectsResult } from "../types";
@@ -53,14 +54,32 @@ export interface ScanOptions {
   limits?: Partial<ScanLimits>;
   /** The clock the time bound reads (tests). */
   now?: () => number;
+  /** The user's home folder, whose app-data folder is never searched (tests). */
+  home?: string;
+  /** The platform whose folder conventions apply (tests). */
+  platform?: NodeJS.Platform;
 }
 
 /** Folders read at once. A network drive answers each one slowly. */
 const SCAN_CONCURRENCY = 8;
 /** Never searched, wherever they are; nor is anything whose name starts with ".". */
 const SKIPPED_NAMES = new Set(["node_modules", "__pycache__"]);
-/** What makes a folder a project. */
+/** What makes a folder a project: exactly the name the app writes, which is the name the import reads. */
 const GENERATIONS = "generations";
+/**
+ * Apps' own data in the home folder (macOS ~/Library, Windows AppData):
+ * thousands of folders and no projects, and on macOS reading into other
+ * apps' containers asks for permission.
+ */
+const HOME_APP_DATA: Partial<Record<NodeJS.Platform, string>> = { darwin: "Library", win32: "AppData" };
+/**
+ * macOS packages — apps, the Photos and Music libraries, bundles — are
+ * folders the Finder shows as files; searching them is slow, and the Photos
+ * library asks for permission.
+ */
+const MAC_PACKAGE = /\.(app|bundle|framework|plugin|kext|photoslibrary|photolibrary|musiclibrary|tvlibrary|imovielibrary|fcpbundle|lrdata|lrlibrary|aplibrary|xcodeproj|xcworkspace|pkg)$/i;
+/** Windows' own folders at the root of every drive. */
+const WINDOWS_SYSTEM = new Set(["$recycle.bin", "system volume information", "recovery", "config.msi"]);
 /** A project's own folders hold its media, never another project. */
 const PROJECT_MEDIA_DIRS = new Set([GENERATIONS, "inputs", "outputs", ".images"]);
 /** A workflow file names itself near its start (list-workflows reads as much). */
@@ -99,8 +118,11 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
   const limits = { ...SCAN_LIMITS, ...options.limits };
   const now = options.now ?? Date.now;
   const deadline = now() + limits.timeoutMs;
-  const fold = foldsCase(process.platform);
+  const platform = options.platform ?? process.platform;
+  const fold = foldsCase(platform);
   const nameKey = (name: string) => (fold ? name.toLowerCase() : name);
+  const homeKey = pathKey(options.home ?? os.homedir());
+  const homeAppData = HOME_APP_DATA[platform];
   // Excluded folders are compared by where they really are, so a root picked
   // through a link (macOS's /tmp, a linked home) still leaves them out. No
   // link below the root is followed, so a folder's real path is the root's
@@ -120,6 +142,9 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
     if (!entry.isDirectory()) return false;
     if (entry.name.startsWith(".") || SKIPPED_NAMES.has(entry.name)) return false;
     if (inProject && PROJECT_MEDIA_DIRS.has(nameKey(entry.name))) return false;
+    if (homeAppData && nameKey(entry.name) === nameKey(homeAppData) && pathKey(dir) === homeKey) return false;
+    if (platform === "darwin" && MAC_PACKAGE.test(entry.name)) return false;
+    if (platform === "win32" && WINDOWS_SYSTEM.has(entry.name.toLowerCase())) return false;
     const child = path.join(dir, entry.name);
     // The import refuses system folders and over-long paths, so a project there could never be imported
     // (and one such folder would refuse the whole import).
@@ -139,7 +164,7 @@ export async function findProjects(root: string, options: ScanOptions = {}): Pro
     let project: FoundProject | null = null;
     let unreadableGenerations = false;
     const generations = entries.find(
-      (entry) => entry.isDirectory() && nameKey(entry.name) === GENERATIONS && !excluded.has(realKey(path.join(dir, entry.name))),
+      (entry) => entry.isDirectory() && entry.name === GENERATIONS && !excluded.has(realKey(path.join(dir, entry.name))),
     );
     if (generations) {
       const mediaCount = await countMedia(path.join(dir, generations.name), limits.maxMediaCount);
