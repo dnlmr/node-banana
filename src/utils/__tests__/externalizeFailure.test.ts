@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { externalizeWorkflowMedia } from "../mediaStorage";
-import type { WorkflowFile } from "@/types";
+import type { WorkflowFile } from "@/store/workflowStore";
 
 const GOOD = "data:image/png;base64,aW1hZ2U=";
 const BAD = "data:image/png;base64,not base64 at all!";
