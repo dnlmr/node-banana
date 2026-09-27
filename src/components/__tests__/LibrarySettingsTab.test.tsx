@@ -667,6 +667,26 @@ describe("LibrarySettingsTab", () => {
       expect(screen.getByRole("alert")).toHaveTextContent('"/Users/me/Gone" doesn\'t exist.');
     });
 
+    it("searching the same folder again adds no rows and keeps what was unchecked", async () => {
+      mockBrowse({ success: true, path: WORK }, "import");
+      api.scanProjects.mockResolvedValue(found());
+      await renderTab();
+      await find();
+      fireEvent.click(screen.getByRole("checkbox", { name: /Night/ }));
+
+      // The project has more files by now
+      api.scanProjects.mockResolvedValue(
+        found({ projects: [{ dir: `${WORK}/Campaign`, name: "Spring campaign", mediaCount: 13 }, found().projects[1]] })
+      );
+      await find();
+
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+      expect(screen.getByRole("checkbox", { name: /Spring campaign/ })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: /Night/ })).not.toBeChecked();
+      expect(screen.getByText("13 files")).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent(`Found 2 projects in ${WORK}.`);
+    });
+
     it("opens one folder picker at a time", async () => {
       // A picker stays open until the user answers it
       mockFetch.mockImplementation(() => new Promise(() => {}));
