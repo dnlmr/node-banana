@@ -430,6 +430,12 @@ export interface SetLibraryRootRequest {
   root: string;
   /** `move`: copy this library there (background job), then switch. `switch`: use that folder as it is (the old library stays on disk). */
   mode: "move" | "switch";
+  /**
+   * `move` only: project folders (the old folder's own) that move into the
+   * new folder once the library has, in the same job, so leaving the page
+   * never strands them.
+   */
+  projects?: string[];
 }
 
 /** `projects`: move project folders into the Node Banana folder. */

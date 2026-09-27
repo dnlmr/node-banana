@@ -23,6 +23,7 @@ import {
   listAssets,
   listProjects,
   reportProjects,
+  setLibraryRoot,
   setProjectsOffer,
   upsertWorkflowEntry,
 } from "../index";
@@ -335,6 +336,21 @@ describe("reportProjects", () => {
     const workflows = path.join(base, "Workflows");
     fs.mkdirSync(workflows);
     expect(await reportProjects({ workflowsDir: workflows, projects: [] })).toEqual({ adopted: false, root: chosen });
+  });
+});
+
+describe("moving everything to another folder", () => {
+  it("moves the old folder's projects after the library, in the same job", async () => {
+    await record();
+    const fox = project(path.join(defaultRoot, "Fox"), "Fox", 1);
+    const target = path.join(base, "New Home");
+    const status = await setLibraryRoot({ root: target, mode: "move", projects: [fox, path.join(defaultRoot, "Gone")] });
+    const job = await finished(status.job);
+    expect(job).toMatchObject({ type: "move", state: "done", moved: [{ from: fox, to: path.join(target, "Fox") }] });
+    expect(job.message).toContain("Moved 1 project into New Home.");
+    expect(fs.existsSync(fox)).toBe(false);
+    expect(fs.existsSync(path.join(target, "Fox", "generations", "old_0.png"))).toBe(true);
+    expect(await getLibraryStatus()).toMatchObject({ root: target, counts: { assets: 1 } });
   });
 });
 

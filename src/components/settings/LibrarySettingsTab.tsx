@@ -329,9 +329,6 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
   const [offerKept, setOfferKept] = useState(false);
   // How many projects the running projects move carries, for its row's title
   const [movingCount, setMovingCount] = useState<number | null>(null);
-  // "Move everything there": once the library has moved, the projects that
-  // were in the old folder follow it (a projects move into the new one).
-  const followUp = useRef<{ jobId: string; dirs: string[] } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -384,8 +381,7 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
     };
   }, [counting, refresh]);
 
-  // What a job's end sets off: the counts and projects are read again, and a
-  // library move that "Move everything there" started is followed by its projects.
+  // What a job's end sets off: the counts and projects are read again.
   const jobEnded = useRef<(ended: LibraryJobStatus) => void>(() => {});
 
   const runJob = async (start: () => Promise<LibraryJobStatus>) => {
@@ -412,14 +408,9 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
     });
   };
 
-  jobEnded.current = (ended) => {
+  jobEnded.current = () => {
     void refresh();
     void refreshProjects();
-    const next = followUp.current;
-    if (next && next.jobId === ended.id) {
-      followUp.current = null;
-      if (ended.state === "done" && next.dirs.length > 0) void moveProjects(next.dirs, next.dirs.length);
-    }
   };
 
   // Follow a running job once a second; refresh the counts when it ends.
@@ -543,17 +534,19 @@ export function LibrarySettingsTab({ onLeave }: { onLeave?: () => void } = {}) {
     if (!pendingRoot) return;
     const previousRoot = status.root;
     // The projects in the folder being left: listed where they are either
-    // way, so they stay in Open and Assets; a move takes them along after.
+    // way, so they stay in Open and Assets; a move takes them along after,
+    // in the same server job (so closing Settings meanwhile doesn't strand them).
     const leaving = inRootDirs;
     setApplying(mode);
     setApplyError(null);
     try {
       if (leaving.length > 0) await bringInProjects({ dirs: leaving, mode: "leave" });
-      const next = await setLibraryRoot({ root: pendingRoot, mode });
+      const next = await setLibraryRoot(
+        mode === "move" && leaving.length > 0 ? { root: pendingRoot, mode, projects: leaving } : { root: pendingRoot, mode }
+      );
       setStatus(next);
       applyLibraryStatus(next);
       if (mode === "move" && next.job) {
-        followUp.current = leaving.length > 0 ? { jobId: next.job.id, dirs: leaving } : null;
         setJob(next.job);
         // A small library can finish moving before the answer arrives
         if (next.job.state !== "running") jobEnded.current(next.job);

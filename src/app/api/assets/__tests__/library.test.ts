@@ -102,6 +102,15 @@ describe("PUT /api/assets/library", () => {
     expect(facade.setLibraryRoot).toHaveBeenCalledWith({ root: DIR, mode: "move" });
   });
 
+  it("passes along the projects a move takes, never for a switch", async () => {
+    vi.mocked(facade.setLibraryRoot).mockResolvedValue(STATUS);
+    const project = path.join(DIR, "Fox");
+    await putLibrary(page("/api/assets/library", { method: "PUT", json: { root: DIR, mode: "move", projects: [project, project] } }));
+    expect(facade.setLibraryRoot).toHaveBeenLastCalledWith({ root: DIR, mode: "move", projects: [project] });
+    await putLibrary(page("/api/assets/library", { method: "PUT", json: { root: DIR, mode: "switch", projects: [project] } }));
+    expect(facade.setLibraryRoot).toHaveBeenLastCalledWith({ root: DIR, mode: "switch" });
+  });
+
   it("refuses a relative or system folder", async () => {
     const relative = await putLibrary(page("/api/assets/library", { method: "PUT", json: { root: "Pictures", mode: "switch" } }));
     expect(relative.status).toBe(400);

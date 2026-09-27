@@ -405,9 +405,12 @@ export function parseWorkflowEntry(body: unknown): WorkflowEntryUpdate {
 
 export function parseSetLibraryRoot(body: unknown): SetLibraryRootRequest {
   const request = object(body, "The request");
+  const mode = oneOf(request.mode, ["move", "switch"] as const, "mode");
+  const projects = array(request.projects ?? [], "projects", MAX_IMPORT_DIRS).map((dir, i) => folder(dir, `projects[${i}]`));
   return {
     root: folder(request.root, "root"),
-    mode: oneOf(request.mode, ["move", "switch"] as const, "mode"),
+    mode,
+    ...(mode === "move" && projects.length ? { projects: [...new Set(projects)] } : {}),
   };
 }
 

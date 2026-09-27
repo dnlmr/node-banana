@@ -375,7 +375,7 @@ describe("LibrarySettingsTab", () => {
       );
     });
 
-    it("moves the folder's projects after the library, keeping them listed meanwhile", async () => {
+    it("hands the folder's projects to the move, keeping them listed meanwhile", async () => {
       vi.useFakeTimers();
       mockBrowse({ success: true, path: NEW_ROOT });
       const inRoot = [`${ROOT}/Fox`, `${ROOT}/Owl`];
@@ -388,30 +388,12 @@ describe("LibrarySettingsTab", () => {
       fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ }));
       await flush();
       expect(api.bringInProjects).toHaveBeenCalledWith({ dirs: inRoot, mode: "leave" });
-      expect(api.setLibraryRoot).toHaveBeenCalledWith({ root: NEW_ROOT, mode: "move" });
+      // The server moves them after the library, in the same job: nothing here has to stay open for it
+      expect(api.setLibraryRoot).toHaveBeenCalledWith({ root: NEW_ROOT, mode: "move", projects: inRoot });
 
-      api.bringInProjects.mockResolvedValue({ root: NEW_ROOT, job: makeJob({ id: "projects-1", type: "projects", total: 20 }) });
       api.fetchJob.mockResolvedValueOnce(makeJob({ id: "move-5", type: "move", state: "done", done: 4, total: 4, finishedAt: 9 }));
       await advance(JOB_POLL_MS);
-      expect(api.bringInProjects).toHaveBeenLastCalledWith({ dirs: inRoot, mode: "move" });
-      expect(screen.getByRole("progressbar", { name: "Moving 2 projects" })).toBeInTheDocument();
-    });
-
-    it("does not move the projects after a library move that failed", async () => {
-      vi.useFakeTimers();
-      mockBrowse({ success: true, path: NEW_ROOT });
-      api.fetchProjects.mockResolvedValue(makeOverview({ projects: [makeProject(`${ROOT}/Fox`, true)] }));
-      api.setLibraryRoot.mockResolvedValue(makeStatus({ job: makeJob({ id: "move-6", type: "move", total: 4 }) }));
-      await renderTab();
-      fireEvent.click(screen.getByRole("button", { name: "Change…" }));
-      await flush();
-      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Move everything there/ }));
-      await flush();
-
-      api.fetchJob.mockResolvedValueOnce(makeJob({ id: "move-6", type: "move", state: "failed", error: "The disk is full." }));
-      await advance(JOB_POLL_MS);
       expect(api.bringInProjects).toHaveBeenCalledTimes(1);
-      expect(api.bringInProjects).toHaveBeenCalledWith({ dirs: [`${ROOT}/Fox`], mode: "leave" });
     });
 
     it("keeps the folder's projects listed where they are when switching", async () => {

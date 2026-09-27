@@ -67,12 +67,14 @@ import {
   runImport,
   runMove,
   validateMoveTarget,
+  type JobContext,
 } from "./jobs";
 import {
   folderBytes,
   generationsStamp,
   listKnownProjects,
   looksLikeProjectsFolder,
+  outermost,
   projectFolderName,
   sizeBudget,
   summariseElsewhere,
@@ -579,9 +581,11 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
   const toRoot = await validateMoveTarget(location.root, request.root, ctx.platform);
   const failure = await probeWritable(toRoot);
   if (failure) throw new LibraryError(`Node Banana can't write to "${toRoot}" (${failure.code}).`, 400, "bad_request");
+  // The old folder's projects that follow the library, checked now so a folder that can't move is left out up front.
+  const projectDirs = await movableProjects(request.projects, toRoot, ctx.homedir);
   // The probe leaves an empty data folder behind; the move copies into it.
-  await rt.jobs.startOverQuiet("move", (job) =>
-    runMove(job, {
+  await rt.jobs.startOverQuiet("move", async (job) => {
+    const message = await runMove(job, {
       library,
       waitForWrites: (timeoutMs) => waitForWrites(rt, timeoutMs),
       toRoot,
@@ -590,9 +594,47 @@ export async function setLibraryRoot(request: SetLibraryRootRequest): Promise<Li
       },
       switchRoot: switchTo,
       settleMs: MOVE_SETTLE_MS,
-    }),
-  );
+    });
+    if (!projectDirs.length) return message;
+    return [message, await followWithProjects(rt, job, projectDirs, toRoot)].filter(Boolean).join(" ");
+  });
   return getLibraryStatus();
+}
+
+/** The folders of `value` a projects move into `root` would take; the rest are left where they are. */
+async function movableProjects(value: unknown, root: string, home: string): Promise<string[]> {
+  if (!Array.isArray(value) || !value.length) return [];
+  const dirs: string[] = [];
+  for (const dir of value) {
+    try {
+      dirs.push(...(await normaliseMoveDirs([dir], root, { home })));
+    } catch {
+      // Gone, or more than a project: it stays, still listed where it is.
+    }
+  }
+  return outermost(dirs);
+}
+
+/**
+ * "Move everything there": once the library has moved, the old folder's
+ * projects move into the new one as the same job, so the page that asked
+ * can close. A failure here leaves the library moved and says so.
+ */
+async function followWithProjects(rt: Runtime, job: JobContext, dirs: readonly string[], toRoot: string): Promise<string> {
+  const next = await activeLocation(rt);
+  if (!next.ok || pathKey(next.location.root) !== pathKey(toRoot)) return "The projects stayed in the old folder.";
+  const present: string[] = [];
+  for (const dir of dirs) if (await isDirectory(dir)) present.push(dir);
+  if (!present.length) return "";
+  job.update({ done: 0, bytesDone: 0 });
+  const location = next.location;
+  try {
+    return await runProjectsMove(job, { library: libraryFor(rt, location), root: location.root, registry: registryFor(rt, location) }, present);
+  } catch (error) {
+    if (error instanceof LibraryError && error.code === "cancelled") throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    return `The projects didn't all move: ${reason}`;
+  }
 }
 
 /* Browsing ----------------------------------------------------------- */
