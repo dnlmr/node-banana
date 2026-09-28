@@ -678,22 +678,18 @@ html {
 @keyframes viewerRailIn {
   from {
     opacity: 0;
-    transform: translateY(3px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
 @keyframes viewerRailOut {
   from {
     opacity: 1;
-    transform: none;
   }
   to {
     opacity: 0;
-    transform: translateY(-3px);
   }
 }
 
@@ -733,7 +729,7 @@ html {
 
 /* Text does not crossfade well (two prompts over each other are a jumble),
    so the rail goes in sequence: the old text is out in 60ms, and only
-   then does the new fade up. */
+   then does the new fade in. */
 .animate-viewer-rail {
   animation: viewerRailIn 0.18s cubic-bezier(0.2, 0, 0, 1) 0.06s both;
 }
