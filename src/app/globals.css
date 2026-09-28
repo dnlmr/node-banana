@@ -686,6 +686,17 @@ html {
   }
 }
 
+@keyframes viewerRailOut {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
 @keyframes viewerFadeIn {
   from {
     opacity: 0;
@@ -724,6 +735,10 @@ html {
   animation: viewerRailIn 0.2s cubic-bezier(0.2, 0, 0, 1) both;
 }
 
+.animate-viewer-rail-out {
+  animation: viewerRailOut 0.2s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-viewer-in-right,
   .animate-viewer-in-left {
@@ -736,7 +751,11 @@ html {
   }
 
   .animate-viewer-rail {
-    animation: none;
+    animation: viewerFadeIn 0.15s ease-out both;
+  }
+
+  .animate-viewer-rail-out {
+    animation: viewerFadeOut 0.15s ease-out both;
   }
 }
 

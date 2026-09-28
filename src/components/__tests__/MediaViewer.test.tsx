@@ -123,13 +123,25 @@ describe("MediaViewer", () => {
     const incoming = screen.getByTestId("media-viewer-current");
     expect(incoming).toHaveClass("opacity-0");
 
+    // The rail holds its old text the same way, its buttons inert and out of the accessibility tree
+    const railLeaving = screen.getByTestId("media-viewer-rail-leaving");
+    expect(railLeaving).toHaveTextContent("A red shoe");
+    expect(railLeaving).toHaveAttribute("aria-hidden", "true");
+    expect(railLeaving.querySelector("button")).toBeDisabled();
+    expect(screen.getByTestId("media-viewer-rail-current")).toHaveClass("opacity-0");
+    expect(screen.getByTestId("media-viewer-rail-current")).toHaveTextContent("A watch");
+    expect(screen.getAllByRole("button", { name: "Add to graph" })).toHaveLength(1);
+
     fireEvent.load(incoming.querySelector("img")!);
     expect(leaving).toHaveClass("animate-viewer-out-left");
     expect(incoming).toHaveClass("animate-viewer-in-right");
     expect(incoming).not.toHaveClass("opacity-0");
+    expect(railLeaving).toHaveClass("animate-viewer-rail-out");
+    expect(screen.getByTestId("media-viewer-rail-current")).toHaveClass("animate-viewer-rail");
 
     fireEvent.animationEnd(leaving);
     expect(screen.queryByTestId("media-viewer-leaving")).toBeNull();
+    expect(screen.queryByTestId("media-viewer-rail-leaving")).toBeNull();
 
     // Going back, the motion reverses; a source that never loads is not waited on forever
     rerender(<MediaViewer {...props} index={0} />);
