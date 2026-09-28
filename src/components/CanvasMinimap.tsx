@@ -118,7 +118,7 @@ interface CanvasMinimapProps {
  */
 export function CanvasMinimap({ disabled = false, onMinimapVisibleChange }: CanvasMinimapProps) {
   const [isMinimapVisible, setIsMinimapVisible] = useState(true);
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const { zoomIn, zoomOut, fitView, setCenter, getZoom } = useReactFlow();
   const store = useStoreApi();
   const isInteractive = useStore(
     (s) => Boolean(s.nodesDraggable || s.nodesConnectable || s.elementsSelectable),
@@ -158,6 +158,10 @@ export function CanvasMinimap({ disabled = false, onMinimapVisibleChange }: Canv
             maskStrokeWidth={1}
             pannable
             zoomable
+            // A click (not a drag, which pans) brings that spot to the middle of the view at the current zoom.
+            onClick={(_, position) => {
+              void setCenter(position.x, position.y, { zoom: getZoom(), duration: 250 });
+            }}
             nodeColor={getMiniMapNodeColor}
           />
         </div>

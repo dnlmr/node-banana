@@ -627,6 +627,101 @@ html {
   }
 }
 
+/* The media viewer: the outgoing image slides a little away from the
+   direction of travel while the incoming one arrives from the other side.
+   The strip's dock scaling is a transition on the tiles themselves; the
+   rail's text swaps outright. */
+@keyframes viewerInRight {
+  from {
+    opacity: 0;
+    transform: translateX(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes viewerInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes viewerOutLeft {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-14px) scale(0.985);
+  }
+}
+
+@keyframes viewerOutRight {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(14px) scale(0.985);
+  }
+}
+
+@keyframes viewerFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes viewerFadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-viewer-in-right {
+  animation: viewerInRight 0.24s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.animate-viewer-in-left {
+  animation: viewerInLeft 0.24s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.animate-viewer-out-left {
+  animation: viewerOutLeft 0.24s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.animate-viewer-out-right {
+  animation: viewerOutRight 0.24s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-viewer-in-right,
+  .animate-viewer-in-left {
+    animation: viewerFadeIn 0.15s ease-out both;
+  }
+
+  .animate-viewer-out-left,
+  .animate-viewer-out-right {
+    animation: viewerFadeOut 0.15s ease-out both;
+  }
+
+}
+
 /* The welcome dialog's "New" chip: a light band sweeps across the text and
    rim, then rests before the next pass. */
 @keyframes nbNewBadgeShimmer {

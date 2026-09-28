@@ -4,6 +4,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { OutputGalleryNode } from "@/components/nodes/OutputGalleryNode";
 
 const mockUpdateNodeData = vi.fn();
+const mockAddNode = vi.fn(() => "imageInput-9");
 vi.mock("@/store/workflowStore", () => ({
   useWorkflowStore: vi.fn((selector) =>
     selector({
@@ -14,7 +15,7 @@ vi.mock("@/store/workflowStore", () => ({
       groups: {},
       nodes: [],
       edges: [],
-      addNode: vi.fn(),
+      addNode: mockAddNode,
       onConnect: vi.fn(),
       setHoveredNodeId: vi.fn(),
       getConnectedInputs: vi.fn(() => ({ images: [], videos: [], text: null, dynamicInputs: {} })),
@@ -50,6 +51,22 @@ function renderGallery(data: Record<string, unknown>) {
 
 describe("OutputGalleryNode", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("opens an item in the shared viewer, where it can be downloaded, added to the graph or removed", () => {
+    const OTHER = "data:image/png;base64,other";
+    renderGallery({ images: [IMG, OTHER], imageRefs: ["ref-1", "ref-2"] });
+    fireEvent.click(screen.getByRole("button", { name: "Open image 2" }));
+    const rail = screen.getByTestId("media-viewer-rail");
+    expect(rail).toHaveTextContent("2 of 2");
+    expect(rail).toHaveTextContent("Image 2");
+    expect(screen.getByRole("button", { name: "Download" })).toHaveClass("bg-neutral-200");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add to graph as input" }));
+    expect(mockAddNode).toHaveBeenCalledWith("imageInput", expect.anything(), { image: OTHER, filename: "gallery-image-2.png" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove from gallery" }));
+    expect(mockUpdateNodeData).toHaveBeenCalledWith("gallery-1", { images: [IMG], imageRefs: ["ref-1"] });
+  });
 
   it("has no grip while empty", () => {
     renderGallery({ images: [] });

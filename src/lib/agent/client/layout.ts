@@ -14,11 +14,11 @@ export const AGENT_BUTTON_ESTIMATED_WIDTH = 92;
 export const AGENT_STACK_GAP = 8;
 export const AGENT_PANEL_WIDTH = 400;
 /**
- * The window's top edge: under the agent button, which sits at the canvas's
- * top-right inset (tab strip 38px + frame border 1px + 16px margin, the 40px
- * button, an 8px gap).
+ * The window's top edge: the canvas's top-right inset (tab strip 38px + frame
+ * border 1px + 16px margin). The agent button is hidden while the window is
+ * open, so the window takes its place.
  */
-export const AGENT_PANEL_MIN_TOP = 38 + 1 + AGENT_BUTTON_MARGIN + AGENT_BUTTON_HEIGHT + AGENT_STACK_GAP;
+export const AGENT_PANEL_MIN_TOP = 38 + 1 + AGENT_BUTTON_MARGIN;
 /** The window never comes closer than this to the viewport's left edge (the navigator's margin). */
 export const AGENT_PANEL_EDGE = 16;
 /** Gap between the window's left edge and the canvas area treated as visible. */

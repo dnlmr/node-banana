@@ -11,12 +11,13 @@ import {
 const mockZoomIn = vi.fn();
 const mockZoomOut = vi.fn();
 const mockFitView = vi.fn();
+const mockSetCenter = vi.fn();
 
 vi.mock("@xyflow/react", async () => {
   const actual = await vi.importActual<typeof import("@xyflow/react")>("@xyflow/react");
   return {
     ...actual,
-    useReactFlow: () => ({ zoomIn: mockZoomIn, zoomOut: mockZoomOut, fitView: mockFitView }),
+    useReactFlow: () => ({ zoomIn: mockZoomIn, zoomOut: mockZoomOut, fitView: mockFitView, setCenter: mockSetCenter, getZoom: () => 0.8 }),
   };
 });
 
@@ -74,6 +75,17 @@ describe("CanvasMinimap", () => {
     expect(mockZoomIn).toHaveBeenCalledTimes(1);
     expect(mockZoomOut).toHaveBeenCalledTimes(1);
     expect(mockFitView).toHaveBeenCalledTimes(1);
+  });
+
+  it("brings a clicked spot on the minimap to the middle of the view, at the current zoom", () => {
+    renderNavigator();
+    const svg = screen.getByTestId("rf__minimap").querySelector("svg")!;
+    fireEvent.click(svg);
+    expect(mockSetCenter).toHaveBeenCalledTimes(1);
+    const [x, y, options] = mockSetCenter.mock.calls[0];
+    expect(typeof x).toBe("number");
+    expect(typeof y).toBe("number");
+    expect(options).toEqual({ zoom: 0.8, duration: 250 });
   });
 
   it("shows the zoom level as a whole percentage", () => {

@@ -25,11 +25,11 @@ describe("agent button and window placement", () => {
       right: 16,
       bottom: 230,
       width: AGENT_PANEL_WIDTH,
-      maxHeight: "calc(100vh - 333px)",
+      maxHeight: "calc(100vh - 285px)",
     });
     expect(frame.bottom - 214).toBe(frame.right);
     // Tabs 38 + border 1 + margin 16 + the 40px button + an 8px gap.
-    expect(AGENT_PANEL_MIN_TOP).toBe(103);
+    expect(AGENT_PANEL_MIN_TOP).toBe(55);
   });
 
   it("seats the history button one gap left of the agent button", () => {

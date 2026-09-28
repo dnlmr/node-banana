@@ -3299,6 +3299,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       workflowId: workflow.id || null,
       workflowName: workflow.name,
       workflowLoadCount: get().workflowLoadCount + 1,
+      // The file carries no viewport; the canvas frames the graph once it is measured
+      canvasViewport: null,
       // A different canvas: a running agent turn must not edit it
       canvasGeneration: get().canvasGeneration + 1,
       saveDirectoryPath: directoryPath || null,

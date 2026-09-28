@@ -15,7 +15,9 @@ import {
   OnSelectionChangeParams,
   useStore,
   useUpdateNodeInternals,
+  getNodesBounds,
 } from "@xyflow/react";
+import { frameLoadedGraph } from "@/utils/frameGraph";
 import "@xyflow/react/dist/style.css";
 
 import { useWorkflowStore, WorkflowFile } from "@/store/workflowStore";
@@ -345,7 +347,7 @@ export function WorkflowCanvas() {
   const clearWorkflow = useWorkflowStore((state) => state.clearWorkflow);
   const setHoveredNodeId = useWorkflowStore((state) => state.setHoveredNodeId);
   const openAnnotationModal = useAnnotationStore((state) => state.openModal);
-  const { screenToFlowPosition, getViewport, setCenter } = useReactFlow();
+  const { screenToFlowPosition, getViewport, setCenter, setViewport, getNodes } = useReactFlow();
   const isCanvasOverview = useStore(selectCanvasOverview);
   const { show: showToast } = useToast();
   const [isDragOver, setIsDragOver] = useState(false);
@@ -557,15 +559,32 @@ export function WorkflowCanvas() {
   const [initialViewport] = useState(() => useWorkflowStore.getState().canvasViewport);
   const shouldFitView = useWorkflowStore((state) => !state.canvasViewport);
   const workflowLoadCount = useWorkflowStore((state) => state.workflowLoadCount);
+  const setCanvasViewport = useWorkflowStore((state) => state.setCanvasViewport);
   const nodeIdsRef = useRef<string[]>([]);
   nodeIdsRef.current = allNodes.map((n) => n.id);
   useEffect(() => {
     if (!workflowLoadCount) return;
     let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => updateNodeInternals(nodeIdsRef.current));
+      frame = requestAnimationFrame(() => {
+        updateNodeInternals(nodeIdsRef.current);
+        // A workflow opened from a file has no viewport of its own (a tab
+        // switch restores its parked one first): frame its graph, now that
+        // the nodes are measured, so the view is not left wherever the
+        // previous graph was.
+        if (useWorkflowStore.getState().canvasViewport !== null) return;
+        const wrapper = reactFlowWrapper.current;
+        const viewport = frameLoadedGraph(
+          getNodesBounds(getNodes()),
+          wrapper?.clientWidth || window.innerWidth,
+          wrapper?.clientHeight || window.innerHeight,
+        );
+        if (!viewport) return;
+        setViewport(viewport);
+        setCanvasViewport(viewport);
+      });
     });
     return () => cancelAnimationFrame(frame);
-  }, [workflowLoadCount, updateNodeInternals]);
+  }, [workflowLoadCount, updateNodeInternals, getNodes, setViewport, setCanvasViewport]);
 
 
   // Helper to get node title (used for FloatingNodeHeader)
@@ -2607,8 +2626,10 @@ export function WorkflowCanvas() {
           className={tutorialActive && lockedFeatures ? "opacity-30 pointer-events-none" : ""}
         />
         <CanvasMinimap disabled={tutorialActive && lockedFeatures} onMinimapVisibleChange={setIsMinimapVisible} />
+        {/* The window takes the pill's place while it is open; its own header closes it. */}
+        {!isAgentOpen && (
         <AgentButton
-          open={isAgentOpen}
+          open={false}
           harness={agentPresence?.harnessChosen ? agentPresence.harness : null}
           busy={isAgentBusy}
           attention={agentPresence?.attention ?? false}
@@ -2618,6 +2639,7 @@ export function WorkflowCanvas() {
           onWidthChange={setAgentButtonWidth}
           style={{ right: AGENT_BUTTON_MARGIN, top: AGENT_BUTTON_MARGIN }}
         />
+        )}
         <FloatingNodeHeaders
           nodes={allNodes}
           hints={readinessHints}
@@ -2663,7 +2685,7 @@ export function WorkflowCanvas() {
       {/* Edge toolbar */}
 
       {/* Global image history */}
-      <GlobalImageHistory rightInset={historyRightInset} />
+      <GlobalImageHistory rightInset={historyRightInset} anchorRight={isAgentOpen ? historyRightInset : AGENT_BUTTON_MARGIN} />
 
       {/* Chat toggle button - hidden for now */}
 

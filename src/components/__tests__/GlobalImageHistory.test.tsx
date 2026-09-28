@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import { ReactFlowProvider } from "@xyflow/react";
 import { GlobalImageHistory } from "@/components/GlobalImageHistory";
 import { ImageHistoryItem } from "@/types";
 
@@ -14,6 +15,8 @@ vi.mock("react-dom", async () => {
 
 // Mock the workflow store
 const mockClearGlobalHistory = vi.fn();
+const mockAddNode = vi.fn(() => "imageInput-9");
+const mockUpdateNodeData = vi.fn();
 const mockUseWorkflowStore = vi.fn();
 
 vi.mock("@/store/workflowStore", () => ({
@@ -49,8 +52,15 @@ const createHistoryItem = (overrides: Partial<ImageHistoryItem> = {}): ImageHist
 const createDefaultState = (overrides: { globalImageHistory?: ImageHistoryItem[] } = {}) => ({
   globalImageHistory: [],
   clearGlobalHistory: mockClearGlobalHistory,
+  addNode: mockAddNode,
+  updateNodeData: mockUpdateNodeData,
+  incrementModalCount: vi.fn(),
+  decrementModalCount: vi.fn(),
   ...overrides,
 });
+
+// The viewer places nodes through React Flow, so the button needs its provider.
+const wrapper = ReactFlowProvider;
 
 describe("GlobalImageHistory", () => {
   beforeEach(() => {
@@ -68,7 +78,7 @@ describe("GlobalImageHistory", () => {
 
     it("always offers Open Assets under the recent grid", () => {
       mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: [createHistoryItem()] })));
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
       fireEvent.click(screen.getByRole("button"));
       fireEvent.click(screen.getByRole("button", { name: "Open Assets" }));
       expect(useAssetStore.getState().appView).toBe("assets");
@@ -79,7 +89,7 @@ describe("GlobalImageHistory", () => {
     it("opens Assets from Show all when the library is there", () => {
       libraryStatus.current = { available: true };
       mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: fifteen() })));
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
       fireEvent.click(screen.getByRole("button"));
       fireEvent.click(screen.getByText("Show all · 15"));
       expect(useAssetStore.getState().appView).toBe("assets");
@@ -89,7 +99,7 @@ describe("GlobalImageHistory", () => {
     it("opens Assets from Show all before the library has answered", () => {
       libraryStatus.current = null;
       mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: fifteen() })));
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
       fireEvent.click(screen.getByRole("button"));
       fireEvent.click(screen.getByText("Show all · 15"));
       expect(useAssetStore.getState().appView).toBe("assets");
@@ -97,14 +107,14 @@ describe("GlobalImageHistory", () => {
 
     it("says clearing the list keeps the files", () => {
       mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: [createHistoryItem()] })));
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
       fireEvent.click(screen.getByRole("button"));
       expect(screen.getByText("Clear list")).toHaveAttribute("title", "Files stay in Assets");
     });
 
     it("closes its sidebar when the view switches to Assets", () => {
       mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: fifteen() })));
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
       fireEvent.click(screen.getByRole("button"));
       fireEvent.click(screen.getByText("Show all · 15"));
       expect(screen.getByText("All History (15)")).toBeInTheDocument();
@@ -123,7 +133,7 @@ describe("GlobalImageHistory", () => {
       createHistoryItem({ model: "GPT Image 2.5 Sunburst", generation: { modelId: "gpt-image-2.5-sunburst", parameters: {} } }),
     ];
     mockUseWorkflowStore.mockImplementation(selector => selector(createDefaultState({ globalImageHistory: history })));
-    render(<GlobalImageHistory />);
+    render(<GlobalImageHistory />, { wrapper });
     fireEvent.click(screen.getByRole("button"));
     expect(screen.getByTitle(/Est. \$0.0325 USD/)).toHaveAttribute("title", expect.stringContaining("1536x864 · WEBP"));
     expect(screen.getByTitle(/Cost unavailable/)).toBeInTheDocument();
@@ -131,7 +141,7 @@ describe("GlobalImageHistory", () => {
 
   describe("Empty State", () => {
     it("should not render when history is empty", () => {
-      const { container } = render(<GlobalImageHistory />);
+      const { container } = render(<GlobalImageHistory />, { wrapper });
       expect(container.firstChild).toBeNull();
     });
 
@@ -140,7 +150,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: [] }));
       });
 
-      const { container } = render(<GlobalImageHistory />);
+      const { container } = render(<GlobalImageHistory />, { wrapper });
       expect(container.innerHTML).toBe("");
     });
   });
@@ -152,7 +162,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Should have a button (trigger)
       const button = screen.getByRole("button");
@@ -165,10 +175,10 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      const { rerender } = render(<GlobalImageHistory />);
+      const { rerender } = render(<GlobalImageHistory />, { wrapper });
       expect(screen.getByTestId("image-history")).toHaveStyle({ top: "16px", right: "16px" });
 
-      rerender(<GlobalImageHistory rightInset={432} />);
+      rerender(<GlobalImageHistory rightInset={432} anchorRight={432} />);
       expect(screen.getByTestId("image-history")).toHaveStyle({ top: "16px", right: "432px" });
       // The notifications hanging beneath it follow (Toast.tsx reads this).
       expect(document.documentElement.style.getPropertyValue("--nb-history-right")).toBe("432px");
@@ -177,13 +187,27 @@ describe("GlobalImageHistory", () => {
       expect(document.documentElement.style.getPropertyValue("--nb-history-right")).toBe("");
     });
 
+    it("hangs the drop-down and the notifications from the window's edge while the agent window is closed", () => {
+      const history = [createHistoryItem()];
+      mockUseWorkflowStore.mockImplementation((selector) => {
+        return selector(createDefaultState({ globalImageHistory: history }));
+      });
+
+      // Beside the agent pill: the button is 116px in, the drop-down still hugs the edge at 16px.
+      render(<GlobalImageHistory rightInset={116} anchorRight={16} />, { wrapper });
+      expect(document.documentElement.style.getPropertyValue("--nb-history-right")).toBe("");
+      fireEvent.click(screen.getByRole("button"));
+      const dropdown = screen.getByRole("dialog", { name: "Recent generations" });
+      expect(dropdown).toHaveStyle({ right: "-100px", top: "50px", width: "344px" });
+    });
+
     it("should show history count badge", () => {
       const history = [createHistoryItem(), createHistoryItem(), createHistoryItem()];
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       expect(screen.getByText("3")).toBeInTheDocument();
     });
@@ -194,7 +218,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       expect(screen.getByText("99+")).toBeInTheDocument();
     });
@@ -205,7 +229,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       const button = screen.getByTitle("1 image in history");
       expect(button).toBeInTheDocument();
@@ -217,7 +241,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       const button = screen.getByTitle("2 images in history");
       expect(button).toBeInTheDocument();
@@ -231,7 +255,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       const triggerButton = screen.getByRole("button");
       fireEvent.click(triggerButton);
@@ -248,7 +272,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       const triggerButton = screen.getByRole("button");
 
@@ -269,7 +293,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       const triggerButton = screen.getByRole("button");
       fireEvent.click(triggerButton);
@@ -287,7 +311,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       const triggerButton = screen.getByRole("button");
       fireEvent.click(triggerButton);
@@ -305,7 +329,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan
       const triggerButton = screen.getByRole("button");
@@ -328,7 +352,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan
       fireEvent.click(screen.getByRole("button"));
@@ -345,7 +369,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan
       fireEvent.click(screen.getByRole("button"));
@@ -363,7 +387,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan
       fireEvent.click(screen.getByRole("button"));
@@ -383,7 +407,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -402,13 +426,13 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
       fireEvent.click(screen.getByText("Show all · 15"));
 
-      expect(screen.getByText("Drag images to canvas to create nodes")).toBeInTheDocument();
+      expect(screen.getByText("Click to view · drag onto the canvas")).toBeInTheDocument();
     });
   });
 
@@ -421,7 +445,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -440,7 +464,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -462,7 +486,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -480,7 +504,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -497,7 +521,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
       fireEvent.click(screen.getByRole("button"));
       fireEvent.click(screen.getByText("Clear list"));
 
@@ -510,10 +534,79 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
       fireEvent.click(screen.getByRole("button"));
 
       expect(screen.queryByText(/Show all/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Viewer", () => {
+    const three = () => [
+      createHistoryItem({ id: "h-1", prompt: "First prompt", model: "nano-banana-pro", timestamp: Date.now() - 120_000, generation: { modelId: "nano-banana-pro", parameters: {}, size: "1536x1024", outputFormat: "png", cost: { amount: 0.134, currency: "USD", estimated: false } } }),
+      createHistoryItem({ id: "h-2", prompt: "Second prompt" }),
+      createHistoryItem({ id: "h-3", prompt: "" }),
+    ];
+
+    it("opens full screen on a thumbnail, over the whole history, and closes the drop-down", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: three() })));
+      render(<GlobalImageHistory />, { wrapper });
+      fireEvent.click(screen.getByRole("button"));
+      expect(screen.getByText("Click to view · drag onto the canvas")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "View Second prompt" }));
+
+      const viewer = screen.getByRole("dialog", { name: "Recent generation" });
+      expect(screen.queryByRole("dialog", { name: "Recent generations" })).not.toBeInTheDocument();
+      const rail = screen.getByTestId("media-viewer-rail");
+      expect(rail).toHaveTextContent("2 of 3");
+      expect(rail).toHaveTextContent("Second prompt");
+      expect(screen.getByRole("button", { name: "Add to graph" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open in Assets" })).toBeInTheDocument();
+
+      // Stepping back shows what made the first one
+      fireEvent.keyDown(document, { key: "ArrowLeft" });
+      expect(rail).toHaveTextContent("1 of 3");
+      expect(rail).toHaveTextContent("Nano Banana Pro");
+      expect(rail).toHaveTextContent("1536x1024");
+      expect(rail).toHaveTextContent("$0.1340 USD");
+      // A promptless item is titled as such
+      fireEvent.keyDown(document, { key: "ArrowRight" });
+      fireEvent.keyDown(document, { key: "ArrowRight" });
+      expect(rail).toHaveTextContent("No prompt");
+      expect(viewer).toBeInTheDocument();
+    });
+
+    it("adds the image to the graph as an Image Input node and says so for a moment", () => {
+      vi.useFakeTimers();
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: three() })));
+      render(<GlobalImageHistory />, { wrapper });
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByRole("button", { name: "View First prompt" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Add to graph" }));
+      expect(mockAddNode).toHaveBeenCalledWith("imageInput", expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }), {
+        image: "data:image/png;base64,mockImageData",
+        filename: expect.stringMatching(/^history-\d+\.png$/),
+      });
+      // The viewer stays up; the button confirms, then is ready again
+      expect(screen.getByRole("button", { name: "Added" })).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+      expect(screen.getByRole("button", { name: "Add to graph" })).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "Recent generation" })).toBeInTheDocument();
+    });
+
+    it("opens from a row of the full list too", () => {
+      const history = Array.from({ length: 15 }, (_, i) => createHistoryItem({ id: `item-${i}`, prompt: `Prompt ${i}` }));
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: history })));
+      render(<GlobalImageHistory />, { wrapper });
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByText("Show all · 15"));
+      fireEvent.click(screen.getByText("Prompt 13"));
+      expect(screen.getByTestId("media-viewer-rail")).toHaveTextContent("14 of 15");
+      expect(screen.queryByText("All History (15)")).not.toBeInTheDocument();
     });
   });
 
@@ -524,7 +617,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan
       fireEvent.click(screen.getByRole("button"));
@@ -555,7 +648,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -597,7 +690,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -619,7 +712,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -641,7 +734,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -658,7 +751,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan
       fireEvent.click(screen.getByRole("button"));
@@ -676,7 +769,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -697,7 +790,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan then sidebar
       fireEvent.click(screen.getByRole("button"));
@@ -718,7 +811,7 @@ describe("GlobalImageHistory", () => {
         return selector(createDefaultState({ globalImageHistory: history }));
       });
 
-      render(<GlobalImageHistory />);
+      render(<GlobalImageHistory />, { wrapper });
 
       // Open fan
       fireEvent.click(screen.getByRole("button"));

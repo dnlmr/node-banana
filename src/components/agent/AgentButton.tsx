@@ -29,7 +29,9 @@ export interface AgentButtonProps {
 /**
  * Opens the agent window: a labelled pill in the canvas's top-right corner,
  * on the same glass card as the other chrome, showing the mark of the harness
- * that will answer. The window opens beneath it, so it stays as the toggle.
+ * that will answer. The canvas hides it while the window is open (the window
+ * takes its place and closes from its own header), so `open` only styles a
+ * pressed state for hosts that keep it up.
  */
 export function AgentButton({
   open,

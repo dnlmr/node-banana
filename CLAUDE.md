@@ -49,6 +49,7 @@ Node Banana is a node-based visual workflow editor for AI image generation. User
 | Cost calculations | `src/utils/costCalculator.ts` |
 | Grid splitting utility | `src/utils/gridSplitter.ts` |
 | Asset library (always-on saving, Assets view) | `src/lib/assets/`, `src/components/assets/`, `docs/asset-library.md` |
+| Full-screen media viewer (stage, dock-scaled filmstrip, details rail; the recent-generations drop-down and the output gallery node both mount it with their own actions) | `src/components/MediaViewer.tsx`, `src/hooks/useAddMediaNode.ts` |
 
 ### State Management
 
@@ -325,8 +326,12 @@ Point the live tier at a local ComfyUI with
 ## Agent
 
 The agent is a chat window opened from the labelled pill in the canvas's
-top-right corner, beside the recent-generations button; the window hangs under
-the pill down to the navigator. The pill shows the mark of the harness that
+top-right corner, beside the recent-generations button; the window takes the
+pill's place (the pill is hidden while it is open) and runs down to the
+navigator. The recent-generations drop-down and the
+notification stack hang from the window's right edge while the agent window
+is closed, and move left of it while it is open (`anchorRight` on
+`GlobalImageHistory`, published as `--nb-history-right`). The pill shows the mark of the harness that
 will answer (both marks until the agent has been opened once), says "Working…"
 while a turn runs, and carries an amber dot when the harness needs sign-in. It
 creates workflows, edits the canvas and changes node settings.
