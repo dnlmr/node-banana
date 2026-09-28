@@ -123,27 +123,19 @@ describe("MediaViewer", () => {
     const incoming = screen.getByTestId("media-viewer-current");
     expect(incoming).toHaveClass("opacity-0");
 
-    // The rail's title and details hold their old text the same way, out of the accessibility tree; the buttons stay put
-    const [titleLeaving, detailsLeaving] = screen.getAllByTestId("media-viewer-rail-leaving");
-    expect(titleLeaving).toHaveTextContent("A red shoe");
-    expect(detailsLeaving).toHaveTextContent("Nano Banana Pro");
-    expect(titleLeaving).toHaveAttribute("aria-hidden", "true");
-    expect(titleLeaving.querySelector("button")).toBeNull();
-    const [titleCurrent] = screen.getAllByTestId("media-viewer-rail-current");
-    expect(titleCurrent).toHaveClass("opacity-0");
-    expect(titleCurrent).toHaveTextContent("A watch");
-    expect(screen.getAllByRole("button", { name: "Add to graph" })).toHaveLength(1);
+    // The rail swaps at once, with no animation
+    const rail = screen.getByTestId("media-viewer-rail");
+    expect(rail).toHaveTextContent("A watch");
+    expect(rail).not.toHaveTextContent("A red shoe");
+    expect(rail.querySelector('[class*="animate-"]')).toBeNull();
 
     fireEvent.load(incoming.querySelector("img")!);
     expect(leaving).toHaveClass("animate-viewer-out-left");
     expect(incoming).toHaveClass("animate-viewer-in-right");
     expect(incoming).not.toHaveClass("opacity-0");
-    expect(titleLeaving).toHaveClass("animate-viewer-rail-out");
-    expect(titleCurrent).toHaveClass("animate-viewer-rail");
 
     fireEvent.animationEnd(leaving);
     expect(screen.queryByTestId("media-viewer-leaving")).toBeNull();
-    expect(screen.queryByTestId("media-viewer-rail-leaving")).toBeNull();
 
     // Going back, the motion reverses; a source that never loads is not waited on forever
     rerender(<MediaViewer {...props} index={0} />);

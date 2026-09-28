@@ -628,9 +628,9 @@ html {
 }
 
 /* The media viewer: the outgoing image slides a little away from the
-   direction of travel while the incoming one arrives from the other side,
-   and the rail's text fades up so it never looks retyped. The strip's dock
-   scaling is a transition on the tiles themselves. */
+   direction of travel while the incoming one arrives from the other side.
+   The strip's dock scaling is a transition on the tiles themselves; the
+   rail's text swaps outright. */
 @keyframes viewerInRight {
   from {
     opacity: 0;
@@ -675,24 +675,6 @@ html {
   }
 }
 
-@keyframes viewerRailIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes viewerRailOut {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
 @keyframes viewerFadeIn {
   from {
     opacity: 0;
@@ -727,17 +709,6 @@ html {
   animation: viewerOutRight 0.24s cubic-bezier(0.2, 0, 0, 1) both;
 }
 
-/* Text does not crossfade well (two prompts over each other are a jumble),
-   so the rail goes in sequence: the old text is out in 60ms, and only
-   then does the new fade in. */
-.animate-viewer-rail {
-  animation: viewerRailIn 0.18s cubic-bezier(0.2, 0, 0, 1) 0.06s both;
-}
-
-.animate-viewer-rail-out {
-  animation: viewerRailOut 0.06s ease-in both;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .animate-viewer-in-right,
   .animate-viewer-in-left {
@@ -749,13 +720,6 @@ html {
     animation: viewerFadeOut 0.15s ease-out both;
   }
 
-  .animate-viewer-rail {
-    animation: viewerFadeIn 0.12s ease-out 0.06s both;
-  }
-
-  .animate-viewer-rail-out {
-    animation: viewerFadeOut 0.06s ease-out both;
-  }
 }
 
 /* The welcome dialog's "New" chip: a light band sweeps across the text and

@@ -153,41 +153,6 @@ function RailDetails({ item }: { item: MediaViewerItem }) {
   );
 }
 
-/**
- * Text in the rail on the stage's cue, in sequence rather than a crossfade:
- * the old copy is gone before the new fades in. The buttons between the
- * title and the details are not part of this; they stay put.
- */
-function RailFade({
-  current,
-  leaving,
-  ready,
-  render,
-}: {
-  current: MediaViewerItem;
-  leaving: MediaViewerItem | null;
-  ready: boolean;
-  render: (item: MediaViewerItem) => ReactNode;
-}) {
-  return (
-    <div className="relative min-h-0 overflow-hidden">
-      {leaving && (
-        <div
-          key={leaving.id}
-          aria-hidden="true"
-          data-testid="media-viewer-rail-leaving"
-          className={cn("pointer-events-none absolute inset-0", ready && "animate-viewer-rail-out")}
-        >
-          {render(leaving)}
-        </div>
-      )}
-      <div key={current.id} data-testid="media-viewer-rail-current" className={cn(leaving && (ready ? "animate-viewer-rail" : "opacity-0"))}>
-        {render(current)}
-      </div>
-    </div>
-  );
-}
-
 interface StageState {
   current: MediaViewerItem | undefined;
   /** The item on its way out, kept for the crossfade. */
@@ -374,7 +339,8 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
           </div>
         </div>
 
-        <RailFade current={current} leaving={leaving} ready={ready} render={(item) => <RailTitle item={item} />} />
+        {/* The rail swaps outright: fading text read badly against the image's crossfade. */}
+        <RailTitle item={current} />
         <div className="flex flex-col gap-1.5">
           {actions.map((action) => {
             const Icon = action.icon;
@@ -395,7 +361,7 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
             );
           })}
         </div>
-        <RailFade current={current} leaving={leaving} ready={ready} render={(item) => <RailDetails item={item} />} />
+        <RailDetails item={current} />
 
         <div className="flex-1" />
         {footer}
