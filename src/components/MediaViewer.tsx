@@ -126,51 +126,64 @@ function StageMedia({ item, className, hidden, onReady }: { item: MediaViewerIte
   );
 }
 
-/** The rail's changing part: title, the host's actions, details. An inert copy stands in for the item on its way out. */
-function RailBody({ item, actions, inert = false }: { item: MediaViewerItem; actions: MediaViewerAction[]; inert?: boolean }) {
+function RailTitle({ item }: { item: MediaViewerItem }) {
+  if (!item.title) return null;
   return (
-    <div className="flex min-h-0 flex-col gap-4">
-      {item.title && (
-        <p className="line-clamp-4 select-text text-sm font-medium leading-5 tracking-[-0.01em] text-neutral-100" title={item.title}>
-          {item.title}
-        </p>
+    <p className="line-clamp-4 select-text text-sm font-medium leading-5 tracking-[-0.01em] text-neutral-100" title={item.title}>
+      {item.title}
+    </p>
+  );
+}
+
+function RailDetails({ item }: { item: MediaViewerItem }) {
+  if (!item.details || item.details.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="h-px bg-white/8" />
+      <dl className="flex flex-col gap-2">
+        <span className="text-[10px] uppercase tracking-[0.06em] text-neutral-500">Details</span>
+        {item.details.map(([name, value]) => (
+          <div key={name} className="flex justify-between gap-3 text-[11px] leading-[14px]">
+            <dt className="text-neutral-500">{name}</dt>
+            <dd className="select-text text-right text-neutral-300">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Text in the rail on the stage's cue, in sequence rather than a crossfade:
+ * the old copy is gone before the new fades in. The buttons between the
+ * title and the details are not part of this; they stay put.
+ */
+function RailFade({
+  current,
+  leaving,
+  ready,
+  render,
+}: {
+  current: MediaViewerItem;
+  leaving: MediaViewerItem | null;
+  ready: boolean;
+  render: (item: MediaViewerItem) => ReactNode;
+}) {
+  return (
+    <div className="relative min-h-0 overflow-hidden">
+      {leaving && (
+        <div
+          key={leaving.id}
+          aria-hidden="true"
+          data-testid="media-viewer-rail-leaving"
+          className={cn("pointer-events-none absolute inset-0", ready && "animate-viewer-rail-out")}
+        >
+          {render(leaving)}
+        </div>
       )}
-      <div className="flex flex-col gap-1.5">
-        {actions.map((action) => {
-          const Icon = action.icon;
-          return (
-            <button
-              key={action.label}
-              type="button"
-              disabled={inert || action.disabled}
-              tabIndex={inert ? -1 : undefined}
-              onClick={inert ? undefined : action.onClick}
-              className={cn(
-                "flex h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors duration-[160ms]",
-                !inert && "disabled:opacity-40",
-                ACTION_TONE[action.tone ?? "default"],
-              )}
-            >
-              <Icon size={15} strokeWidth={2} />
-              {action.label}
-            </button>
-          );
-        })}
+      <div key={current.id} data-testid="media-viewer-rail-current" className={cn(leaving && (ready ? "animate-viewer-rail" : "opacity-0"))}>
+        {render(current)}
       </div>
-      {item.details && item.details.length > 0 && (
-        <>
-          <div className="h-px bg-white/8" />
-          <dl className="flex flex-col gap-2">
-            <span className="text-[10px] uppercase tracking-[0.06em] text-neutral-500">Details</span>
-            {item.details.map(([name, value]) => (
-              <div key={name} className="flex justify-between gap-3 text-[11px] leading-[14px]">
-                <dt className="text-neutral-500">{name}</dt>
-                <dd className="select-text text-right text-neutral-300">{value}</dd>
-              </div>
-            ))}
-          </dl>
-        </>
-      )}
     </div>
   );
 }
@@ -361,22 +374,28 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
           </div>
         </div>
 
-        {/* Two layers on the stage's cue, but in sequence rather than a crossfade: the old text is gone before the new fades up. */}
-        <div className="relative min-h-0 overflow-hidden">
-          {leaving && (
-            <div
-              key={leaving.id}
-              aria-hidden="true"
-              data-testid="media-viewer-rail-leaving"
-              className={cn("pointer-events-none absolute inset-0", ready && "animate-viewer-rail-out")}
-            >
-              <RailBody item={leaving} actions={actions} inert />
-            </div>
-          )}
-          <div key={current.id} data-testid="media-viewer-rail-current" className={cn(leaving && (ready ? "animate-viewer-rail" : "opacity-0"))}>
-            <RailBody item={current} actions={actions} />
-          </div>
+        <RailFade current={current} leaving={leaving} ready={ready} render={(item) => <RailTitle item={item} />} />
+        <div className="flex flex-col gap-1.5">
+          {actions.map((action) => {
+            const Icon = action.icon;
+            return (
+              <button
+                key={action.label}
+                type="button"
+                disabled={action.disabled}
+                onClick={action.onClick}
+                className={cn(
+                  "flex h-9 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium transition-colors duration-[160ms] disabled:opacity-40",
+                  ACTION_TONE[action.tone ?? "default"],
+                )}
+              >
+                <Icon size={15} strokeWidth={2} />
+                {action.label}
+              </button>
+            );
+          })}
         </div>
+        <RailFade current={current} leaving={leaving} ready={ready} render={(item) => <RailDetails item={item} />} />
 
         <div className="flex-1" />
         {footer}

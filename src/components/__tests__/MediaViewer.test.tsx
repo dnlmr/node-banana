@@ -123,21 +123,23 @@ describe("MediaViewer", () => {
     const incoming = screen.getByTestId("media-viewer-current");
     expect(incoming).toHaveClass("opacity-0");
 
-    // The rail holds its old text the same way, its buttons inert and out of the accessibility tree
-    const railLeaving = screen.getByTestId("media-viewer-rail-leaving");
-    expect(railLeaving).toHaveTextContent("A red shoe");
-    expect(railLeaving).toHaveAttribute("aria-hidden", "true");
-    expect(railLeaving.querySelector("button")).toBeDisabled();
-    expect(screen.getByTestId("media-viewer-rail-current")).toHaveClass("opacity-0");
-    expect(screen.getByTestId("media-viewer-rail-current")).toHaveTextContent("A watch");
+    // The rail's title and details hold their old text the same way, out of the accessibility tree; the buttons stay put
+    const [titleLeaving, detailsLeaving] = screen.getAllByTestId("media-viewer-rail-leaving");
+    expect(titleLeaving).toHaveTextContent("A red shoe");
+    expect(detailsLeaving).toHaveTextContent("Nano Banana Pro");
+    expect(titleLeaving).toHaveAttribute("aria-hidden", "true");
+    expect(titleLeaving.querySelector("button")).toBeNull();
+    const [titleCurrent] = screen.getAllByTestId("media-viewer-rail-current");
+    expect(titleCurrent).toHaveClass("opacity-0");
+    expect(titleCurrent).toHaveTextContent("A watch");
     expect(screen.getAllByRole("button", { name: "Add to graph" })).toHaveLength(1);
 
     fireEvent.load(incoming.querySelector("img")!);
     expect(leaving).toHaveClass("animate-viewer-out-left");
     expect(incoming).toHaveClass("animate-viewer-in-right");
     expect(incoming).not.toHaveClass("opacity-0");
-    expect(railLeaving).toHaveClass("animate-viewer-rail-out");
-    expect(screen.getByTestId("media-viewer-rail-current")).toHaveClass("animate-viewer-rail");
+    expect(titleLeaving).toHaveClass("animate-viewer-rail-out");
+    expect(titleCurrent).toHaveClass("animate-viewer-rail");
 
     fireEvent.animationEnd(leaving);
     expect(screen.queryByTestId("media-viewer-leaving")).toBeNull();
