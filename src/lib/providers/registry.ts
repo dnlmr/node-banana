@@ -7,9 +7,12 @@
  * models with the same keys, caching, filtering and sorting as the route.
  *
  * Gemini, Kie.ai, OpenAI and Comfy Router are static catalogs; Replicate,
- * fal.ai and WaveSpeed are fetched from their APIs and cached in memory
- * (./cache). Each fetched provider gets its own deadline so one slow
- * provider cannot hang the caller.
+ * fal.ai and WaveSpeed come from the model catalog (./catalog): their lists
+ * are fetched at once, each under its own deadline, kept on disk, served
+ * straight away and refreshed behind the request when they age. Replicate's
+ * list is built from its curated collections, so it holds the models
+ * Replicate itself recommends for each capability rather than whatever was
+ * uploaded last.
  *
  * Server only.
  */
@@ -18,13 +21,9 @@ import { ProviderType } from "@/types";
 import { OPENAI_IMAGE_25_MODELS } from "./openaiImages";
 import { GEMINI_OMNI_MODELS } from "./geminiOmni";
 import { ProviderModel, ModelCapability } from "./types";
-import {
-  getCachedModels,
-  setCachedModels,
-  getCacheKey,
-  setCachedWaveSpeedSchemas,
-  WaveSpeedApiSchema,
-} from "./cache";
+import { setCachedWaveSpeedSchemas, WaveSpeedApiSchema } from "./cache";
+import { getProviderCatalog, type CatalogFetcher, type CatalogStatus } from "./catalog";
+import { startDeadline } from "./deadline";
 import { comfyRouterProviderModels } from "./comfyRouter";
 import { isValidReplicateModelId } from "./ids";
 import type { ProviderKeys } from "./keys";
@@ -604,12 +603,6 @@ const OPENAI_IMAGE_MODELS: ProviderModel[] = [
 
 // ============ Replicate Types ============
 
-interface ReplicateModelsResponse {
-  next: string | null;
-  previous: string | null;
-  results: ReplicateModel[];
-}
-
 interface ReplicateModel {
   url: string;
   owner: string;
@@ -762,6 +755,17 @@ function inferReplicateCapabilities(model: ReplicateModel): ModelCapability[] {
   return capabilities;
 }
 
+/**
+ * A cover image the browse dialog can show: an http(s) URL of sane length.
+ * Replicate serves some covers as base64 data URLs (one is 1.5MB), which
+ * would dwarf the whole list; those are dropped.
+ */
+export function cleanCoverUrl(url: string | undefined | null): string | undefined {
+  if (!url || url.length > 2048) return undefined;
+  if (!/^https?:\/\//i.test(url) || url.includes("data:")) return undefined;
+  return url;
+}
+
 function mapReplicateModel(model: ReplicateModel): ProviderModel {
   return {
     id: `${model.owner}/${model.name}`,
@@ -769,41 +773,102 @@ function mapReplicateModel(model: ReplicateModel): ProviderModel {
     description: model.description,
     provider: "replicate",
     capabilities: inferReplicateCapabilities(model),
-    coverImage: model.cover_image_url,
+    coverImage: cleanCoverUrl(model.cover_image_url),
+    ...(typeof model.run_count === "number" ? { popularity: model.run_count } : {}),
   };
 }
 
+type ReplicateCollectionRule = {
+  slug: string;
+  capability: ModelCapability | ((model: ReplicateModel) => ModelCapability);
+};
+
+const IMAGE_INPUT_WORDS = /\b(image|img|photo|picture|multi-?view|mv)\b|i2v|img2/i;
+
+/** Wan has text-to-video and image-to-video variants side by side; the name says which. */
+function videoCapabilityByName(model: ReplicateModel): ModelCapability {
+  return /i2v|image-to-video|img2vid/i.test(`${model.name} ${model.description ?? ""}`) ? "image-to-video" : "text-to-video";
+}
+
+/** Most 3D models take an image; only ones that say text (and not image) are text-to-3d. */
+function threeDCapabilityByName(model: ReplicateModel): ModelCapability {
+  const text = `${model.name} ${model.description ?? ""}`;
+  if (/\btext\b|prompt/i.test(text) && !IMAGE_INPUT_WORDS.test(text)) return "text-to-3d";
+  return "image-to-3d";
+}
+
+/**
+ * Replicate's curated collections, and the capability each one stands for.
+ * Paging /v1/models newest-first returns whatever was uploaded last (mostly
+ * one-off user models) with capabilities guessed from keywords; the
+ * collections are what Replicate recommends, with categories that are right.
+ * A model in several collections gets every one's capability.
+ */
+export const REPLICATE_COLLECTIONS: ReplicateCollectionRule[] = [
+  { slug: "text-to-image", capability: "text-to-image" },
+  { slug: "flux", capability: "text-to-image" },
+  { slug: "image-editing", capability: "image-to-image" },
+  { slug: "super-resolution", capability: "image-to-image" },
+  { slug: "ai-image-restoration", capability: "image-to-image" },
+  { slug: "remove-backgrounds", capability: "image-to-image" },
+  { slug: "control-net", capability: "image-to-image" },
+  { slug: "sketch-to-image", capability: "image-to-image" },
+  { slug: "face-swap", capability: "image-to-image" },
+  { slug: "text-to-video", capability: "text-to-video" },
+  { slug: "image-to-video", capability: "image-to-video" },
+  { slug: "wan-video", capability: videoCapabilityByName },
+  // Video processing takes a clip in; the Video node is where it belongs
+  { slug: "video-editing", capability: "image-to-video" },
+  { slug: "ai-enhance-videos", capability: "image-to-video" },
+  { slug: "lipsync", capability: "audio-to-video" },
+  { slug: "3d-models", capability: threeDCapabilityByName },
+  { slug: "text-to-speech", capability: "text-to-audio" },
+  { slug: "ai-music-generation", capability: "text-to-audio" },
+];
+
+/**
+ * Replicate's list: every curated collection fetched at once, merged by
+ * model, most-run first. A rejected key fails the whole fetch; one
+ * collection that is missing or errors is skipped.
+ */
 async function fetchReplicateModels(apiKey: string, signal?: AbortSignal): Promise<ProviderModel[]> {
-  const allModels: ProviderModel[] = [];
+  type CollectionResult = { rule: ReplicateCollectionRule; models: ReplicateModel[] } | { rule: ReplicateCollectionRule; status: number };
+  const results = await Promise.all(
+    REPLICATE_COLLECTIONS.map(async (rule): Promise<CollectionResult> => {
+      const response = await fetch(`${REPLICATE_API_BASE}/collections/${rule.slug}`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal,
+      });
+      if (!response.ok) return { rule, status: response.status };
+      const data = (await response.json()) as { models?: ReplicateModel[] };
+      return { rule, models: Array.isArray(data.models) ? data.models : [] };
+    })
+  );
 
-  // Always fetch from the models endpoint - search endpoint is unreliable
-  let url: string | null = `${REPLICATE_API_BASE}/models`;
-
-  // Paginate through results (limit to 15 pages to avoid timeout)
-  let pageCount = 0;
-  const maxPages = 15;
-
-  while (url && pageCount < maxPages) {
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
-      signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Replicate API error: ${response.status}`);
+  const byId = new Map<string, ProviderModel>();
+  let fetched = 0;
+  let lastStatus: number | null = null;
+  for (const result of results) {
+    if (!("models" in result)) {
+      if (result.status === 401 || result.status === 403) throw new Error(`Replicate API error: ${result.status}`);
+      lastStatus = result.status;
+      continue;
     }
-
-    const data: ReplicateModelsResponse = await response.json();
-    if (data.results) {
-      allModels.push(...data.results.map(mapReplicateModel));
+    fetched++;
+    for (const model of result.models) {
+      if (!model || typeof model.owner !== "string" || typeof model.name !== "string") continue;
+      const capability = typeof result.rule.capability === "function" ? result.rule.capability(model) : result.rule.capability;
+      const id = `${model.owner}/${model.name}`;
+      const existing = byId.get(id);
+      if (existing) {
+        if (!existing.capabilities.includes(capability)) existing.capabilities.push(capability);
+      } else {
+        byId.set(id, { ...mapReplicateModel(model), capabilities: [capability] });
+      }
     }
-    url = data.next;
-    pageCount++;
   }
-
-  return allModels;
+  if (fetched === 0) throw new Error(`Replicate API error: ${lastStatus ?? "no collections"}`);
+  return [...byId.values()].sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0));
 }
 
 /**
@@ -1068,7 +1133,7 @@ function mapWaveSpeedModel(model: WaveSpeedModel): ProviderModel {
     description: model.description || null,
     provider: "wavespeed",
     capabilities: inferWaveSpeedCapabilities(model),
-    coverImage: model.thumbnail_url || model.cover_image || model.coverImage,
+    coverImage: cleanCoverUrl(model.thumbnail_url || model.cover_image || model.coverImage),
     pricing: model.pricing
       ? {
           type: "per-run",
@@ -1159,7 +1224,7 @@ function mapFalModel(model: FalModel): ProviderModel {
     description: model.metadata.description,
     provider: "fal",
     capabilities: capability ? [capability] : [],
-    coverImage: model.metadata.thumbnail_url,
+    coverImage: cleanCoverUrl(model.metadata.thumbnail_url),
   };
 }
 
@@ -1177,9 +1242,9 @@ async function fetchFalModels(
     headers["Authorization"] = `Key ${apiKey}`;
   }
 
-  // Paginate through results (limit to 15 pages to avoid timeout)
+  // Every page (about 16 of 100 at the time of writing); the cap is a guard
   let pageCount = 0;
-  const maxPages = 15;
+  const maxPages = 60;
 
   while (hasMore && pageCount < maxPages) {
     let url = `${FAL_API_BASE}/models?status=active`;
@@ -1240,31 +1305,47 @@ export function staticCatalogModels(provider: StaticCatalogProvider): ProviderMo
 /** How long one fetched provider (all its pages and lookups) may take. */
 export const PROVIDER_TIMEOUT_MS = 20_000;
 
-interface Deadline {
-  /** Aborts the provider's in-flight requests when the deadline passes. */
-  signal: AbortSignal;
-  /** Settles like `work`, or rejects with the timeout error once the deadline passes. */
-  race<T>(work: Promise<T>): Promise<T>;
-  clear(): void;
+// ============ Deep search ============
+
+/** `extra` models not already in `base`, by id. */
+function mergeModels(base: ProviderModel[], extra: ProviderModel[]): ProviderModel[] {
+  if (extra.length === 0) return base;
+  const seen = new Set(base.map((m) => m.id.toLowerCase()));
+  const merged = [...base];
+  for (const model of extra) {
+    const key = model.id.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(model);
+  }
+  return merged;
 }
 
-function startDeadline(ms: number): Deadline {
-  const controller = new AbortController();
-  const error = new Error(`timed out after ${ms / 1000}s`);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      controller.abort(error);
-      reject(error);
-    }, ms);
-  });
-  // Nobody may be racing when it fires; don't surface that as unhandled.
-  expired.catch(() => {});
-  return {
-    signal: controller.signal,
-    race: (work) => Promise.race([work, expired]),
-    clear: () => clearTimeout(timer),
-  };
+/**
+ * The provider's own search, for models beyond the stored list: Replicate's
+ * search plus an exact owner/name lookup, fal.ai's server-side search.
+ * Best-effort under its own deadline; failures add nothing.
+ */
+async function deepSearch(provider: ProviderType, query: string, keys: ProviderKeys, timeoutMs: number): Promise<ProviderModel[]> {
+  const deadline = startDeadline(timeoutMs);
+  try {
+    if (provider === "replicate" && keys.replicate) {
+      const apiKey = keys.replicate;
+      const [searched, byId] = await Promise.all([
+        deadline.race(searchReplicateModels(apiKey, query, deadline.signal)).catch((): ProviderModel[] => []),
+        query.includes("/")
+          ? deadline.race(fetchReplicateModelById(apiKey, query, deadline.signal)).catch((): ProviderModel | null => null)
+          : Promise.resolve(null),
+      ]);
+      return byId ? mergeModels(searched, [byId]) : searched;
+    }
+    if (provider === "fal") {
+      return await deadline.race(fetchFalModels(keys.fal ?? null, query, deadline.signal)).catch((): ProviderModel[] => []);
+    }
+    return [];
+  } finally {
+    deadline.clear();
+  }
 }
 
 // ============ Listing ============
@@ -1272,19 +1353,33 @@ function startDeadline(ms: number): Deadline {
 export interface ProviderListResult {
   success: boolean;
   count: number;
+  /** Served from the stored catalog (static catalogs count as stored). */
   cached?: boolean;
+  /** When the provider's list was fetched; null before the first fetch. */
+  fetchedAt?: number | null;
+  /** The list is older than the catalog's freshness window. */
+  stale?: boolean;
+  /** A refresh is running in the background; ask again for the new list. */
+  refreshing?: boolean;
+  /** The provider failed (success false), or its last refresh did (success true, previous list served). */
   error?: string;
 }
 
 export interface ListModelsQuery {
   /** One provider only ("replicate" | "fal" | "gemini" | "wavespeed" | "kie" | "openai" | "comfy"). */
   provider?: ProviderType | string | null;
-  /** Matched against name, description and id (fal.ai searches server-side). */
+  /** Matched against name, description and id, in the stored lists. */
   search?: string | null;
   /** Keep models with at least one of these capabilities. */
   capabilities?: ModelCapability[] | null;
-  /** Bypass the model cache. */
+  /** Wait for a fresh fetch of every listed provider. */
   refresh?: boolean;
+  /**
+   * With `search`: also ask Replicate's search (and an exact owner/name
+   * lookup) and fal.ai's server-side search, for models beyond the stored
+   * lists. A network round trip per provider, so callers use it on request.
+   */
+  deep?: boolean;
 }
 
 export interface ListModelsOptions {
@@ -1294,7 +1389,7 @@ export interface ListModelsOptions {
 
 export interface ListModelsSuccess {
   ok: true;
-  /** Sorted by provider, then name. */
+  /** Sorted by provider, then popularity where known, then name. */
   models: ProviderModel[];
   providers: Record<string, ProviderListResult>;
   /** Every provider with a key (Gemini is always listed). */
@@ -1332,6 +1427,7 @@ export async function listModels(
   const providerFilter = (query.provider || null) as ProviderType | null;
   const searchQuery = query.search || undefined;
   const refresh = query.refresh === true;
+  const deep = query.deep === true;
   const capabilitiesFilter = query.capabilities ?? null;
   const providerTimeoutMs = options.providerTimeoutMs ?? PROVIDER_TIMEOUT_MS;
 
@@ -1510,152 +1606,57 @@ export async function listModels(
     anyFromCache = true;
   }
 
-  // Fetch from each provider (replicate, fal, wavespeed), one after another,
-  // each under its own deadline.
-  for (const provider of providersToFetch) {
-    const deadline = startDeadline(providerTimeoutMs);
-    try {
-      // For Replicate and WaveSpeed, always use base cache key since we filter client-side
-      // For fal.ai, include search in cache key since their API supports search
-      const cacheKey =
-        provider === "replicate" || provider === "wavespeed"
-          ? getCacheKey(provider)
-          : getCacheKey(provider, searchQuery);
-      let models: ProviderModel[] | null = null;
-      let fromCache = false;
-
-      // Check cache first (unless refresh=true)
-      if (!refresh) {
-        const cached = getCachedModels(cacheKey);
-        if (cached) {
-          models = cached;
-          fromCache = true;
-          anyFromCache = true;
-
-          // For Replicate and WaveSpeed, apply client-side search filtering on cached models
-          if ((provider === "replicate" || provider === "wavespeed") && searchQuery) {
-            models = filterModelsBySearch(models, searchQuery);
-          }
+  // Every fetched provider at once, from the catalog, each under its own deadline.
+  const fetched = await Promise.all(
+    providersToFetch.map(async (provider) => {
+      const fetcher: CatalogFetcher =
+        provider === "replicate"
+          ? (signal) => fetchReplicateModels(replicateKey!, signal)
+          : provider === "fal"
+            ? (signal) => fetchFalModels(falKey, undefined, signal)
+            : (signal) => fetchWaveSpeedModels(wavespeedKey!, signal);
+      try {
+        const catalog = await getProviderCatalog(provider, fetcher, { refresh, timeoutMs: providerTimeoutMs });
+        let models = searchQuery ? filterModelsBySearch(catalog.models, searchQuery) : catalog.models;
+        if (deep && searchQuery) {
+          models = mergeModels(models, await deepSearch(provider, searchQuery, keys, providerTimeoutMs));
         }
+        return { provider, catalog, models };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        console.error(`[Models] ${provider}: ${message}`);
+        return { provider, error: message };
       }
+    })
+  );
 
-      // Fetch from API if cache miss
-      if (!models) {
-        allFromCache = false;
-        try {
-          if (provider === "replicate") {
-            // Fetch all models (no search param - we filter client-side)
-            const allReplicateModels = await deadline.race(fetchReplicateModels(replicateKey!, deadline.signal));
-            // Cache the full list
-            setCachedModels(cacheKey, allReplicateModels);
-            // Apply search filter if needed
-            models = searchQuery
-              ? filterModelsBySearch(allReplicateModels, searchQuery)
-              : allReplicateModels;
-          } else if (provider === "fal") {
-            models = await deadline.race(fetchFalModels(falKey, searchQuery, deadline.signal));
-            // Cache the results (fal.ai handles search server-side)
-            setCachedModels(cacheKey, models);
-          } else if (provider === "wavespeed") {
-            // Fetch all models from WaveSpeed API
-            const allWaveSpeedModels = await deadline.race(fetchWaveSpeedModels(wavespeedKey!, deadline.signal));
-            // Cache the full list
-            setCachedModels(cacheKey, allWaveSpeedModels);
-            // Apply search filter if needed (client-side filtering like Replicate)
-            models = searchQuery
-              ? filterModelsBySearch(allWaveSpeedModels, searchQuery)
-              : allWaveSpeedModels;
-          } else {
-            models = [];
-          }
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : "Unknown error";
-          console.error(`[Models] ${provider}: ${errorMessage}`);
-          errors.push(`${provider}: ${errorMessage}`);
-          providerResults[provider] = {
-            success: false,
-            count: 0,
-            error: errorMessage,
-          };
-          continue;
-        }
-      }
-
-      // Replicate search: the cached catalogue only covers ~15 pages, so a
-      // fragment search (e.g. "topaz") can't find models outside that window.
-      // Always run the comprehensive search for a query so models beyond the
-      // cached pages are discoverable even when the local list already has a few
-      // matches; results are cached per query so repeat searches stay fast.
-      // Best-effort: past the deadline it adds nothing and caches nothing.
-      if (provider === "replicate" && searchQuery) {
-        const searchCacheKey = getCacheKey(provider, searchQuery);
-        let searchModels = refresh ? null : getCachedModels(searchCacheKey);
-        if (!searchModels) {
-          searchModels = await deadline
-            .race(searchReplicateModels(replicateKey!, searchQuery, deadline.signal))
-            .catch((): ProviderModel[] => []);
-          if (!deadline.signal.aborted) {
-            setCachedModels(searchCacheKey, searchModels);
-          }
-        }
-        if (searchModels.length > 0) {
-          const seen = new Set(models.map((m) => m.id.toLowerCase()));
-          const fresh: ProviderModel[] = [];
-          for (const m of searchModels) {
-            const key = m.id.toLowerCase();
-            if (!seen.has(key)) {
-              seen.add(key);
-              fresh.push(m);
-            }
-          }
-          if (fresh.length > 0) {
-            models = [...models, ...fresh];
-          }
-        }
-      }
-
-      // Replicate fallback: if the user searched by an exact "owner/name" id that
-      // isn't in the paginated catalogue, resolve it directly so any public model
-      // is reachable (O(1) lookup rather than unbounded extra pagination).
-      if (
-        provider === "replicate" &&
-        searchQuery &&
-        searchQuery.includes("/") &&
-        !models.some((m) => m.id.toLowerCase() === searchQuery.toLowerCase())
-      ) {
-        const byId = await deadline
-          .race(fetchReplicateModelById(replicateKey!, searchQuery, deadline.signal))
-          .catch(() => null);
-        if (byId) {
-          models = [...models, byId];
-          // Warm the cached full list so repeat searches resolve without a refetch.
-          const cachedFull = getCachedModels(cacheKey);
-          if (
-            cachedFull &&
-            !cachedFull.some((m) => m.id.toLowerCase() === byId.id.toLowerCase())
-          ) {
-            setCachedModels(cacheKey, [...cachedFull, byId]);
-          }
-        }
-      }
-
-      // Add to results
-      allModels.push(...models);
-      providerResults[provider] = {
-        success: true,
-        count: models.length,
-        cached: fromCache,
-      };
-    } finally {
-      deadline.clear();
+  let failed = 0;
+  for (const item of fetched) {
+    if ("error" in item) {
+      failed++;
+      errors.push(`${item.provider}: ${item.error}`);
+      providerResults[item.provider] = { success: false, count: 0, error: item.error };
+      continue;
     }
+    const { provider, catalog, models } = item;
+    if (catalog.cached) anyFromCache = true;
+    else allFromCache = false;
+    allModels.push(...models);
+    providerResults[provider] = {
+      success: true,
+      count: models.length,
+      cached: catalog.cached,
+      fetchedAt: catalog.fetchedAt,
+      stale: catalog.stale,
+      refreshing: catalog.refreshing,
+      ...(catalog.error ? { error: catalog.error } : {}),
+    };
   }
 
   // Check if we got any models
   // Only a failure when something was fetched and every fetch failed: a search
   // that simply matches nothing (e.g. only static providers) is an empty list.
-  if (allModels.length === 0 && providersToFetch.length > 0 && errors.length === providersToFetch.length) {
+  if (allModels.length === 0 && providersToFetch.length > 0 && failed === providersToFetch.length) {
     // All providers failed
     return {
       ok: false,
@@ -1672,11 +1673,13 @@ export async function listModels(
     );
   }
 
-  // Sort models by provider, then by name
+  // By provider, then most run first where the provider says, then by name
   filteredModels.sort((a, b) => {
     if (a.provider !== b.provider) {
       return a.provider.localeCompare(b.provider);
     }
+    const popularity = (b.popularity ?? -1) - (a.popularity ?? -1);
+    if (popularity !== 0) return popularity;
     return a.name.localeCompare(b.name);
   });
 

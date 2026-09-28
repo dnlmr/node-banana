@@ -5,14 +5,18 @@
  * Kie.ai, OpenAI, Comfy Router). The listing itself lives in
  * `src/lib/providers/registry.ts` (`listModels`) so other server code can
  * call it; this route reads the request and shapes the response.
- * Uses in-memory caching to reduce external API calls.
+ * Fetched providers come from the on-disk model catalog (src/lib/providers/catalog.ts):
+ * served straight away, refreshed behind the request when they age; each
+ * provider's entry in `providers` says when it was fetched, whether it is
+ * stale or refreshing, and its last error.
  *
  * GET /api/models
  *
  * Query params:
  *   - provider: Optional, filter to specific provider ("replicate" | "fal" | "gemini" | "wavespeed" | "kie" | "openai" | "comfy")
  *   - search: Optional, search query
- *   - refresh: Optional, bypass cache if "true"
+ *   - refresh: Optional, wait for a fresh fetch of every provider if "true"
+ *   - deep: Optional, with search: also ask Replicate's and fal.ai's own search if "true"
  *   - capabilities: Optional, filter by capabilities (comma-separated)
  *
  * Headers (each falls back to its env variable; see src/lib/providers/keys.ts):
@@ -66,6 +70,7 @@ export async function GET(
       provider: params.get("provider"),
       search: params.get("search") || undefined,
       refresh: params.get("refresh") === "true",
+      deep: params.get("deep") === "true",
       capabilities: capabilitiesParam
         ? (capabilitiesParam.split(",") as ModelCapability[])
         : null,

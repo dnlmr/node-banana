@@ -79,6 +79,8 @@ export interface ProviderModel {
   };
   /** Optional URL to the model's page on the provider's website */
   pageUrl?: string;
+  /** How much the model is used, where the provider says (Replicate's run count); ranks within a provider */
+  popularity?: number;
 }
 
 /**

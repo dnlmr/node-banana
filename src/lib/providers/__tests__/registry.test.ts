@@ -1,10 +1,31 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { listModels, PROVIDER_TIMEOUT_MS, type ListModelsResult, type ListModelsSuccess } from "../registry";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { listModels, PROVIDER_TIMEOUT_MS, REPLICATE_COLLECTIONS, type ListModelsResult, type ListModelsSuccess } from "../registry";
 import { getModelSchema } from "../schema";
-import { invalidateCache } from "../cache";
+import { CATALOG_DIR_ENV, resetCatalog } from "../catalog";
 import { COMFY_ROUTER_MODELS } from "../comfyRouter";
 
 const mockFetch = vi.fn();
+let catalogDir: string;
+
+type ReplicateFixture = { owner: string; name: string; description?: string | null; run_count?: number; cover_image_url?: string };
+
+/** A fetch that answers Replicate's collections: the given ones with models, the rest empty. */
+function replicateCollections(
+  collections: Record<string, ReplicateFixture[]>,
+  other?: (url: string, init?: RequestInit) => unknown,
+) {
+  return (url: string, init?: RequestInit) => {
+    const match = /\/v1\/collections\/([^/?]+)$/.exec(url);
+    if (match) {
+      const models = (collections[match[1]] ?? []).map((m) => ({ visibility: "public", run_count: 1, description: null, ...m }));
+      return Promise.resolve(jsonResponse({ models }));
+    }
+    return other ? other(url, init) : Promise.resolve(jsonResponse({}, false, 404));
+  };
+}
 
 function expectOk(result: ListModelsResult): ListModelsSuccess {
   if (!result.ok) throw new Error(`expected ok, got ${result.status}: ${result.error}`);
@@ -24,12 +45,18 @@ describe("listModels", () => {
     mockFetch.mockReset();
     mockFetch.mockResolvedValue(jsonResponse({}, false, 404));
     vi.stubGlobal("fetch", mockFetch);
-    invalidateCache();
+    catalogDir = fs.mkdtempSync(path.join(os.tmpdir(), "nb-registry-"));
+    process.env[CATALOG_DIR_ENV] = catalogDir;
+    resetCatalog();
     vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    resetCatalog();
+    delete process.env[CATALOG_DIR_ENV];
+    fs.rmSync(catalogDir, { recursive: true, force: true });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -151,28 +178,87 @@ describe("listModels", () => {
   });
 
   describe("fetched providers (network mocked)", () => {
-    it("lists Replicate models and reports them as fresh, then cached", async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse({
-          results: [{ owner: "stability-ai", name: "sdxl", description: "SDXL image model", visibility: "public", run_count: 1 }],
-          next: null,
-          previous: null,
-        })
-      );
+    it("lists Replicate from its curated collections, fresh then from the catalog", async () => {
+      mockFetch.mockImplementation(replicateCollections({ "text-to-image": [{ owner: "stability-ai", name: "sdxl", description: "SDXL image model" }] }));
 
       const first = expectOk(await listModels({ provider: "replicate" }, { replicate: "rep" }));
       expect(first.models.map((m) => m.id)).toEqual(["stability-ai/sdxl"]);
-      expect(first.providers.replicate).toEqual({ success: true, count: 1, cached: false });
+      expect(first.providers.replicate).toEqual({
+        success: true, count: 1, cached: false, fetchedAt: expect.any(Number), stale: false, refreshing: false,
+      });
       expect(first.cached).toBe(false);
+      // Every collection, all at once, with the key
+      const urls = fetchedUrls();
+      expect(urls).toHaveLength(REPLICATE_COLLECTIONS.length);
+      for (const { slug } of REPLICATE_COLLECTIONS) expect(urls).toContain(`https://api.replicate.com/v1/collections/${slug}`);
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://api.replicate.com/v1/models",
+        "https://api.replicate.com/v1/collections/text-to-image",
         expect.objectContaining({ headers: { Authorization: "Bearer rep" }, signal: expect.any(AbortSignal) })
       );
 
       const second = expectOk(await listModels({ provider: "replicate" }, { replicate: "rep" }));
       expect(second.providers.replicate.cached).toBe(true);
       expect(second.cached).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(REPLICATE_COLLECTIONS.length);
+    });
+
+    it("gives a Replicate model every collection's capability, ranks by runs, and drops base64 covers", async () => {
+      mockFetch.mockImplementation(
+        replicateCollections({
+          "text-to-image": [
+            { owner: "google", name: "nano-banana", run_count: 100, cover_image_url: "https://replicate.delivery/cover.png" },
+            { owner: "oitoito", name: "depth-pro", run_count: 5, cover_image_url: "https://replicate.comdata:image/jpeg;base64,/9j/4AAQ" },
+          ],
+          "sketch-to-image": [{ owner: "google", name: "nano-banana", run_count: 100 }],
+          "wan-video": [
+            { owner: "wavespeedai", name: "wan-2.1-i2v-720p", run_count: 50 },
+            { owner: "wavespeedai", name: "wan-2.1-t2v-480p", run_count: 60 },
+          ],
+          "3d-models": [
+            { owner: "firtoz", name: "trellis", description: "Image to 3D", run_count: 9 },
+            { owner: "x", name: "shap-e", description: "Text prompt to 3D shape", run_count: 8 },
+          ],
+          lipsync: [{ owner: "sync", name: "lipsync-2", run_count: 7 }],
+        })
+      );
+      const result = expectOk(await listModels({ provider: "replicate" }, { replicate: "rep" }));
+      const byId = Object.fromEntries(result.models.map((m) => [m.id, m]));
+      expect(byId["google/nano-banana"].capabilities).toEqual(["text-to-image", "image-to-image"]);
+      expect(byId["google/nano-banana"].coverImage).toBe("https://replicate.delivery/cover.png");
+      expect(byId["google/nano-banana"].popularity).toBe(100);
+      expect(byId["oitoito/depth-pro"].coverImage).toBeUndefined();
+      expect(byId["wavespeedai/wan-2.1-i2v-720p"].capabilities).toEqual(["image-to-video"]);
+      expect(byId["wavespeedai/wan-2.1-t2v-480p"].capabilities).toEqual(["text-to-video"]);
+      expect(byId["firtoz/trellis"].capabilities).toEqual(["image-to-3d"]);
+      expect(byId["x/shap-e"].capabilities).toEqual(["text-to-3d"]);
+      expect(byId["sync/lipsync-2"].capabilities).toEqual(["audio-to-video"]);
+      // Most run first
+      expect(result.models.map((m) => m.id).slice(0, 3)).toEqual(["google/nano-banana", "wavespeedai/wan-2.1-t2v-480p", "wavespeedai/wan-2.1-i2v-720p"]);
+    });
+
+    it("skips a collection that errors but fails on a rejected key", async () => {
+      mockFetch.mockImplementation((url: string) =>
+        Promise.resolve(url.endsWith("/collections/flux") ? jsonResponse({}, false, 500) : replicateCollections({ "text-to-image": [{ owner: "a", name: "b" }] })(url))
+      );
+      const result = expectOk(await listModels({ provider: "replicate" }, { replicate: "rep" }));
+      expect(result.models.map((m) => m.id)).toEqual(["a/b"]);
+      expect(result.providers.replicate.success).toBe(true);
+    });
+
+    it("fetches every provider at once rather than one after another", async () => {
+      let releaseFal: () => void = () => {};
+      mockFetch.mockImplementation((url: string) => {
+        if (url.includes("fal.ai")) return new Promise((resolve) => (releaseFal = () => resolve(jsonResponse({ models: [], has_more: false, next_cursor: null }))));
+        return replicateCollections({})(url);
+      });
+      const listing = listModels({}, { replicate: "rep", fal: "fal" });
+      // fal is still pending, yet Replicate's collections have all been asked for
+      await vi.waitFor(() => expect(fetchedUrls().filter((u) => u.includes("replicate.com"))).toHaveLength(REPLICATE_COLLECTIONS.length));
+      expect(fetchedUrls().some((u) => u.includes("fal.ai"))).toBe(true);
+      releaseFal();
+      const result = expectOk(await listing);
+      expect(result.providers.replicate.success).toBe(true);
+      expect(result.providers.fal.success).toBe(true);
     });
 
     it("lists fal.ai models, keeping only relevant categories", async () => {
@@ -189,6 +275,24 @@ describe("listModels", () => {
       const result = expectOk(await listModels({ provider: "fal" }, { fal: "fal" }));
       expect(result.models.map((m) => m.id)).toEqual(["fal-ai/flux"]);
       expect(result.models[0].capabilities).toEqual(["text-to-image"]);
+    });
+
+    it("follows fal.ai's cursor to the last page", async () => {
+      let page = 0;
+      mockFetch.mockImplementation(() => {
+        page++;
+        return Promise.resolve(
+          jsonResponse({
+            models: [{ endpoint_id: `fal-ai/m${page}`, metadata: { display_name: `M${page}`, category: "text-to-image", description: "" } }],
+            has_more: page < 20,
+            next_cursor: page < 20 ? `c${page}` : null,
+          })
+        );
+      });
+      const result = expectOk(await listModels({ provider: "fal" }, { fal: "fal" }));
+      expect(result.models).toHaveLength(20);
+      expect(page).toBe(20);
+      expect(fetchedUrls()[1]).toContain("cursor=c1");
     });
 
     it("lists WaveSpeed models and hands their schemas to getModelSchema", async () => {
@@ -264,34 +368,55 @@ describe("listModels", () => {
       expect(PROVIDER_TIMEOUT_MS).toBe(20_000);
     });
 
-    it("never looks up a malformed Replicate id directly", async () => {
-      // Catalogue page, then both search attempts come back empty
-      mockFetch.mockResolvedValueOnce(jsonResponse({ results: [], next: null, previous: null }));
+    it("searches the stored list without touching the network", async () => {
+      mockFetch.mockImplementation(replicateCollections({ "text-to-image": [{ owner: "a", name: "flux-dev" }, { owner: "b", name: "sdxl" }] }));
+      await listModels({ provider: "replicate" }, { replicate: "rep" });
+      mockFetch.mockClear();
+      const result = expectOk(await listModels({ provider: "replicate", search: "flux" }, { replicate: "rep" }));
+      expect(result.models.map((m) => m.id)).toEqual(["a/flux-dev"]);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
 
+    it("never looks up a malformed Replicate id directly, even in a deep search", async () => {
+      mockFetch.mockImplementation(replicateCollections({}));
       const result = expectOk(
-        await listModels({ provider: "replicate", search: "owner/name?x=1" }, { replicate: "rep" })
+        await listModels({ provider: "replicate", search: "owner/name?x=1", deep: true }, { replicate: "rep" })
       );
       expect(result.models).toEqual([]);
       expect(fetchedUrls().some((url) => url.startsWith("https://api.replicate.com/v1/models/"))).toBe(false);
     });
 
-    it("looks up a well-formed Replicate id directly when the listing lacks it", async () => {
-      mockFetch.mockImplementation((url: string) => {
-        if (url === "https://api.replicate.com/v1/models") {
-          return Promise.resolve(jsonResponse({ results: [], next: null, previous: null }));
-        }
-        if (url === "https://api.replicate.com/v1/models/topazlabs/video-upscale") {
-          return Promise.resolve(
-            jsonResponse({ owner: "topazlabs", name: "video-upscale", description: "Upscale video footage" })
-          );
-        }
-        return Promise.resolve(jsonResponse({}, false, 404));
-      });
+    it("deep search asks Replicate's search and looks a well-formed id up directly", async () => {
+      mockFetch.mockImplementation(
+        replicateCollections({ "text-to-image": [{ owner: "a", name: "flux-dev" }] }, (url: string) => {
+          if (url === "https://api.replicate.com/v1/models/topazlabs/video-upscale") {
+            return Promise.resolve(jsonResponse({ owner: "topazlabs", name: "video-upscale", description: "Upscale video footage" }));
+          }
+          if (url.startsWith("https://api.replicate.com/v1/search?query=")) {
+            return Promise.resolve(jsonResponse({ results: [{ model: { owner: "obscure", name: "video-upscale-lite", description: "video upscale" } }] }));
+          }
+          return Promise.resolve(jsonResponse({}, false, 404));
+        })
+      );
 
       const result = expectOk(
-        await listModels({ provider: "replicate", search: "topazlabs/video-upscale" }, { replicate: "rep" })
+        await listModels({ provider: "replicate", search: "topazlabs/video-upscale", deep: true }, { replicate: "rep" })
       );
-      expect(result.models.map((m) => m.id)).toEqual(["topazlabs/video-upscale"]);
+      expect(result.models.map((m) => m.id).sort()).toEqual(["obscure/video-upscale-lite", "topazlabs/video-upscale"]);
+      expect(result.models.find((m) => m.id === "topazlabs/video-upscale")?.capabilities).toContain("image-to-video");
+    });
+
+    it("deep search asks fal.ai's server-side search too", async () => {
+      mockFetch.mockImplementation((url: string) => {
+        if (url.includes("q=rare")) {
+          return Promise.resolve(jsonResponse({ models: [{ endpoint_id: "fal-ai/rare", metadata: { display_name: "Rare", category: "text-to-image", description: "" } }], has_more: false, next_cursor: null }));
+        }
+        return Promise.resolve(jsonResponse({ models: [{ endpoint_id: "fal-ai/flux", metadata: { display_name: "Flux", category: "text-to-image", description: "" } }], has_more: false, next_cursor: null }));
+      });
+      const shallow = expectOk(await listModels({ provider: "fal", search: "rare" }, { fal: "fal" }));
+      expect(shallow.models).toEqual([]);
+      const deep = expectOk(await listModels({ provider: "fal", search: "rare", deep: true }, { fal: "fal" }));
+      expect(deep.models.map((m) => m.id)).toEqual(["fal-ai/rare"]);
     });
   });
 });

@@ -279,7 +279,8 @@ export class AgentModels implements AgentModelResolver {
     let pending = this.listings.get(key);
     if (!pending) {
       pending = this.source
-        .listModels(query, this.keys, { providerTimeoutMs: this.options.providerTimeoutMs ?? PROVIDER_TIMEOUT_MS })
+        // The agent searches for a model it was asked for by name: worth the provider's own search too
+        .listModels({ ...query, deep: Boolean(query.search) }, this.keys, { providerTimeoutMs: this.options.providerTimeoutMs ?? PROVIDER_TIMEOUT_MS })
         .catch((error): ListModelsResult => ({ ok: false, error: errorText(error), status: 500 }));
       this.listings.set(key, pending);
       // A failed listing is not kept: the next call asks again.
