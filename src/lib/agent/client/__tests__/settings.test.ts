@@ -34,6 +34,12 @@ describe("agent settings persistence", () => {
     expect(loadAgentSettings()).toEqual({ harness: "codex", models: { claude: "opus", codex: "gpt-5.6-luna" }, efforts: {} });
   });
 
+  it("keeps the chosen flag only when it is exactly true", () => {
+    expect(sanitizeAgentSettings({ harness: "codex", harnessChosen: true })).toEqual({ harness: "codex", harnessChosen: true, models: {}, efforts: {} });
+    expect(sanitizeAgentSettings({ harness: "codex", harnessChosen: "yes" })).toEqual({ harness: "codex", models: {}, efforts: {} });
+    expect(sanitizeAgentSettings({ harness: "codex" })).not.toHaveProperty("harnessChosen");
+  });
+
   it("falls back to defaults for corrupt JSON", () => {
     localStorage.setItem(AGENT_SETTINGS_KEY, "{not json");
     expect(loadAgentSettings()).toEqual(DEFAULT_AGENT_SETTINGS);
@@ -113,6 +119,17 @@ describe("useAgentSettings", () => {
       efforts: { claude: "max" },
     });
     expect(loadAgentSettings()).toEqual(result.current.settings);
+  });
+
+  it("records that a harness was chosen, once", () => {
+    const { result } = renderHook(() => useAgentSettings());
+    expect(result.current.settings.harnessChosen).toBeUndefined();
+    act(() => result.current.markHarnessChosen());
+    expect(result.current.settings.harnessChosen).toBe(true);
+    expect(loadAgentSettings().harnessChosen).toBe(true);
+    const before = result.current.settings;
+    act(() => result.current.markHarnessChosen());
+    expect(result.current.settings).toBe(before);
   });
 });
 

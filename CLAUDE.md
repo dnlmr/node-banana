@@ -324,8 +324,12 @@ Point the live tier at a local ComfyUI with
 
 ## Agent
 
-The agent is a chat window opened from the button stacked above the canvas
-navigator. It creates workflows, edits the canvas and changes node settings.
+The agent is a chat window opened from the labelled pill in the canvas's
+top-right corner, beside the recent-generations button; the window hangs under
+the pill down to the navigator. The pill shows the mark of the harness that
+will answer (both marks until the agent has been opened once), says "Working…"
+while a turn runs, and carries an amber dot when the harness needs sign-in. It
+creates workflows, edits the canvas and changes node settings.
 Every turn runs on the user's own **Claude Code** or **Codex (ChatGPT)** login
 through the vendor's official CLI, never on API credits:
 

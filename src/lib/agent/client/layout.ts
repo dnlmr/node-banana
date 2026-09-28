@@ -4,21 +4,37 @@
  * unless a name says "flow" (React Flow coordinates).
  */
 
-/** The button's card: one 32px chrome icon button in a 4px inset, like the navigator's control row. */
-export const AGENT_BUTTON_SIZE = 40;
-/** Space between the navigator, the agent button and the window. */
+/** The button's card: a 32px chrome pill in a 4px inset, like the navigator's control row. */
+export const AGENT_BUTTON_HEIGHT = 40;
+/** The button's inset from the canvas's top and right edges, like the other corner chrome. */
+export const AGENT_BUTTON_MARGIN = 16;
+/** The pill's width before it has been measured: the Claude mark and "Agent". */
+export const AGENT_BUTTON_ESTIMATED_WIDTH = 92;
+/** Space between the navigator and the window, and between the button and the history button. */
 export const AGENT_STACK_GAP = 8;
 export const AGENT_PANEL_WIDTH = 400;
-/** The window's top edge: below the workflow tabs, level with the canvas chrome. */
-export const AGENT_PANEL_MIN_TOP = 56;
+/**
+ * The window's top edge: under the agent button, which sits at the canvas's
+ * top-right inset (tab strip 38px + frame border 1px + 16px margin, the 40px
+ * button, an 8px gap).
+ */
+export const AGENT_PANEL_MIN_TOP = 38 + 1 + AGENT_BUTTON_MARGIN + AGENT_BUTTON_HEIGHT + AGENT_STACK_GAP;
 /** The window never comes closer than this to the viewport's left edge (the navigator's margin). */
 export const AGENT_PANEL_EDGE = 16;
 /** Gap between the window's left edge and the canvas area treated as visible. */
 const OCCLUSION_GAP = 16;
 
-/** Bottom offset of the agent button: stacked above the canvas navigator, whatever its height. */
-export function getAgentButtonBottom({ margin, navigatorHeight }: { margin: number; navigatorHeight: number }): number {
+/** Bottom offset of the agent stack: above the canvas navigator, whatever its height. */
+export function getAgentStackBottom({ margin, navigatorHeight }: { margin: number; navigatorHeight: number }): number {
   return margin + navigatorHeight + AGENT_STACK_GAP;
+}
+
+/**
+ * Where the history button sits: left of the agent button, one stack gap
+ * away, so the two share the canvas's top-right corner.
+ */
+export function getHistoryRightInset({ margin, agentButtonWidth }: { margin: number; agentButtonWidth: number }): number {
+  return margin + agentButtonWidth + AGENT_STACK_GAP;
 }
 
 export interface AgentPanelFrame {
@@ -30,11 +46,11 @@ export interface AgentPanelFrame {
 }
 
 /**
- * The window's box: right-aligned with the button and taking its place (the
- * button hides while the window is open). Its gap to the navigator equals
- * its right margin, so the window sits evenly in the corner. Narrows on a
- * small viewport rather than running off the left edge. Numeric (not a CSS
- * clamp) so the occlusion maths stays right.
+ * The window's box: right-aligned with the button, running from under it
+ * down to the navigator. Its gap to the navigator equals its right margin,
+ * so the window sits evenly in the corner. Narrows on a small viewport
+ * rather than running off the left edge. Numeric (not a CSS clamp) so the
+ * occlusion maths stays right.
  */
 export function getAgentPanelFrame({
   buttonRight,
@@ -46,7 +62,7 @@ export function getAgentPanelFrame({
   /** window.innerWidth */
   viewportWidth: number;
 }): AgentPanelFrame {
-  // buttonBottom is the navigator's top plus the button's stack gap; swap that gap for the right margin.
+  // buttonBottom is the navigator's top plus the stack gap; swap that gap for the right margin.
   const bottom = buttonBottom - AGENT_STACK_GAP + buttonRight;
   const maxHeight = `calc(100vh - ${bottom + AGENT_PANEL_MIN_TOP}px)`;
   const width = Math.max(0, Math.min(AGENT_PANEL_WIDTH, viewportWidth - buttonRight - AGENT_PANEL_EDGE));

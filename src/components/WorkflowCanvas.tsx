@@ -66,7 +66,16 @@ import { MultiSelectToolbar } from "./MultiSelectToolbar";
 import { GlobalImageHistory } from "./GlobalImageHistory";
 import { CanvasMinimap, MINIMAP_GEOMETRY, getNavigatorHeight } from "./CanvasMinimap";
 import { AgentButton } from "./agent/AgentButton";
-import { getAgentButtonBottom, getAgentPanelFrame, getAgentPanelOcclusion } from "@/lib/agent/client/layout";
+import {
+  AGENT_BUTTON_ESTIMATED_WIDTH,
+  AGENT_BUTTON_MARGIN,
+  getAgentPanelFrame,
+  getAgentPanelOcclusion,
+  getAgentStackBottom,
+  getHistoryRightInset,
+} from "@/lib/agent/client/layout";
+import { loadAgentSettings } from "@/lib/agent/client/settings";
+import type { AgentPresence } from "./agent/AgentPanel";
 import { useViewportWidth } from "./agent/hooks/useViewportWidth";
 import { GroupBackgroundsPortal, GroupControlsOverlay } from "./GroupsOverlay";
 import { NodeType, NanoBananaNodeData, HandleType, PromptNodeData, LLMGenerateNodeData, PromptConstructorNodeData, AvailableVariable, WorkflowNodeData } from "@/types";
@@ -352,10 +361,17 @@ export function WorkflowCanvas() {
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [isAgentMounted, setIsAgentMounted] = useState(false);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
+  // What the agent button shows: the stored choice until the window reports its own.
+  const [agentPresence, setAgentPresence] = useState<AgentPresence | null>(null);
+  useEffect(() => {
+    const stored = loadAgentSettings();
+    setAgentPresence((current) => current ?? { harness: stored.harness, harnessChosen: stored.harnessChosen === true, attention: false });
+  }, []);
+  const [agentButtonWidth, setAgentButtonWidth] = useState(AGENT_BUTTON_ESTIMATED_WIDTH);
   // The agent window is portaled above everything, so the Assets view cannot cover it
   const assetsShown = useAssetStore((state) => state.appView === "assets");
   const [isMinimapVisible, setIsMinimapVisible] = useState(true);
-  const agentButtonBottom = getAgentButtonBottom({
+  const agentStackBottom = getAgentStackBottom({
     margin: MINIMAP_GEOMETRY.margin,
     navigatorHeight: getNavigatorHeight(isMinimapVisible),
   });
@@ -373,13 +389,13 @@ export function WorkflowCanvas() {
     setIsAgentMounted(true);
     setIsAgentOpen(true);
   }, [setShowQuickstart]);
-  // The generations icon sits in the corner the open agent window covers: move it left of the window.
+  // The generations icon sits left of the agent button; while the window is open it moves left of the window too.
   const viewportWidth = useViewportWidth();
   const historyRightInset = isAgentOpen
     ? getAgentPanelOcclusion(
-        getAgentPanelFrame({ buttonRight: MINIMAP_GEOMETRY.margin, buttonBottom: agentButtonBottom, viewportWidth }),
+        getAgentPanelFrame({ buttonRight: AGENT_BUTTON_MARGIN, buttonBottom: agentStackBottom, viewportWidth }),
       )
-    : undefined;
+    : getHistoryRightInset({ margin: AGENT_BUTTON_MARGIN, agentButtonWidth });
   const [isBuildingWorkflow, setIsBuildingWorkflow] = useState(false);
   const [showNewProjectSetup, setShowNewProjectSetup] = useState(false);
   const [expandingNode, setExpandingNode] = useState<{ id: string; type: string } | null>(null);
@@ -2593,12 +2609,14 @@ export function WorkflowCanvas() {
         <CanvasMinimap disabled={tutorialActive && lockedFeatures} onMinimapVisibleChange={setIsMinimapVisible} />
         <AgentButton
           open={isAgentOpen}
-          busy={isAgentBusy && !isAgentOpen}
+          harness={agentPresence?.harnessChosen ? agentPresence.harness : null}
+          busy={isAgentBusy}
+          attention={agentPresence?.attention ?? false}
           disabled={tutorialActive && lockedFeatures}
           dimmed={tutorialActive && lockedFeatures}
           onClick={toggleAgent}
-          hidden={isAgentOpen}
-          style={{ right: MINIMAP_GEOMETRY.margin, bottom: agentButtonBottom }}
+          onWidthChange={setAgentButtonWidth}
+          style={{ right: AGENT_BUTTON_MARGIN, top: AGENT_BUTTON_MARGIN }}
         />
         <FloatingNodeHeaders
           nodes={allNodes}
@@ -2660,14 +2678,15 @@ export function WorkflowCanvas() {
         selectedNodeIds={selectedNodeIds}
       />
 
-      {/* Agent window - floats above the agent button; hidden (not closed) while Assets shows */}
+      {/* Agent window - hangs under the agent button, down to the navigator; hidden (not closed) while Assets shows */}
       {isAgentMounted && (
         <AgentPanel
           open={isAgentOpen && !assetsShown}
           onClose={closeAgent}
-          buttonRight={MINIMAP_GEOMETRY.margin}
-          buttonBottom={agentButtonBottom}
+          buttonRight={AGENT_BUTTON_MARGIN}
+          buttonBottom={agentStackBottom}
           onBusyChange={setIsAgentBusy}
+          onPresenceChange={setAgentPresence}
         />
       )}
 

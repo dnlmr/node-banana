@@ -1,31 +1,39 @@
 import { describe, it, expect } from "vitest";
 import {
   AGENT_PANEL_EDGE,
+  AGENT_PANEL_MIN_TOP,
   AGENT_PANEL_WIDTH,
-  getAgentButtonBottom,
+  getAgentStackBottom,
   getAgentPanelFrame,
   getAgentPanelOcclusion,
+  getHistoryRightInset,
   getVisibleFlowRect,
   rectContains,
 } from "../layout";
 
 describe("agent button and window placement", () => {
-  it("stacks the button 8px above the navigator, whatever its height", () => {
+  it("keeps the stack 8px above the navigator, whatever its height", () => {
     // Navigator with the minimap (198px) and without it (42px), 16px from the edge.
-    expect(getAgentButtonBottom({ margin: 16, navigatorHeight: 198 })).toBe(222);
-    expect(getAgentButtonBottom({ margin: 16, navigatorHeight: 42 })).toBe(66);
+    expect(getAgentStackBottom({ margin: 16, navigatorHeight: 198 })).toBe(222);
+    expect(getAgentStackBottom({ margin: 16, navigatorHeight: 42 })).toBe(66);
   });
 
-  it("puts the window in the button's place, as far above the navigator as from the right edge", () => {
-    // Navigator top at 214 (16 + 198); the button would sit at 222.
+  it("hangs the window under the button, as far above the navigator as from the right edge", () => {
+    // Navigator top at 214 (16 + 198); the stack bottom is 222.
     const frame = getAgentPanelFrame({ buttonRight: 16, buttonBottom: 222, viewportWidth: 1280 });
     expect(frame).toEqual({
       right: 16,
       bottom: 230,
       width: AGENT_PANEL_WIDTH,
-      maxHeight: "calc(100vh - 286px)",
+      maxHeight: "calc(100vh - 333px)",
     });
     expect(frame.bottom - 214).toBe(frame.right);
+    // Tabs 38 + border 1 + margin 16 + the 40px button + an 8px gap.
+    expect(AGENT_PANEL_MIN_TOP).toBe(103);
+  });
+
+  it("seats the history button one gap left of the agent button", () => {
+    expect(getHistoryRightInset({ margin: 16, agentButtonWidth: 92 })).toBe(116);
   });
 
   it("narrows on a small viewport rather than running off the left edge", () => {

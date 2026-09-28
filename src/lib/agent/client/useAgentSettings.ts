@@ -7,6 +7,8 @@ import { loadAgentSettings, saveAgentSettings, type AgentClientSettings } from "
 export interface UseAgentSettingsResult {
   settings: AgentClientSettings;
   setHarness: (harness: AgentHarnessId) => void;
+  /** Records that the user has opened the agent: the button stops offering both harnesses. */
+  markHarnessChosen: () => void;
   setModel: (harness: AgentHarnessId, model: string) => void;
   setEffort: (harness: AgentHarnessId, effort: string) => void;
 }
@@ -29,6 +31,10 @@ export function useAgentSettings(): UseAgentSettingsResult {
     setSettings((previous) => (previous.harness === harness ? previous : { ...previous, harness }));
   }, []);
 
+  const markHarnessChosen = useCallback(() => {
+    setSettings((previous) => (previous.harnessChosen ? previous : { ...previous, harnessChosen: true }));
+  }, []);
+
   const setModel = useCallback((harness: AgentHarnessId, model: string) => {
     setSettings((previous) =>
       previous.models[harness] === model
@@ -45,5 +51,5 @@ export function useAgentSettings(): UseAgentSettingsResult {
     );
   }, []);
 
-  return { settings, setHarness, setModel, setEffort };
+  return { settings, setHarness, markHarnessChosen, setModel, setEffort };
 }

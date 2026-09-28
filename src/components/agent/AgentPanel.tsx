@@ -54,11 +54,13 @@ import { useViewportWidth } from "./hooks/useViewportWidth";
 export interface AgentPanelProps {
   open: boolean;
   onClose: () => void;
-  /** The agent button's offsets from the canvas's right and bottom edges; the window stacks above it. */
+  /** The window's offsets from the canvas's right edge and from its bottom (above the navigator). */
   buttonRight: number;
   buttonBottom: number;
-  /** A turn started or ended (the button shows a dot while the window is closed). */
+  /** A turn started or ended (the button shows it as working). */
   onBusyChange?: (busy: boolean) => void;
+  /** The harness the button should show, and whether it needs the user's attention. */
+  onPresenceChange?: (presence: AgentPresence) => void;
 }
 
 /** Notices that mean the harness status is stale. */
@@ -72,14 +74,32 @@ const STATUS_NOTICE_CODES = new Set<AgentDataParts["agent-notice"]["code"]>([
  * The agent chat window. Mounted once on first open and then kept (hidden
  * while closed), so a running turn and the conversation survive closing it.
  */
-export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyChange }: AgentPanelProps) {
+/** What the agent button shows for the window: whose mark, and whether that harness can run. */
+export interface AgentPresence {
+  harness: AgentHarnessId;
+  /** The user has opened the agent, so the harness is theirs rather than the default. */
+  harnessChosen: boolean;
+  /** The harness can't run a turn until the user acts (signed out, wrong account, not installed). */
+  attention: boolean;
+}
+
+/** Readiness states the button flags: blocked, and not merely still being checked. */
+function needsAttention(readiness: AgentReadiness): boolean {
+  return readiness.kind !== "ready" && readiness.kind !== "loading" && readiness.kind !== "signing_in";
+}
+
+export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyChange, onPresenceChange }: AgentPanelProps) {
   const viewportWidth = useViewportWidth();
   const frame = getAgentPanelFrame({ buttonRight, buttonBottom, viewportWidth });
   const occludedRight = open ? getAgentPanelOcclusion(frame) : 0;
 
   // --- Harness, model, status and sign-in ---------------------------------
-  const { settings, setHarness, setModel, setEffort } = useAgentSettings();
+  const { settings, setHarness, markHarnessChosen, setModel, setEffort } = useAgentSettings();
   const harness = settings.harness;
+  // Opening the window once is choosing: the button stops offering both harnesses.
+  useEffect(() => {
+    if (open) markHarnessChosen();
+  }, [open, markHarnessChosen]);
   const signIn = useAgentSignIn();
   const [pollHarness, setPollHarness] = useState<AgentHarnessId | null>(null);
   const status = useAgentStatus({ active: open, pollHarness });
@@ -98,6 +118,12 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
   }, [status.statuses, status.checkedAt, status.error, signIn.attempts]);
   const current = readiness[harness];
   const ready = current.kind === "ready";
+  const harnessChosen = settings.harnessChosen === true;
+  const attention = needsAttention(current);
+  useEffect(
+    () => onPresenceChange?.({ harness, harnessChosen, attention }),
+    [harness, harnessChosen, attention, onPresenceChange],
+  );
 
   // Poll only the harness the user is signing in to, only while it is pending.
   const pollTarget = shouldPollReadiness(current) ? harness : null;
@@ -275,7 +301,7 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
   const close = useCallback(() => {
     onClose();
     const target = returnFocusRef.current;
-    // After the next frame: the agent button is hidden while the window is open.
+    // After the next frame, once the window has closed.
     requestAnimationFrame(() => {
       if (target?.isConnected) target.focus();
     });
