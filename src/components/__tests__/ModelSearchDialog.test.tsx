@@ -154,7 +154,7 @@ describe("ModelSearchDialog", () => {
 
   it("refreshes older OpenAI catalogue caches without waiting for their TTL", async () => {
     localStorage.setItem("node-banana-models-cache", JSON.stringify({
-      "rf:all:all:": { models: [], availableProviders: ["openai"], timestamp: Date.now() },
+      rf: { models: [], availableProviders: ["openai"], timestamp: Date.now() },
     }));
     const { OPENAI_IMAGE_25_MODELS } = await import("@/lib/providers/openaiImages");
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true, models: OPENAI_IMAGE_25_MODELS, availableProviders: ["openai"] }) });
@@ -166,7 +166,7 @@ describe("ModelSearchDialog", () => {
 
   it("refreshes older Gemini catalogues so Omni appears immediately", async () => {
     localStorage.setItem("node-banana-models-cache", JSON.stringify({
-      "rf:all:all:": { models: [], availableProviders: ["gemini"], timestamp: Date.now(), openaiCatalogueVersion: 1 },
+      rf: { models: [], availableProviders: ["gemini"], timestamp: Date.now(), openaiCatalogueVersion: 1 },
     }));
     const { GEMINI_OMNI_MODELS } = await import("@/lib/providers/geminiOmni");
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true, models: GEMINI_OMNI_MODELS, availableProviders: ["gemini"] }) });
@@ -224,32 +224,53 @@ describe("ModelSearchDialog", () => {
       expect(searchInput).toBeInTheDocument();
     });
 
-    it("should debounce search input and refetch models", async () => {
+    it("searches the loaded list locally, without another request", async () => {
       render(
         <TestWrapper>
           <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
         </TestWrapper>
       );
-
-      // Clear initial fetch calls
-      await vi.advanceTimersByTimeAsync(100);
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
       mockFetch.mockClear();
 
-      const searchInput = screen.getByPlaceholderText("Search models...");
-      fireEvent.change(searchInput, { target: { value: "flux" } });
+      fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "kling" } });
 
-      // Before debounce timeout, should not fetch
-      await vi.advanceTimersByTimeAsync(200);
+      await waitFor(() => expect(screen.queryByText("FLUX.1 Dev")).not.toBeInTheDocument());
+      expect(screen.getByText("Kling Video Pro")).toBeInTheDocument();
+      expect(screen.getByText(/^1 model$/)).toBeInTheDocument();
       expect(mockFetch).not.toHaveBeenCalled();
+    });
 
-      // After debounce timeout (300ms), should fetch
-      await vi.advanceTimersByTimeAsync(150);
+    it("offers the providers' own search and merges what it finds", async () => {
+      render(
+        <TestWrapper>
+          <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
+      // Nothing to offer without a query
+      expect(screen.queryByTestId("deep-search")).not.toBeInTheDocument();
 
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalled();
-        const fetchCall = mockFetch.mock.calls[0][0] as string;
-        expect(fetchCall).toContain("search=flux");
+      fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "topaz" } });
+      await waitFor(() => expect(screen.getByText("No models found")).toBeInTheDocument());
+      const row = screen.getByTestId("deep-search");
+      expect(row).toHaveTextContent("Replicate and fal.ai may have more");
+
+      mockFetch.mockClear();
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, models: [{ id: "topazlabs/video-upscale", name: "Topaz Video Upscale", description: "Upscale", provider: "replicate", capabilities: ["image-to-video"] }] }),
       });
+      fireEvent.click(within(row).getByRole("button", { name: /Search Replicate and fal.ai/ }));
+      await waitFor(() => expect(screen.getByText("Topaz Video Upscale")).toBeInTheDocument());
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toContain("search=topaz");
+      expect(url).toContain("deep=true");
+
+      // A new query starts over
+      fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "flux" } });
+      await waitFor(() => expect(screen.queryByText("Topaz Video Upscale")).not.toBeInTheDocument());
+      expect(screen.getByTestId("deep-search")).toHaveTextContent("may have more");
     });
 
     it("should focus search input when dialog opens", async () => {
@@ -280,25 +301,20 @@ describe("ModelSearchDialog", () => {
       expect(allButton).toHaveTextContent("All");
     });
 
-    it("should filter by provider when button is clicked", async () => {
+    it("should filter by provider when button is clicked, locally", async () => {
       render(
         <TestWrapper>
           <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
         </TestWrapper>
       );
-
-      await vi.advanceTimersByTimeAsync(100);
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
       mockFetch.mockClear();
 
-      // Click the Replicate button (has title "Replicate")
-      const replicateButton = screen.getByTitle("Replicate");
-      fireEvent.click(replicateButton);
+      fireEvent.click(screen.getByTitle("Replicate"));
 
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalled();
-        const fetchCall = mockFetch.mock.calls[0][0] as string;
-        expect(fetchCall).toContain("provider=replicate");
-      });
+      expect(screen.getByText("SDXL")).toBeInTheDocument();
+      expect(screen.queryByText("FLUX.1 Dev")).not.toBeInTheDocument();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("should not show the ComfyUI filter without a Comfy Router key", async () => {
@@ -312,7 +328,7 @@ describe("ModelSearchDialog", () => {
       expect(screen.queryByTitle("ComfyUI")).not.toBeInTheDocument();
     });
 
-    it("should show the ComfyUI filter when a Comfy Router key is set and fetch provider=comfy with its header", async () => {
+    it("should show the ComfyUI filter when a Comfy Router key is set and send its header", async () => {
       providerApiKeys.comfyApiKey = "comfyui-test-key";
 
       render(
@@ -321,18 +337,14 @@ describe("ModelSearchDialog", () => {
         </TestWrapper>
       );
 
-      await vi.advanceTimersByTimeAsync(100);
-      mockFetch.mockClear();
+      await waitFor(() => expect(mockFetch).toHaveBeenCalled());
+      const [, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(options.headers).toMatchObject({ "X-Comfy-Router-Key": "comfyui-test-key" });
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
 
-      const comfyButton = screen.getByTitle("ComfyUI");
-      fireEvent.click(comfyButton);
-
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalled();
-        const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
-        expect(url).toContain("provider=comfy");
-        expect(options.headers).toMatchObject({ "X-Comfy-Router-Key": "comfyui-test-key" });
-      });
+      fireEvent.click(screen.getByTitle("ComfyUI"));
+      // None of the sample models are Comfy Router models
+      expect(screen.getByText("No models found")).toBeInTheDocument();
     });
 
     it("should use initialProvider when provided", async () => {
@@ -342,11 +354,11 @@ describe("ModelSearchDialog", () => {
         </TestWrapper>
       );
 
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalled();
-        const fetchCall = mockFetch.mock.calls[0][0] as string;
-        expect(fetchCall).toContain("provider=fal");
-      });
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
+      expect(screen.queryByText("SDXL")).not.toBeInTheDocument();
+      // One request for the whole list; the provider is a local filter
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0][0]).toBe("/api/models");
     });
   });
 
@@ -369,18 +381,13 @@ describe("ModelSearchDialog", () => {
           <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
         </TestWrapper>
       );
-
-      await vi.advanceTimersByTimeAsync(100);
-      mockFetch.mockClear();
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
 
       fireEvent.click(screen.getByRole("button", { name: "Image" }));
-
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalled();
-        const fetchCall = mockFetch.mock.calls[0][0] as string;
-        // URL encodes comma as %2C
-        expect(fetchCall).toMatch(/capabilities=text-to-image[,%].*image-to-image/);
-      });
+      expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument();
+      expect(screen.getByText("SDXL")).toBeInTheDocument();
+      expect(screen.queryByText("Kling Video Pro")).not.toBeInTheDocument();
+      expect(screen.queryByText("TripoSR")).not.toBeInTheDocument();
     });
 
     it("should filter by video capabilities when selected", async () => {
@@ -389,18 +396,11 @@ describe("ModelSearchDialog", () => {
           <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
         </TestWrapper>
       );
-
-      await vi.advanceTimersByTimeAsync(100);
-      mockFetch.mockClear();
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
 
       fireEvent.click(screen.getByRole("button", { name: "Video" }));
-
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalled();
-        const fetchCall = mockFetch.mock.calls[0][0] as string;
-        // URL encodes comma as %2C
-        expect(fetchCall).toMatch(/capabilities=text-to-video[,%].*image-to-video/);
-      });
+      expect(screen.getByText("Kling Video Pro")).toBeInTheDocument();
+      expect(screen.queryByText("FLUX.1 Dev")).not.toBeInTheDocument();
     });
 
     it("should use initialCapabilityFilter when provided", async () => {
@@ -410,12 +410,85 @@ describe("ModelSearchDialog", () => {
         </TestWrapper>
       );
 
-      await waitFor(() => {
-        expect(mockFetch).toHaveBeenCalled();
-        const fetchCall = mockFetch.mock.calls[0][0] as string;
-        // URL encodes comma as %2C
-        expect(fetchCall).toMatch(/capabilities=text-to-video[,%].*image-to-video/);
+      await waitFor(() => expect(screen.getByText("Kling Video Pro")).toBeInTheDocument());
+      expect(screen.queryByText("FLUX.1 Dev")).not.toBeInTheDocument();
+      expect(screen.getByText(/^1 model$/)).toBeInTheDocument();
+    });
+  });
+
+  describe("Provider status", () => {
+    it("says which provider failed, and why, above the list", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          models: sampleModels,
+          providers: {
+            fal: { success: true, count: 3, cached: true, fetchedAt: Date.now(), stale: false, refreshing: false },
+            wavespeed: { success: false, count: 0, error: "WaveSpeed API error: 401" },
+          },
+        }),
       });
+      render(
+        <TestWrapper>
+          <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
+      const notices = screen.getByTestId("provider-notices");
+      expect(notices).toHaveTextContent("WaveSpeed is unavailable: WaveSpeed API error: 401");
+      expect(notices).toHaveTextContent("The key was rejected. Check it in Settings.");
+      expect(within(notices).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+      // Only the failing one; and not on another provider's tab
+      expect(notices).not.toHaveTextContent("fal.ai");
+      fireEvent.click(screen.getByTitle("Replicate"));
+      expect(screen.queryByTestId("provider-notices")).not.toBeInTheDocument();
+    });
+
+    it("keeps a provider's previous list when its refresh failed, and says so", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          models: sampleModels,
+          providers: { replicate: { success: true, count: 1, cached: true, fetchedAt: Date.now() - 3 * 3600_000, stale: true, refreshing: false, error: "timed out after 20s" } },
+        }),
+      });
+      render(
+        <TestWrapper>
+          <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      await waitFor(() => expect(screen.getByText("SDXL")).toBeInTheDocument());
+      const notices = screen.getByTestId("provider-notices");
+      expect(notices).toHaveTextContent("Replicate could not be refreshed: timed out after 20s");
+      expect(notices).toHaveTextContent("Showing the list from 3h ago.");
+    });
+
+    it("asks again while a provider refreshes behind the answer, then takes the new list", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ success: true, models: sampleModels.slice(0, 2), providers: { replicate: { success: true, count: 1, cached: true, fetchedAt: 1, stale: true, refreshing: true } } }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ success: true, models: sampleModels, providers: { replicate: { success: true, count: 1, cached: true, fetchedAt: Date.now(), stale: false, refreshing: false } } }),
+        });
+      render(
+        <TestWrapper>
+          <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
+      expect(screen.getByText(/2 models · updating Replicate…/)).toBeInTheDocument();
+      expect(screen.queryByText("Kling Video Pro")).not.toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(3100);
+      await waitFor(() => expect(screen.getByText("Kling Video Pro")).toBeInTheDocument());
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1][0]).toBe("/api/models");
+      expect(screen.getByText(/^4 models$/)).toBeInTheDocument();
     });
   });
 

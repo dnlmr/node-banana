@@ -76,6 +76,25 @@ Image generation models (these exist and are recently released):
 
 LLM models are defined once in `src/lib/llm/catalog.ts`: the current list per provider, legacy ids saved workflows may carry, their replacements, and the defaults. Add or retire a model there; every dropdown, `/api/llm` and the assistant read it.
 
+## Model catalog
+
+`GET /api/models` lists every provider with a key. Gemini, Kie, OpenAI and
+Comfy Router are static catalogs in `src/lib/providers/registry.ts`;
+Replicate, fal.ai and WaveSpeed come from the model catalog
+(`src/lib/providers/catalog.ts`): each list is fetched in parallel under its
+own deadline, kept under `~/.node-banana/catalog/<provider>.json`
+(`NODE_BANANA_CATALOG_DIR` moves it; tests must set it), served straight away,
+and refreshed behind the request once older than six hours. A refresh that
+fails keeps the previous list and reports the error in that provider's entry
+(`fetchedAt`, `stale`, `refreshing`, `error`), which the browse dialog shows
+as a notice. Replicate's list is built from its curated collections
+(`REPLICATE_COLLECTIONS`, one capability each, merged by model, ranked by
+runs), not from paging its newest uploads. `search` filters the stored lists;
+`deep=true` also asks Replicate's and fal.ai's own search, which the dialog
+offers as an explicit "Search Replicate and fal.ai" and the agent's model
+search always uses. The dialog fetches the whole list once and filters,
+searches and tabs it locally, polling while a provider is still refreshing.
+
 ## Node Types
 
 | Type | Purpose | Inputs | Outputs |

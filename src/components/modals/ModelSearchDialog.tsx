@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight, Image, RefreshCw, X } from "lucide-react";
+import { ArrowUpRight, CircleAlert, Image, RefreshCw, Search, X } from "lucide-react";
 import {
   Dialog,
   DialogButton,
@@ -31,23 +31,29 @@ import { deduplicatedFetch, clearFetchCache } from "@/utils/deduplicatedFetch";
 import { useReactFlow } from "@xyflow/react";
 import { ProviderType, RecentModel } from "@/types";
 import { ProviderModel, ModelCapability } from "@/lib/providers/types";
+import type { ProviderListResult } from "@/lib/providers/registry";
 import { ComfyMark } from "@/components/icons/ComfyMark";
 
-// localStorage cache for models (persists across dev server restarts)
+// localStorage cache: the whole list, one entry per set of configured
+// providers, so the dialog opens on it while the server answers. Filters and
+// search are applied locally, so there is nothing else to key on.
 const MODELS_CACHE_KEY = "node-banana-models-cache";
 // Bump when the built-in OpenAI catalogue changes so existing users see new models.
 const OPENAI_CATALOGUE_VERSION = 1;
 const GEMINI_CATALOGUE_VERSION = 1;
 const MODELS_CACHE_TTL = 48 * 60 * 60 * 1000; // 48 hours
-// Cap the number of cached entries to avoid unbounded localStorage growth.
-// Entries are pruned LRU-style (oldest timestamp first) on write.
-const MODELS_CACHE_MAX_ENTRIES = 20;
+// A few provider sets at most; the lists are big.
+const MODELS_CACHE_MAX_ENTRIES = 3;
+/** While a provider refreshes behind the server's answer, ask again this often. */
+const REFRESH_POLL_MS = 3000;
+const REFRESH_POLL_LIMIT = 12;
 
 interface ModelsCacheEntry {
   geminiCatalogueVersion?: number;
   openaiCatalogueVersion?: number;
   models: ProviderModel[];
   availableProviders?: string[];
+  providers?: Record<string, ProviderListResult>;
   timestamp: number;
 }
 
@@ -55,7 +61,7 @@ function getCachedModels(cacheKey: string): ModelsCacheEntry | null {
   try {
     const cache = JSON.parse(localStorage.getItem(MODELS_CACHE_KEY) || "{}");
     const entry = cache[cacheKey];
-    const provider = cacheKey.split(":")[1];
+    const provider = "all";
     const includesOpenAI = provider === "all" || provider === "openai";
     if (includesOpenAI && entry?.openaiCatalogueVersion !== OPENAI_CATALOGUE_VERSION) return null;
     // Gemini models are included in the combined catalogue and the Gemini filter.
@@ -69,7 +75,7 @@ function getCachedModels(cacheKey: string): ModelsCacheEntry | null {
   return null;
 }
 
-function setCachedModels(cacheKey: string, models: ProviderModel[], availableProviders?: string[]) {
+function setCachedModels(cacheKey: string, models: ProviderModel[], availableProviders?: string[], providers?: Record<string, ProviderListResult>) {
   try {
     const cache: Record<string, ModelsCacheEntry> = JSON.parse(
       localStorage.getItem(MODELS_CACHE_KEY) || "{}"
@@ -84,7 +90,7 @@ function setCachedModels(cacheKey: string, models: ProviderModel[], availablePro
       }
     }
 
-    cache[cacheKey] = { models, availableProviders, timestamp: now, openaiCatalogueVersion: OPENAI_CATALOGUE_VERSION, geminiCatalogueVersion: GEMINI_CATALOGUE_VERSION };
+    cache[cacheKey] = { models, availableProviders, providers, timestamp: now, openaiCatalogueVersion: OPENAI_CATALOGUE_VERSION, geminiCatalogueVersion: GEMINI_CATALOGUE_VERSION };
 
     // Cap total entries (LRU): drop oldest by timestamp until under the limit.
     const keys = Object.keys(cache);
@@ -219,7 +225,47 @@ interface ModelsResponse {
   models?: ProviderModel[];
   /** Providers with API keys configured (env or client header) */
   availableProviders?: string[];
+  /** Per provider: count, when it was fetched, stale, refreshing, error */
+  providers?: Record<string, ProviderListResult>;
   error?: string;
+}
+
+/** The capabilities behind each Type filter. */
+const CAPABILITY_FILTER_SETS: Record<Exclude<CapabilityFilter, "all">, ModelCapability[]> = {
+  image: ["text-to-image", "image-to-image"],
+  video: ["text-to-video", "image-to-video", "audio-to-video"],
+  "3d": ["text-to-3d", "image-to-3d"],
+  audio: ["text-to-audio"],
+};
+
+function matchesCapabilityFilter(model: ProviderModel, filter: CapabilityFilter): boolean {
+  if (filter === "all") return true;
+  const wanted = CAPABILITY_FILTER_SETS[filter];
+  return model.capabilities.some((cap) => wanted.includes(cap));
+}
+
+function matchesSearch(model: ProviderModel, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return model.name.toLowerCase().includes(q) || model.id.toLowerCase().includes(q) || (model.description?.toLowerCase().includes(q) ?? false);
+}
+
+/** "2h ago" for a provider's fetched-at time. */
+function formatAge(fetchedAt: number): string {
+  const minutes = Math.round((Date.now() - fetchedAt) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** What to do about a provider's error, in a few words. */
+function providerErrorHint(error: string): string {
+  if (/\b40[13]\b/.test(error)) return "The key was rejected. Check it in Settings.";
+  if (/timed out/i.test(error)) return "It did not answer in time.";
+  if (/\b429\b/.test(error)) return "It is rate limiting requests.";
+  return "";
 }
 
 interface ModelSearchDialogProps {
@@ -265,22 +311,27 @@ export function ModelSearchDialog({
   );
   const [capabilityFilter, setCapabilityFilter] =
     useState<CapabilityFilter>(initialCapabilityFilter || "all");
-  const [models, setModels] = useState<ProviderModel[]>([]);
+  /** Every model the server lists; the filters and the search narrow it here. */
+  const [catalog, setCatalog] = useState<ProviderModel[]>([]);
+  const [providerStatus, setProviderStatus] = useState<Record<string, ProviderListResult>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [serverAvailableProviders, setServerAvailableProviders] = useState<string[]>([]);
+  /** The providers' own search, run on request for one query. */
+  const [deep, setDeep] = useState<{ query: string; models: ProviderModel[]; state: "searching" | "done" | "failed" } | null>(null);
 
   // Refs
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Track request version to ignore stale responses
   const requestVersionRef = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Debounce search query
+  // The search is local, so the debounce only smooths typing
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery);
-    }, 300);
+    }, 120);
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
@@ -291,131 +342,109 @@ export function ModelSearchDialog({
     }
   }, [initialProvider]);
 
-  // Fetch models
-  const fetchModels = useCallback(async (bypassCache = false) => {
-    // Increment version to track this request
+  // Headers with the client-side keys; the server falls back to its env
+  const buildHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    if (replicateApiKey) headers["X-Replicate-Key"] = replicateApiKey;
+    if (falApiKey) headers["X-Fal-Key"] = falApiKey;
+    if (kieApiKey) headers["X-Kie-Key"] = kieApiKey;
+    if (wavespeedApiKey) headers["X-WaveSpeed-Key"] = wavespeedApiKey;
+    if (openaiApiKey) headers["X-OpenAI-API-Key"] = openaiApiKey;
+    if (comfyApiKey) headers["X-Comfy-Router-Key"] = comfyApiKey;
+    return headers;
+  }, [replicateApiKey, falApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey]);
+
+  const providersHash = getProvidersHash({
+    replicate: !!replicateApiKey,
+    fal: !!falApiKey,
+    kie: !!kieApiKey,
+    wavespeed: !!wavespeedApiKey,
+    openai: !!openaiApiKey,
+    comfy: !!comfyApiKey,
+  });
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * The whole list, once. `mode`:
+   * - "open": the cached list first, then the server's;
+   * - "refresh": wait for every provider to be fetched anew;
+   * - "poll": ask again while a provider refreshes behind the last answer.
+   */
+  const fetchModels = useCallback(async (mode: "open" | "refresh" | "poll" = "open", polls = 0) => {
     const thisVersion = ++requestVersionRef.current;
+    stopPolling();
 
-    // Build cache key from filters + configured providers (so the key changes
-    // when an API key is added/removed and the "all" view can't go stale).
-    const providersHash = getProvidersHash({
-      replicate: !!replicateApiKey,
-      fal: !!falApiKey,
-      kie: !!kieApiKey,
-      wavespeed: !!wavespeedApiKey,
-      openai: !!openaiApiKey,
-      comfy: !!comfyApiKey,
-    });
-    const cacheKey = `${providersHash}:${providerFilter}:${capabilityFilter}:${debouncedSearch}`;
-
-    // Check localStorage cache first (skip when bypassing)
-    if (!bypassCache) {
-      const cached = getCachedModels(cacheKey);
+    if (mode === "open") {
+      const cached = getCachedModels(providersHash);
       if (cached) {
-        setModels(cached.models);
-        if (cached.availableProviders) {
-          setServerAvailableProviders(cached.availableProviders);
-        }
-        return;
+        setCatalog(cached.models);
+        if (cached.availableProviders) setServerAvailableProviders(cached.availableProviders);
+        if (cached.providers) setProviderStatus(cached.providers);
+      } else {
+        setIsLoading(true);
       }
+      setError(null);
+    } else if (mode === "refresh") {
+      setIsLoading(catalog.length === 0);
+      setError(null);
     }
 
-    setIsLoading(true);
-    setError(null);
-
     try {
-      // Build query params
       const params = new URLSearchParams();
-      if (debouncedSearch) {
-        params.set("search", debouncedSearch);
-      }
-      if (providerFilter !== "all") {
-        params.set("provider", providerFilter);
-      }
-      if (capabilityFilter !== "all") {
-        const capabilities =
-          capabilityFilter === "image"
-            ? "text-to-image,image-to-image"
-            : capabilityFilter === "video"
-            ? "text-to-video,image-to-video,audio-to-video"
-            : capabilityFilter === "3d"
-            ? "text-to-3d,image-to-3d"
-            : "text-to-audio";
-        params.set("capabilities", capabilities);
-      }
-      if (bypassCache) {
-        params.set("refresh", "true");
-      }
-
-      // Build headers with API keys
-      const headers: Record<string, string> = {};
-      if (replicateApiKey) {
-        headers["X-Replicate-Key"] = replicateApiKey;
-      }
-      if (falApiKey) {
-        headers["X-Fal-Key"] = falApiKey;
-      }
-      if (kieApiKey) {
-        headers["X-Kie-Key"] = kieApiKey;
-      }
-      if (wavespeedApiKey) {
-        headers["X-WaveSpeed-Key"] = wavespeedApiKey;
-      }
-      if (openaiApiKey) {
-        headers["X-OpenAI-API-Key"] = openaiApiKey;
-      }
-      if (comfyApiKey) {
-        headers["X-Comfy-Router-Key"] = comfyApiKey;
-      }
-
-      const response = await deduplicatedFetch(`/api/models?${params.toString()}`, {
-        headers,
-      });
-
-      // Check if this request is still current
-      if (thisVersion !== requestVersionRef.current) {
-        return; // Ignore stale response
-      }
-
+      if (mode === "refresh") params.set("refresh", "true");
+      const query = params.toString();
+      const response = await deduplicatedFetch(`/api/models${query ? `?${query}` : ""}`, { headers: buildHeaders() });
+      if (thisVersion !== requestVersionRef.current) return;
       const data: ModelsResponse = await response.json();
+      if (thisVersion !== requestVersionRef.current) return;
 
       if (data.success && data.models) {
-        setModels(data.models);
-        // Only cache browse results (empty search), not per-keystroke search
-        // fragments — otherwise every distinct debounced string stores a full
-        // model list and the cache grows unbounded.
-        if (!debouncedSearch) {
-          setCachedModels(cacheKey, data.models, data.availableProviders);
-        }
-        // Update server-reported available providers
-        if (data.availableProviders) {
-          setServerAvailableProviders(data.availableProviders);
+        setCatalog(data.models);
+        setProviderStatus(data.providers ?? {});
+        if (data.availableProviders) setServerAvailableProviders(data.availableProviders);
+        setCachedModels(providersHash, data.models, data.availableProviders, data.providers);
+        // A provider still refreshing behind this answer: ask again shortly
+        const refreshing = Object.values(data.providers ?? {}).some((p) => p.refreshing);
+        if (refreshing && polls < REFRESH_POLL_LIMIT) {
+          pollTimerRef.current = setTimeout(() => {
+            pollTimerRef.current = null;
+            void fetchModels("poll", polls + 1);
+          }, REFRESH_POLL_MS);
         }
       } else {
         setError(data.error || "Failed to fetch models");
-        setModels([]);
+        if (mode !== "poll") setCatalog([]);
       }
     } catch (err) {
-      // Check if this request is still current
-      if (thisVersion !== requestVersionRef.current) {
-        return; // Ignore stale error
+      if (thisVersion !== requestVersionRef.current) return;
+      if (mode !== "poll") {
+        setError(err instanceof Error ? err.message : "Failed to fetch models");
+        setCatalog([]);
       }
-      setError(err instanceof Error ? err.message : "Failed to fetch models");
-      setModels([]);
     } finally {
-      // Only update loading state if this is still the current request
-      if (thisVersion === requestVersionRef.current) {
-        setIsLoading(false);
-      }
+      if (thisVersion === requestVersionRef.current) setIsLoading(false);
     }
-  }, [debouncedSearch, providerFilter, capabilityFilter, replicateApiKey, falApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providersHash, buildHeaders, stopPolling]);
 
-  // Fetch models when filters change
+  // Load on open; stop asking again on close
   useEffect(() => {
     if (isOpen) {
-      fetchModels();
+      void fetchModels("open");
     }
-  }, [isOpen, fetchModels]);
+    return stopPolling;
+  }, [isOpen, fetchModels, stopPolling]);
+
+  // The list a new query is typed into is not the one a past deep search found
+  useEffect(() => {
+    setDeep((current) => (current && current.query !== debouncedSearch ? null : current));
+  }, [debouncedSearch]);
 
   // Clear all caches and re-fetch models from scratch
   const handleRefresh = useCallback(async () => {
@@ -427,12 +456,52 @@ export function ModelSearchDialog({
       localStorage.removeItem("node-banana-schema-cache");
       // Clear in-memory deduplicatedFetch cache
       clearFetchCache();
-      // Re-fetch with cache bypass
-      await fetchModels(true);
+      setDeep(null);
+      await fetchModels("refresh");
     } finally {
       setIsRefreshing(false);
     }
   }, [fetchModels]);
+
+  /** Ask Replicate's and fal.ai's own search for models the stored lists lack. */
+  const handleDeepSearch = useCallback(async () => {
+    const query = debouncedSearch;
+    if (!query) return;
+    setDeep({ query, models: [], state: "searching" });
+    try {
+      const params = new URLSearchParams({ search: query, deep: "true" });
+      const response = await deduplicatedFetch(`/api/models?${params.toString()}`, { headers: buildHeaders() });
+      const data: ModelsResponse = await response.json();
+      setDeep((current) => (current?.query === query ? { query, models: data.success && data.models ? data.models : [], state: data.success ? "done" : "failed" } : current));
+    } catch {
+      setDeep((current) => (current?.query === query ? { query, models: [], state: "failed" } : current));
+    }
+  }, [debouncedSearch, buildHeaders]);
+
+  // Everything the filters and the search apply to: the catalog plus what a deep search found
+  const models = useMemo(() => {
+    const seen = new Set(catalog.map((m) => `${m.provider}:${m.id}`));
+    const extra = deep && deep.query === debouncedSearch ? deep.models.filter((m) => !seen.has(`${m.provider}:${m.id}`)) : [];
+    return [...catalog, ...extra].filter(
+      (model) =>
+        (providerFilter === "all" || model.provider === providerFilter) &&
+        matchesCapabilityFilter(model, capabilityFilter) &&
+        matchesSearch(model, debouncedSearch),
+    );
+  }, [catalog, deep, providerFilter, capabilityFilter, debouncedSearch]);
+
+  // Providers that failed outright, or whose last refresh failed; shown above the list
+  const providerNotices = useMemo(
+    () =>
+      Object.entries(providerStatus)
+        .filter(([provider, status]) => status.error && (providerFilter === "all" || providerFilter === provider))
+        .map(([provider, status]) => ({ provider: provider as ProviderType, status })),
+    [providerStatus, providerFilter],
+  );
+  const refreshingProviders = useMemo(
+    () => Object.entries(providerStatus).filter(([, status]) => status.refreshing).map(([provider]) => getProviderDisplayName(provider as ProviderType)),
+    [providerStatus],
+  );
 
   // Focus search input when dialog opens
   useEffect(() => {
@@ -515,40 +584,18 @@ export function ModelSearchDialog({
     }
   }, [providerFilter, availableProviders]);
 
-  // Filter recent models by capability
+  // Recent models, kept to the Type filter (and the provider tab) by what the catalog says of them
   const filteredRecentModels = useMemo(() => {
     return recentModels
       .filter((recent) => {
-        // Find matching model in current models list to check capabilities
-        const matchingModel = models.find((m) => m.id === recent.modelId);
-        if (!matchingModel && capabilityFilter !== "all") {
-          // If model not loaded yet and filter is active, exclude it
-          return false;
-        }
+        if (providerFilter !== "all" && recent.provider !== providerFilter) return false;
         if (capabilityFilter === "all") return true;
-        if (!matchingModel) return true; // Show if we can't verify capabilities
-
-        const isImage = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-image" || cap === "image-to-image"
-        );
-        const isVideo = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-video" || cap === "image-to-video" || cap === "audio-to-video"
-        );
-        const is3D = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-3d" || cap === "image-to-3d"
-        );
-        const isAudio = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-audio"
-        );
-
-        if (capabilityFilter === "image") return isImage;
-        if (capabilityFilter === "video") return isVideo;
-        if (capabilityFilter === "3d") return is3D;
-        if (capabilityFilter === "audio") return isAudio;
-        return true;
+        const matchingModel = catalog.find((m) => m.id === recent.modelId);
+        // Not in the catalog: nothing to check it against, so it is left out of a narrowed view
+        return matchingModel ? matchesCapabilityFilter(matchingModel, capabilityFilter) : false;
       })
       .slice(0, 4); // Show max 4
-  }, [recentModels, models, capabilityFilter]);
+  }, [recentModels, catalog, capabilityFilter, providerFilter]);
 
   // Get display name with suffix for fal.ai models to differentiate variants
   const getDisplayName = (model: ProviderModel): string => {
@@ -593,7 +640,7 @@ export function ModelSearchDialog({
 
   // Enter in the search box takes the top result, once the list matches what was typed.
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "Enter" || isLoading || searchQuery !== debouncedSearch) return;
+    if (event.key !== "Enter" || isLoading) return;
     const first = models[0];
     if (!first) return;
     event.preventDefault();
@@ -601,10 +648,58 @@ export function ModelSearchDialog({
   };
 
   const countLabel = isLoading
-    ? models.length > 0 ? "Searching" : "Loading"
+    ? "Loading"
     : error
       ? "Unavailable"
-      : `${models.length} model${models.length !== 1 ? "s" : ""}`;
+      : `${models.length} model${models.length !== 1 ? "s" : ""}${refreshingProviders.length > 0 ? ` · updating ${refreshingProviders.join(", ")}…` : ""}`;
+
+  // The providers' own search is worth offering once there is a real query and a provider that has one
+  const canDeepSearch =
+    debouncedSearch.trim().length >= 2 &&
+    (availableProviders.has("replicate") || availableProviders.has("fal")) &&
+    (providerFilter === "all" || providerFilter === "replicate" || providerFilter === "fal");
+  const deepSearchTargets = [providerFilter !== "fal" && availableProviders.has("replicate") ? "Replicate" : null, providerFilter !== "replicate" && availableProviders.has("fal") ? "fal.ai" : null]
+    .filter(Boolean)
+    .join(" and ");
+  const deepSearchRow =
+    canDeepSearch && (
+      <div className="flex items-center justify-between gap-3 rounded-[10px] border border-card-border px-3.5 py-2.5" data-testid="deep-search">
+        <span className="text-xs text-ink-3">
+          {deep?.state === "searching"
+            ? `Searching ${deepSearchTargets}…`
+            : deep?.state === "done"
+              ? `${deepSearchTargets} found nothing more for “${deep.query}”`
+              : deep?.state === "failed"
+                ? `${deepSearchTargets} could not be searched`
+                : `Not here? ${deepSearchTargets} may have more.`}
+        </span>
+        {deep?.state !== "searching" && deep?.state !== "done" && (
+          <DialogTextButton onClick={handleDeepSearch} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <Search size={13} strokeWidth={1.75} />
+            Search {deepSearchTargets}
+          </DialogTextButton>
+        )}
+      </div>
+    );
+
+  const providerNoticeRows = providerNotices.length > 0 && (
+    <div className="flex flex-col gap-2" data-testid="provider-notices">
+      {providerNotices.map(({ provider, status }) => (
+        <div key={provider} role="status" className="flex items-center gap-3 rounded-[10px] border border-error/30 bg-error/5 px-3.5 py-2.5 text-xs">
+          <CircleAlert size={15} strokeWidth={1.75} className="shrink-0 text-error" />
+          <span className="min-w-0 flex-1 text-neutral-300">
+            <span className="font-medium text-neutral-100">{getProviderDisplayName(provider)}</span>
+            {status.success ? " could not be refreshed" : " is unavailable"}: {status.error}
+            {providerErrorHint(status.error ?? "") && <span className="text-ink-3"> {providerErrorHint(status.error ?? "")}</span>}
+            {status.success && status.fetchedAt && <span className="text-ink-3"> Showing the list from {formatAge(status.fetchedAt)}.</span>}
+          </span>
+          <DialogTextButton onClick={handleRefresh} disabled={isRefreshing} className="whitespace-nowrap">
+            Retry
+          </DialogTextButton>
+        </div>
+      ))}
+    </div>
+  );
 
   if (!isOpen) return null;
 
@@ -719,6 +814,8 @@ export function ModelSearchDialog({
           ) : models.length === 0 && !isLoading ? (
             <>
               {clearSelectionRow}
+              {providerNoticeRows}
+              {deepSearchRow}
               <div className="flex-1 flex flex-col items-center justify-center text-center">
                 <DialogSearchGlyph className="w-10 h-10 text-neutral-600 mb-4" strokeWidth={1.25} />
                 <h3 className="font-display text-sm leading-[18px] font-semibold tracking-[-0.01em] text-neutral-100">
@@ -735,13 +832,14 @@ export function ModelSearchDialog({
           ) : (
             <div className={cn("flex flex-col gap-5 transition-opacity", isLoading && "opacity-50 pointer-events-none")} aria-busy={isLoading || undefined}>
               {clearSelectionRow}
+              {providerNoticeRows}
 
               {filteredRecentModels.length > 0 && !searchQuery && (
                 <section className="flex flex-col gap-2.5">
                   <DialogEyebrow>Recently used</DialogEyebrow>
                   <div className="grid grid-cols-2 gap-2">
                     {filteredRecentModels.map((recent) => {
-                      const matchingModel = models.find((m) => m.id === recent.modelId);
+                      const matchingModel = catalog.find((m) => m.id === recent.modelId);
                       // Create a ProviderModel from RecentModel for handleSelectModel
                       const model: ProviderModel = matchingModel || {
                         id: recent.modelId,
@@ -832,6 +930,7 @@ export function ModelSearchDialog({
                     );
                   })}
                 </div>
+                {deepSearchRow}
               </section>
             </div>
           )}
