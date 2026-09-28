@@ -445,6 +445,43 @@ describe("ModelSearchDialog", () => {
       expect(screen.queryByTestId("provider-notices")).not.toBeInTheDocument();
     });
 
+    it("can be dismissed, and stays dismissed for that error until a refresh is asked for", async () => {
+      const respond = (error: string) => ({
+        ok: true,
+        json: () => Promise.resolve({ success: true, models: sampleModels, providers: { wavespeed: { success: false, count: 0, error } } }),
+      });
+      mockFetch.mockResolvedValue(respond("WaveSpeed API error: 401"));
+      const { unmount } = render(
+        <TestWrapper>
+          <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      await waitFor(() => expect(screen.getByTestId("provider-notices")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss WaveSpeed notice" }));
+      expect(screen.queryByTestId("provider-notices")).not.toBeInTheDocument();
+      expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument();
+      unmount();
+
+      // Next open: the same error stays quiet
+      render(
+        <TestWrapper>
+          <ModelSearchDialog isOpen={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+      await waitFor(() => expect(screen.getByText("FLUX.1 Dev")).toBeInTheDocument());
+      expect(screen.queryByTestId("provider-notices")).not.toBeInTheDocument();
+
+      // A different error is news again
+      mockFetch.mockResolvedValue(respond("timed out after 20s"));
+      fireEvent.click(screen.getByText("Refresh catalog"));
+      await waitFor(() => expect(screen.getByTestId("provider-notices")).toHaveTextContent("timed out after 20s"));
+      // And a refresh brings back a dismissed one too
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss WaveSpeed notice" }));
+      expect(screen.queryByTestId("provider-notices")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText("Refresh catalog"));
+      await waitFor(() => expect(screen.getByTestId("provider-notices")).toBeInTheDocument());
+    });
+
     it("keeps a provider's previous list when its refresh failed, and says so", async () => {
       mockFetch.mockResolvedValue({
         ok: true,

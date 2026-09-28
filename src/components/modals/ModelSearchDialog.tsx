@@ -44,6 +44,27 @@ const GEMINI_CATALOGUE_VERSION = 1;
 const MODELS_CACHE_TTL = 48 * 60 * 60 * 1000; // 48 hours
 // A few provider sets at most; the lists are big.
 const MODELS_CACHE_MAX_ENTRIES = 3;
+/** Provider notices the user closed, by provider: the error text they closed. A different error shows again. */
+const NOTICES_DISMISSED_KEY = "node-banana-models-notices-dismissed";
+
+function readDismissedNotices(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NOTICES_DISMISSED_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDismissedNotices(value: Record<string, string>) {
+  try {
+    if (Object.keys(value).length === 0) localStorage.removeItem(NOTICES_DISMISSED_KEY);
+    else localStorage.setItem(NOTICES_DISMISSED_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 /** While a provider refreshes behind the server's answer, ask again this often. */
 const REFRESH_POLL_MS = 3000;
 const REFRESH_POLL_LIMIT = 12;
@@ -320,6 +341,7 @@ export function ModelSearchDialog({
   const [serverAvailableProviders, setServerAvailableProviders] = useState<string[]>([]);
   /** The providers' own search, run on request for one query. */
   const [deep, setDeep] = useState<{ query: string; models: ProviderModel[]; state: "searching" | "done" | "failed" } | null>(null);
+  const [dismissedNotices, setDismissedNotices] = useState<Record<string, string>>(readDismissedNotices);
 
   // Refs
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -457,6 +479,9 @@ export function ModelSearchDialog({
       // Clear in-memory deduplicatedFetch cache
       clearFetchCache();
       setDeep(null);
+      // Asking again is asking to see how it went
+      setDismissedNotices({});
+      writeDismissedNotices({});
       await fetchModels("refresh");
     } finally {
       setIsRefreshing(false);
@@ -490,14 +515,21 @@ export function ModelSearchDialog({
     );
   }, [catalog, deep, providerFilter, capabilityFilter, debouncedSearch]);
 
-  // Providers that failed outright, or whose last refresh failed; shown above the list
+  // Providers that failed outright, or whose last refresh failed; shown above the list until closed
   const providerNotices = useMemo(
     () =>
       Object.entries(providerStatus)
-        .filter(([provider, status]) => status.error && (providerFilter === "all" || providerFilter === provider))
+        .filter(([provider, status]) => status.error && dismissedNotices[provider] !== status.error && (providerFilter === "all" || providerFilter === provider))
         .map(([provider, status]) => ({ provider: provider as ProviderType, status })),
-    [providerStatus, providerFilter],
+    [providerStatus, providerFilter, dismissedNotices],
   );
+  const dismissNotice = useCallback((provider: ProviderType, error: string) => {
+    setDismissedNotices((current) => {
+      const next = { ...current, [provider]: error };
+      writeDismissedNotices(next);
+      return next;
+    });
+  }, []);
   const refreshingProviders = useMemo(
     () => Object.entries(providerStatus).filter(([, status]) => status.refreshing).map(([provider]) => getProviderDisplayName(provider as ProviderType)),
     [providerStatus],
@@ -696,6 +728,15 @@ export function ModelSearchDialog({
           <DialogTextButton onClick={handleRefresh} disabled={isRefreshing} className="whitespace-nowrap">
             Retry
           </DialogTextButton>
+          <button
+            type="button"
+            onClick={() => dismissNotice(provider, status.error ?? "")}
+            aria-label={`Dismiss ${getProviderDisplayName(provider)} notice`}
+            title="Dismiss"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-white/[0.06] hover:text-neutral-100"
+          >
+            <X size={14} strokeWidth={1.75} />
+          </button>
         </div>
       ))}
     </div>

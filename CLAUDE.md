@@ -480,6 +480,8 @@ All routes in `src/app/api/`:
 - `node-banana-assets-tile-size` - Assets view tile size (S/M/L)
 - `node-banana-assets-rail-open` - Which filter groups in the Assets rail are open
 - `node-banana-assets-first-run-shown` - The one-time "Saved to …" hint after the first recorded asset has been shown
+- `node-banana-models-cache` - The browse dialog's model list, one entry per set of configured providers
+- `node-banana-models-notices-dismissed` - Provider failure notices the user closed in the browse dialog (by provider, the error text); cleared by Refresh catalog
 
 The asset library's location and index live on disk, not in localStorage
 (the desktop and web origins do not share it): `~/.node-banana/library.json`
