@@ -731,12 +731,15 @@ html {
   animation: viewerOutRight 0.24s cubic-bezier(0.2, 0, 0, 1) both;
 }
 
+/* Text does not crossfade well (two prompts over each other are a jumble),
+   so the rail goes in sequence: the old text is out in 120ms, and only
+   then does the new fade up. */
 .animate-viewer-rail {
-  animation: viewerRailIn 0.2s cubic-bezier(0.2, 0, 0, 1) both;
+  animation: viewerRailIn 0.18s cubic-bezier(0.2, 0, 0, 1) 0.12s both;
 }
 
 .animate-viewer-rail-out {
-  animation: viewerRailOut 0.2s cubic-bezier(0.2, 0, 0, 1) both;
+  animation: viewerRailOut 0.12s ease-in both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -751,11 +754,11 @@ html {
   }
 
   .animate-viewer-rail {
-    animation: viewerFadeIn 0.15s ease-out both;
+    animation: viewerFadeIn 0.12s ease-out 0.12s both;
   }
 
   .animate-viewer-rail-out {
-    animation: viewerFadeOut 0.15s ease-out both;
+    animation: viewerFadeOut 0.12s ease-out both;
   }
 }
 

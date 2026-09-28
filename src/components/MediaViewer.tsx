@@ -361,7 +361,7 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
           </div>
         </div>
 
-        {/* Two layers, like the stage: the old text fades down as the new fades up, once the new image is ready. */}
+        {/* Two layers on the stage's cue, but in sequence rather than a crossfade: the old text is gone before the new fades up. */}
         <div className="relative min-h-0 overflow-hidden">
           {leaving && (
             <div
