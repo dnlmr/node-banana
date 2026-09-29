@@ -397,7 +397,13 @@ update `src/lib/agent/graph/catalog.ts` / `handles.ts` too (the server's copy).
 
 ## Desktop releases and updates
 
-`npm run electron:package` builds the desktop app in isolation
+Pushing a tag `v<version>` runs `.github/workflows/release.yml`: tests, a
+draft release, then a signed and notarised Mac build on a macOS runner and an
+unsigned Windows build on a Windows runner, both uploaded into the draft
+(secrets: `MAC_CERTIFICATE_P12_BASE64`, `MAC_CERTIFICATE_PASSWORD`,
+`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`). A manual run
+builds without publishing unless asked.
+`npm run electron:package` is the same build by hand
 (`scripts/package-electron.cjs`); `--sign` signs and notarises the Mac build
 (Developer ID from the keychain, notarisation from `APPLE_API_KEY`,
 `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` or the Apple ID trio; entitlements in

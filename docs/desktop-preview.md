@@ -69,7 +69,11 @@ Diagnostics rotate at 2 MiB across four desktop log files; workflow session logs
 
 A release is the GitHub release tagged `v<version>` on `shrimbly/node-banana`, carrying the installers, their blockmaps and the updater manifests (`latest-mac.yml`, `latest.yml`). The packaged app checks that release; the landing page links to the latest one.
 
-To cut a release:
+To cut a release, set the version in `package.json` (and the lockfile), commit, and push the tag `v<version>`. The **Release** workflow (`.github/workflows/release.yml`) runs the tests, creates the draft release, then builds on GitHub's runners: the Mac build on an Apple Silicon runner, signed and notarised, with its signature, Gatekeeper assessment and stapled ticket verified; the Windows build on a Windows runner, unsigned, with one retry for the Turbopack crash. Both upload into the draft. Add the notes, check the assets, publish. Running the workflow by hand builds without publishing and keeps the installers as workflow artifacts; ticking **publish** uploads to the draft instead.
+
+The workflow needs five repository secrets: `MAC_CERTIFICATE_P12_BASE64` (the Developer ID Application certificate, exported from Keychain Access as a `.p12`, then `base64 -i cert.p12 | pbcopy`), `MAC_CERTIFICATE_PASSWORD`, `APPLE_API_KEY_P8` (the App Store Connect key file's contents), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. electron-builder imports the certificate into a temporary keychain for the build. Windows needs nothing.
+
+The same build runs by hand, which is the fallback when the runners are unavailable:
 
 1. Set the version in `package.json` (and the lockfile) and commit.
 2. On the Mac, sign, notarise and upload:

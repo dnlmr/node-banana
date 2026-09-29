@@ -1,0 +1,188 @@
+# Builds the desktop app on GitHub's runners: the Mac build signed and
+# notarised, the Windows build unsigned, both uploaded into one draft release
+# named after the version. Pushing a tag `v<version>` publishes to the draft;
+# running the workflow by hand builds and keeps the installers as workflow
+# artifacts, or publishes when asked.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   MAC_CERTIFICATE_P12_BASE64  Developer ID Application certificate, exported from
+#                               Keychain Access as .p12 and base64-encoded
+#   MAC_CERTIFICATE_PASSWORD    the .p12's password
+#   APPLE_API_KEY_P8            contents of the App Store Connect API key (.p8)
+#   APPLE_API_KEY_ID            its key id
+#   APPLE_API_ISSUER            its issuer id
+# GITHUB_TOKEN uploads to the release; nothing else is needed.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload to a draft GitHub release (otherwise keep the installers as workflow artifacts)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24
+  PUBLISH: ${{ github.event_name == 'push' || inputs.publish == true }}
+
+jobs:
+  check:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_name }}" != "v$version" ]; then
+            echo "::error::Tag ${{ github.ref_name }} does not match package.json version $version"
+            exit 1
+          fi
+      - run: npm ci --no-audit --no-fund
+      - run: npm run electron:test
+      - run: npm run test:run
+
+  draft:
+    name: Draft release
+    needs: check
+    if: ${{ github.event_name == 'push' || inputs.publish == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Made once, before the builds, so two uploads never race to create it.
+      - name: Create the draft if it does not exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" --target "$GITHUB_SHA" --notes "Release notes to come."
+          fi
+
+  mac:
+    name: macOS (Apple Silicon, signed)
+    needs: [check, draft]
+    # The draft job is skipped on a plain manual run; still build.
+    if: ${{ always() && needs.check.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Notarisation key
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          if [ -z "$APPLE_API_KEY_P8" ]; then echo "::error::APPLE_API_KEY_P8 is not set"; exit 1; fi
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+      - name: Package, sign and notarise
+        env:
+          # electron-builder imports the certificate into a temporary keychain.
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then echo "::error::MAC_CERTIFICATE_P12_BASE64 is not set"; exit 1; fi
+          if [ "$PUBLISH" = "true" ]; then
+            npm run electron:package -- --sign --publish
+          else
+            npm run electron:package -- --sign
+          fi
+      - name: Verify the signature and the notarisation ticket
+        run: |
+          app="dist-electron/mac-arm64/Node Banana.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$app"
+      - name: Smoke test the packaged app
+        continue-on-error: true
+        run: npm run electron:smoke -- --executable "dist-electron/mac-arm64/Node Banana.app/Contents/MacOS/Node Banana"
+      - name: Keep the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-arm64
+          if-no-files-found: error
+          path: |
+            dist-electron/*.dmg
+            dist-electron/*.zip
+            dist-electron/*.blockmap
+            dist-electron/latest-mac.yml
+
+  windows:
+    name: Windows (x64, unsigned)
+    needs: [check, draft]
+    if: ${{ always() && needs.check.result == 'success' && (needs.draft.result == 'success' || needs.draft.result == 'skipped') }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: ImageMagick (for the .ico)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command magick -ErrorAction SilentlyContinue)) {
+            choco install imagemagick.app --no-progress -y
+            # The installer adds itself to the machine PATH; this job's PATH is already read.
+            Get-ChildItem "C:\Program Files" -Filter "ImageMagick*" | ForEach-Object { echo $_.FullName >> $env:GITHUB_PATH }
+          }
+      - run: npm ci --no-audit --no-fund
+      - name: Package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The production Next build can crash intermittently on Windows (an
+        # access violation in Turbopack) and succeeds on retry.
+        run: |
+          $extra = @()
+          if ($env:PUBLISH -eq 'true') { $extra += '--publish' }
+          $ok = $false
+          foreach ($attempt in 1..2) {
+            npm run electron:package -- @extra
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "::warning::Packaging attempt $attempt failed (exit $LASTEXITCODE)"
+          }
+          if (-not $ok) { exit 1 }
+      - name: Keep the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          if-no-files-found: error
+          path: |
+            dist-electron/*.exe
+            dist-electron/*.zip
+            dist-electron/*.blockmap
+            dist-electron/latest.yml
