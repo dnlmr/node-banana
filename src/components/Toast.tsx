@@ -3,6 +3,7 @@
 import { Check, CircleAlert, CircleCheck, Copy, Info, Pause, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
+import { DesktopUpdateNotice } from "./DesktopUpdateNotice";
 
 /**
  * Where notifications stack (this toast and the generation cards): under the
@@ -114,6 +115,7 @@ export function Toast() {
       className="pointer-events-none fixed z-[200] flex w-96 min-w-0 flex-col items-end gap-2 [&>*]:pointer-events-auto"
       style={{ top: STACK_TOP, right: STACK_RIGHT_CSS, maxWidth: `calc(100vw - ${STACK_RIGHT * 2}px)` }}
     >
+      <DesktopUpdateNotice />
       {message && (
       <div
         className={`animate-drop-in flex w-full min-w-0 flex-col overflow-hidden rounded-lg border shadow-xl ${typeStyles[type]}`}
