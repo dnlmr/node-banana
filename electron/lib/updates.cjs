@@ -134,4 +134,35 @@ function createUpdates({ updater, userData, currentVersion, releasesUrl, log, on
   return { state: () => state, check, download, install, skip, dismiss, start, stop };
 }
 
-module.exports = { createUpdates, createUnsupportedUpdates, readReleasesUrl, FIRST_CHECK_DELAY_MS, CHECK_INTERVAL_MS, RETRY_INTERVAL_MS };
+/**
+ * A stand-in for electron-updater so the notice can be seen in development
+ * (NODE_BANANA_ELECTRON_PREVIEW_UPDATES=1, or =fail to break the download):
+ * every check finds the next minor version, a download takes a few seconds,
+ * and installing calls `onInstall` instead of restarting anything.
+ */
+function createPreviewUpdater({ currentVersion, fail = false, onInstall = () => {}, timers = { setTimeout, clearTimeout } }) {
+  const { EventEmitter } = require('node:events');
+  const [major, minor] = currentVersion.split('.').map(Number);
+  const version = `${major}.${(minor || 0) + 1}.0`;
+  const updater = new EventEmitter();
+  const total = 600 * 1024 * 1024;
+  updater.checkForUpdates = () => new Promise(resolve => {
+    updater.emit('checking-for-update');
+    timers.setTimeout(() => { updater.emit('update-available', { version }); resolve({ isUpdateAvailable: true, updateInfo: { version } }); }, 800);
+  });
+  updater.downloadUpdate = () => new Promise((resolve, reject) => {
+    let percent = 0;
+    const step = () => {
+      percent = Math.min(100, percent + 4);
+      if (fail && percent >= 60) { const error = new Error('Preview: the download was cut off'); updater.emit('error', error); reject(error); return; }
+      updater.emit('download-progress', { percent, transferred: Math.round(total * percent / 100), total });
+      if (percent >= 100) { updater.emit('update-downloaded', { version }); resolve([]); return; }
+      timers.setTimeout(step, 160);
+    };
+    timers.setTimeout(step, 300);
+  });
+  updater.quitAndInstall = () => onInstall(version);
+  return updater;
+}
+
+module.exports = { createUpdates, createUnsupportedUpdates, createPreviewUpdater, readReleasesUrl, FIRST_CHECK_DELAY_MS, CHECK_INTERVAL_MS, RETRY_INTERVAL_MS };

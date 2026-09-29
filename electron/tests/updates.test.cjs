@@ -158,3 +158,31 @@ test('the releases page comes from the update manifest', () => {
   fs.writeFileSync(path.join(resources, 'app-update.yml'), 'owner: shrimbly\nrepo: node-banana\nprovider: github\nreleaseType: draft\nupdaterCacheDirName: node-banana-updater\n');
   assert.equal(readReleasesUrl(resources), RELEASES);
 });
+
+test('the preview updater walks the notice through a whole update without a release', async () => {
+  const { createPreviewUpdater } = require('../lib/updates.cjs');
+  const timers = { pending: [], setTimeout(callback, delay) { const id = { callback, delay }; this.pending.push(id); return id; }, clearTimeout() {} };
+  const run = async () => { while (timers.pending.length) timers.pending.shift().callback(); await tick(); };
+  const installed = [];
+  const updater = createPreviewUpdater({ currentVersion: '1.10.0', onInstall: version => installed.push(version), timers });
+  const changes = [];
+  const updates = createUpdates({ updater, userData: fs.mkdtempSync(path.join(os.tmpdir(), 'banana-preview-')), currentVersion: '1.10.0', releasesUrl: RELEASES, log() {}, onChange: state => changes.push(state.status), autoCheck: false, timers });
+  const checked = updates.check({ manual: true });
+  await run();
+  assert.equal((await checked).version, '1.11.0');
+  updates.download();
+  await tick();
+  while (updates.state().status === 'downloading') await run();
+  assert.equal(updates.state().status, 'downloaded');
+  updates.install();
+  assert.deepEqual(installed, ['1.11.0']);
+  assert.deepEqual([...new Set(changes)], ['checking', 'available', 'downloading', 'downloaded']);
+
+  const broken = createPreviewUpdater({ currentVersion: '1.10.0', fail: true, timers });
+  const failing = createUpdates({ updater: broken, userData: fs.mkdtempSync(path.join(os.tmpdir(), 'banana-preview-')), currentVersion: '1.10.0', releasesUrl: RELEASES, log() {}, onChange() {}, autoCheck: false, timers });
+  void failing.check(); await run();
+  failing.download(); await tick();
+  while (failing.state().status === 'downloading') await run();
+  assert.equal(failing.state().status, 'error');
+  assert.equal(failing.state().url, `${RELEASES}/tag/v1.11.0`);
+});

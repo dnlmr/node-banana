@@ -417,7 +417,9 @@ The renderer sees it through `window.nodeBananaDesktop.updates`
 stack. Squirrel.Mac installs signed builds only, so a Mac release for existing
 users must be built with `--sign`; an install failure falls back to a link to
 the release. Test profiles (`NODE_BANANA_ELECTRON_USER_DATA`) and `electron:dev`
-never check by themselves. The release steps are in `docs/desktop-preview.md`.
+never check by themselves; `NODE_BANANA_ELECTRON_PREVIEW_UPDATES=1` (or `fail`)
+gives a dev run a pretend updater so the notice can be seen. The release steps
+are in `docs/desktop-preview.md`.
 
 ## Asset Library
 

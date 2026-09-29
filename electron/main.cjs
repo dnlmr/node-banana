@@ -15,7 +15,7 @@ const { pickHostEnvironment } = require('./lib/env.cjs');
 const { libraryEnv } = require('./lib/library.cjs');
 const { createServerMessageHandler } = require('./lib/bridge-main.cjs');
 const { UNLOAD_PROMPT } = require('./lib/unload-prompt.cjs');
-const { createUpdates, createUnsupportedUpdates, readReleasesUrl } = require('./lib/updates.cjs');
+const { createUpdates, createUnsupportedUpdates, createPreviewUpdater, readReleasesUrl } = require('./lib/updates.cjs');
 let root = path.resolve(__dirname, '..');
 let runtime, backend, window, credentialStore, recoveryStore, diagnostics, updates;
 let quitting = false, rendererCrashed = false, starting;
@@ -62,6 +62,14 @@ function updateChanged(state) {
   else if (state.status === 'error') void message({ type: 'error', title: 'Node Banana', message: 'Could not check for updates.', detail: state.error });
 }
 function createUpdater() {
+  const preview = process.env.NODE_BANANA_ELECTRON_PREVIEW_UPDATES;
+  if (!app.isPackaged && preview) {
+    // The notice, end to end, without a release: a pretend updater that
+    // always finds the next version and "installs" it with a dialog.
+    const updater = createPreviewUpdater({ currentVersion: app.getVersion(), fail: preview === 'fail',
+      onInstall: version => void message({ type: 'info', title: 'Node Banana', message: `Preview update: Node Banana would restart into ${version} now.` }) });
+    return createUpdates({ updater, userData: app.getPath('userData'), currentVersion: app.getVersion(), releasesUrl: 'https://github.com/shrimbly/node-banana/releases', log, onChange: updateChanged });
+  }
   if (!app.isPackaged) return createUnsupportedUpdates(app.getVersion());
   try {
     // The app package has no dependencies of its own; electron-updater ships in
