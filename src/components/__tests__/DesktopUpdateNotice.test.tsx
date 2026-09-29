@@ -40,26 +40,25 @@ it('renders nothing in the browser, in development, or while there is nothing to
 
 it('offers an available update, follows the download and asks to restart', async () => {
   const { updates, emit } = installBridge({ supported: true, status: 'available', currentVersion: '1.10.0', version: '1.11.0', url: 'https://github.com/shrimbly/node-banana/releases/tag/v1.11.0' });
-  const open = vi.spyOn(window, 'open').mockImplementation(() => null);
   render(<DesktopUpdateNotice />);
   expect(await screen.findByText('Node Banana 1.11.0 is available')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Release notes' }));
-  expect(open).toHaveBeenCalledWith('https://github.com/shrimbly/node-banana/releases/tag/v1.11.0', '_blank', 'noopener');
-  fireEvent.click(screen.getByRole('button', { name: 'Skip this version' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
   expect(updates.skip).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss update notice' }));
+  expect(updates.dismiss).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: 'Update' }));
   expect(updates.download).toHaveBeenCalledOnce();
 
   emit({ supported: true, status: 'downloading', currentVersion: '1.10.0', version: '1.11.0', percent: 42, transferred: 250 * 1024 * 1024, total: 600 * 1024 * 1024 });
-  expect(screen.getByText('Downloading Node Banana 1.11.0…')).toBeInTheDocument();
+  expect(screen.getByText('Downloading 1.11.0')).toBeInTheDocument();
+  expect(screen.getByText('42%')).toBeInTheDocument();
   expect(screen.getByRole('progressbar', { name: 'Download progress' })).toHaveAttribute('aria-valuenow', '42');
-  expect(screen.getByText('250 MB of 600 MB')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Dismiss update notice' })).not.toBeInTheDocument();
 
   emit({ supported: true, status: 'downloaded', currentVersion: '1.10.0', version: '1.11.0' });
-  expect(screen.getByText('Node Banana 1.11.0 is ready to install')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Later' }));
-  expect(updates.dismiss).toHaveBeenCalledOnce();
+  expect(screen.getByText('1.11.0 is ready')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss update notice' }));
+  expect(updates.dismiss).toHaveBeenCalledTimes(2);
   fireEvent.click(screen.getByRole('button', { name: 'Restart to update' }));
   expect(updates.install).toHaveBeenCalledOnce();
 
@@ -67,19 +66,18 @@ it('offers an available update, follows the download and asks to restart', async
   expect(screen.queryByTestId('desktop-update-notice')).not.toBeInTheDocument();
 });
 
-it('reports a failed install with the release to fetch by hand, and a failed manual check', async () => {
+it('reports a failed install with the installer to fetch by hand, and a failed manual check', async () => {
   const { updates, emit } = installBridge({ supported: true, status: 'error', currentVersion: '1.10.0', version: '1.11.0', url: 'https://github.com/shrimbly/node-banana/releases/tag/v1.11.0', error: 'Could not get code signature for running application' });
+  const open = vi.spyOn(window, 'open').mockImplementation(() => null);
   render(<DesktopUpdateNotice />);
-  expect(await screen.findByText('Node Banana 1.11.0 could not be installed')).toBeInTheDocument();
-  expect(screen.getByText('Could not get code signature for running application')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Download from GitHub' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-  expect(updates.download).toHaveBeenCalledOnce();
+  expect(await screen.findByText('Update failed')).toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveAttribute('title', 'Could not get code signature for running application');
+  fireEvent.click(screen.getByRole('button', { name: 'Get the installer' }));
+  expect(open).toHaveBeenCalledWith('https://github.com/shrimbly/node-banana/releases/tag/v1.11.0', '_blank', 'noopener');
 
   emit({ supported: true, status: 'error', currentVersion: '1.10.0', url: 'https://github.com/shrimbly/node-banana/releases', error: 'net::ERR_INTERNET_DISCONNECTED', manual: true });
-  expect(screen.getByText('Could not check for updates')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Open releases' })).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  expect(screen.getByText('Couldn’t check for updates')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Get the installer' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Dismiss update notice' }));
   expect(updates.dismiss).toHaveBeenCalledOnce();
 });
@@ -90,8 +88,9 @@ it('shows a manual check and its "up to date" answer for a moment', async () => 
   render(<DesktopUpdateNotice />);
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(screen.getByText('Checking for updates…')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Dismiss update notice' })).not.toBeInTheDocument();
   emit({ supported: true, status: 'current', currentVersion: '1.10.0', manual: true });
-  expect(screen.getByText('Node Banana 1.10.0 is up to date')).toBeInTheDocument();
+  expect(screen.getByText('Up to date')).toBeInTheDocument();
   await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
   expect(updates.dismiss).toHaveBeenCalledOnce();
 });
