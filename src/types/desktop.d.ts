@@ -9,6 +9,23 @@ export type EnvironmentImport = { cancelled: true } | {
 };
 /** `code` names a failure the renderer can act on beyond retrying; today only `undecryptable`. */
 export type DesktopResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: string };
+/** Where the app's updater stands (electron/lib/updates.cjs). */
+export interface DesktopUpdateState {
+  /** False outside a packaged app; every status is then `idle`. */
+  supported: boolean;
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'current' | 'error';
+  currentVersion: string;
+  /** The newer release, from `available` on. */
+  version?: string;
+  /** The release page (or the releases list, for an error before a version was known). */
+  url?: string;
+  percent?: number;
+  transferred?: number;
+  total?: number;
+  error?: string;
+  /** The user asked for this check, so its outcome is worth showing even when it is nothing. */
+  manual?: boolean;
+}
 
 declare global {
   interface Window {
@@ -21,6 +38,19 @@ declare global {
         onStatus: (callback: (online: boolean) => void) => () => void;
       };
       openLogs: () => Promise<void>;
+      updates: {
+        state: () => Promise<DesktopUpdateState>;
+        /** A manual check: its result is shown even when there is nothing new. */
+        check: () => Promise<DesktopUpdateState>;
+        download: () => Promise<DesktopUpdateState>;
+        /** Quits and installs a downloaded update. */
+        install: () => Promise<DesktopUpdateState>;
+        /** Stops offering this version until the next manual check. */
+        skip: () => Promise<DesktopUpdateState>;
+        /** Puts the notice away until the next check. */
+        dismiss: () => Promise<DesktopUpdateState>;
+        onChange: (callback: (state: DesktopUpdateState) => void) => () => void;
+      };
       recovery: {
         read: () => Promise<DesktopResult<{ snapshot: unknown; warnings: string[] }>>;
         write: (snapshot: unknown) => Promise<DesktopResult<boolean>>;

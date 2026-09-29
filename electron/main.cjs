@@ -15,8 +15,9 @@ const { pickHostEnvironment } = require('./lib/env.cjs');
 const { libraryEnv } = require('./lib/library.cjs');
 const { createServerMessageHandler } = require('./lib/bridge-main.cjs');
 const { UNLOAD_PROMPT } = require('./lib/unload-prompt.cjs');
+const { createUpdates, createUnsupportedUpdates, readReleasesUrl } = require('./lib/updates.cjs');
 let root = path.resolve(__dirname, '..');
-let runtime, backend, window, credentialStore, recoveryStore, diagnostics;
+let runtime, backend, window, credentialStore, recoveryStore, diagnostics, updates;
 let quitting = false, rendererCrashed = false, starting;
 const dev = !app.isPackaged && process.argv.includes('--dev');
 const port = Number(process.env.NODE_BANANA_ELECTRON_PORT || 47831);
@@ -52,6 +53,25 @@ function allowedPermission(contents, permission, requestingURL) {
   return ['clipboard-read', 'clipboard-sanitized-write', 'deprecated-sync-clipboard-read', 'fullscreen'].includes(permission);
 }
 function sendStatus() { window?.webContents.send('desktop:backend-status', !!backend?.online()); }
+function updateChanged(state) {
+  window?.webContents.send('desktop:update-state', state);
+  if (window || !state.manual) return;
+  // Help → Check for Updates… with no window open: answer in a dialog instead.
+  if (state.status === 'current') void message({ type: 'info', title: 'Node Banana', message: `Node Banana ${state.currentVersion} is up to date.` });
+  else if (state.status === 'available') void message({ type: 'info', title: 'Node Banana', message: `Node Banana ${state.version} is available.`, detail: 'Open a window to download it, or view the release.', buttons: ['View Release', 'Later'], cancelId: 1 }).then(({ response }) => { if (response === 0 && state.url) openExternal(state.url); });
+  else if (state.status === 'error') void message({ type: 'error', title: 'Node Banana', message: 'Could not check for updates.', detail: state.error });
+}
+function createUpdater() {
+  if (!app.isPackaged) return createUnsupportedUpdates(app.getVersion());
+  try {
+    // The app package has no dependencies of its own; electron-updater ships in
+    // the bundled runtime's node_modules and is loaded from there.
+    const { autoUpdater } = require(path.join(process.resourcesPath, 'runtime', 'node_modules', 'electron-updater'));
+    return createUpdates({ updater: autoUpdater, userData: app.getPath('userData'), currentVersion: app.getVersion(), releasesUrl: readReleasesUrl(process.resourcesPath), log, onChange: updateChanged,
+      // Test profiles never look for updates by themselves; Help → Check for Updates… still does.
+      autoCheck: !process.env.NODE_BANANA_ELECTRON_USER_DATA });
+  } catch (error) { log(error); return createUnsupportedUpdates(app.getVersion()); }
+}
 async function startWithRetry() {
   if (starting) return starting;
   starting = (async () => {
@@ -205,6 +225,10 @@ function registerBridge() {
   ipcMain.handle('desktop:backend-state', event => { if (!validCaller(event)) throw new Error('Unauthorized desktop request'); return backend.online(); });
   ipcMain.handle('desktop:restart-backend', event => { if (!validCaller(event)) throw new Error('Unauthorized desktop request'); return startWithRetry(); });
   ipcMain.handle('desktop:open-logs', event => { if (!validCaller(event)) throw new Error('Unauthorized desktop request'); return openLogs(); });
+  for (const operation of ['state', 'check', 'download', 'install', 'skip', 'dismiss']) ipcMain.handle(`desktop:updates:${operation}`, event => {
+    if (!validCaller(event)) throw new Error('Unauthorized desktop request');
+    return operation === 'check' ? updates.check({ manual: true }) : updates[operation]();
+  });
   ipcMain.on('desktop:window-action', (event, action) => {
     if (!validCaller(event)) return;
     switch (action) {
@@ -231,6 +255,7 @@ else {
       redactor.add(values); backend?.post({ type: 'secrets', values });
     });
     recoveryStore = createRecoveryStore(app.getPath('userData'));
+    updates = createUpdater();
     const serverMessage = createServerMessageHandler({ shell, dialog, fs, getWindow: () => window, log });
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('NODE_BANANA_ELECTRON_PORT must be a port number between 1 and 65535.');
     if (app.isPackaged) { runtime = await provisionRuntime(path.join(process.resourcesPath, 'runtime'), app.getPath('userData')); root = runtime.directory; }
@@ -260,8 +285,8 @@ else {
     session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => callback(allowedPermission(contents, permission, details.requestingUrl)));
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []), { role: 'fileMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
-      { label: 'Help', submenu: [{ label: 'Open Logs', click: openLogs }, { label: 'Restart Local Server', click: () => void startWithRetry() }, { label: 'Recover Editor', click: () => { if (rendererCrashed && window) { rendererCrashed = false; window.reload(); } } }] },
+      { label: 'Help', submenu: [{ label: 'Check for Updates…', click: () => void updates.check({ manual: true }) }, { type: 'separator' }, { label: 'Open Logs', click: openLogs }, { label: 'Restart Local Server', click: () => void startWithRetry() }, { label: 'Recover Editor', click: () => { if (rendererCrashed && window) { rendererCrashed = false; window.reload(); } } }] },
     ]));
-    if (await startWithRetry()) await createWindow();
+    if (await startWithRetry()) { await createWindow(); updates.start(); }
   }).catch(fail);
 }
