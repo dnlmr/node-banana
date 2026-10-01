@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Columns2, Download, LayoutGrid, Play, Replace, Rows2, SquareDashed, Ungroup } from "lucide-react";
+import { ChevronDown, Columns2, Download, LayoutGrid, Play, Replace, Rows2, SquareArrowRightExit, SquareDashed } from "lucide-react";
 import { MenuDivider, MenuIconButton, MenuSurface } from "@/components/ui/Menu";
 import { Tooltip, type TooltipPlacement } from "@/components/ui/Tooltip";
 import { useReactFlow } from "@xyflow/react";
@@ -280,7 +280,7 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
       {/* Group/Ungroup buttons */}
       {someInGroup ? (
         <ToolbarButton onClick={handleUngroup} label="Remove from group">
-          <Ungroup size={16} strokeWidth={1.5} />
+          <SquareArrowRightExit size={16} strokeWidth={1.5} />
         </ToolbarButton>
       ) : (
         <ToolbarButton onClick={handleCreateGroup} label="Create group">

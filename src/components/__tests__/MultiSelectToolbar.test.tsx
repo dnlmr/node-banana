@@ -281,7 +281,7 @@ describe("MultiSelectToolbar", () => {
       render2({ nodes: [createMockNode("n1", { groupId: "g" }), createMockNode("n2", { position: { x: 300, y: 100 } })] });
       const button = screen.getByRole("button", { name: "Remove from group" });
       expect(tooltipOf(button)).toMatchObject({ text: "Remove from group" });
-      expect(button.querySelector("svg")).toHaveClass("lucide-ungroup");
+      expect(button.querySelector("svg")).toHaveClass("lucide-square-arrow-right-exit");
     });
 
     it("labels the arrange modes below the menu with their shortcuts", () => {
