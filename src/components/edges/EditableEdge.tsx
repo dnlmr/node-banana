@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import { shallow, useShallow } from "zustand/shallow";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { NanoBananaNodeData, WorkflowEdgeData } from "@/types";
+import { ArrayNodeData, NanoBananaNodeData, WorkflowEdgeData } from "@/types";
 import { getSharedGradientId } from "./SharedEdgeGradients";
 import { EDGE_COLORS, edgeColorKeyForHandles } from "@/lib/edges/colors";
 import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
@@ -31,6 +31,7 @@ import {
   stubGroupKey,
 } from "@/lib/edges/labels";
 import { EdgeLabel } from "./EdgeLabel";
+import { arrayEdgeLabel } from "@/lib/edges/arrayItems";
 import { edgeBundles, bundleReach, bundleClampKey, type BundleMembership } from "@/lib/edges/bundles";
 import { edgeGraphIndex, nodeGraphIndex } from "@/lib/edges/graphIndex";
 import { bundleClampStyle } from "./BundleClamp";
@@ -164,15 +165,21 @@ export function EditableEdge({
   );
   // And from the nodes: the clamp position for each end lives on the node
   // that owns the handle, and selection and loading state drive the stroke
-  const { sourceReach, targetReach, isConnectedToSelection, isTargetLoading } = useWorkflowStore(
+  const { sourceReach, targetReach, isConnectedToSelection, isTargetLoading, arrayLabel } = useWorkflowStore(
     useShallow((state) => {
       const { byId, selectedIds } = nodeGraphIndex(state.nodes);
       const targetNode = byId.get(target);
+      const sourceNode = byId.get(source);
       return {
         sourceReach: bundleReach(state.nodes, source, "source", sourceHandleId),
         targetReach: bundleReach(state.nodes, target, "target", targetHandleId),
         isConnectedToSelection: selectedIds.has(source) || selectedIds.has(target),
         isTargetLoading: targetNode?.type === "nanoBanana" && (targetNode.data as NanoBananaNodeData).status === "loading",
+        // Which item an Array connection carries ("Item 2", "All 7")
+        arrayLabel:
+          sourceNode?.type === "array"
+            ? arrayEdgeLabel({ id, source, target, sourceHandle: sourceHandleId, data: data as EdgeData | undefined }, sourceNode.data as ArrayNodeData)
+            : null,
       };
     })
   );
@@ -184,7 +191,7 @@ export function EditableEdge({
       setStubGroupWidth: state.setStubGroupWidth,
     }))
   );
-  const stubLabel = displayLabel;
+  const stubLabel = hasOwnLabel || !arrayLabel ? displayLabel : arrayLabel;
 
   // Bundles: the noodles sharing a handle leave it as one short stem and
   // split further out, until one of them is selected.
@@ -384,9 +391,10 @@ export function EditableEdge({
   const stemOpacity = isConnectedToSelection ? 1 : appearance.fadedOpacity;
   const showPulse = isTargetLoading && appearance.loadingPulse;
 
-  // Labels: only one the user typed sits on the noodle; the automatic type
-  // and image-order names stay on the toolbar and the hidden-connection stubs
-  const labelText = hasOwnLabel ? displayLabel : "";
+  // Labels: one the user typed sits on the noodle, and so does the item an
+  // Array connection carries; the automatic type and image-order names stay
+  // on the toolbar and the hidden-connection stubs
+  const labelText = hasOwnLabel ? displayLabel : arrayLabel ?? "";
   const showLabel = Boolean(labelText) || Boolean(edgeData?.isLoop);
 
   if (isHidden) {

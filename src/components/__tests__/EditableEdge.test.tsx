@@ -827,6 +827,43 @@ describe("EditableEdge labels", () => {
     expect(screen.getByTestId("edge-label-loop")).toHaveTextContent("4×");
   });
 
+  describe("from an Array node", () => {
+    const arrayNode = (data: Record<string, unknown>) => ({
+      id: "node-1", type: "array", position: { x: 0, y: 0 },
+      data: { outputItems: ["fox", "lighthouse", "koi"], selectedOutputIndex: null, batchMode: false, ...data },
+    });
+    const renderArray = (edgeData: Record<string, unknown>, nodeData: Record<string, unknown> = {}) => {
+      const edge = { id: "edge-1", source: "node-1", sourceHandle: "text", target: "node-2", targetHandle: "text", data: edgeData };
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ edges: [edge], nodes: [arrayNode(nodeData)] })));
+      return render(
+        <TestWrapper>
+          <EditableEdge {...createDefaultProps({ sourceHandleId: "text", targetHandleId: "text", data: edgeData })} />
+        </TestWrapper>
+      );
+    };
+
+    it("names the item the connection carries", () => {
+      renderArray({ arrayItemIndex: 4 });
+      expect(screen.getByTestId("edge-label")).toHaveTextContent("Item 2");
+    });
+
+    it("says All n in batch mode", () => {
+      renderArray({ arrayItemIndex: 1 }, { batchMode: true });
+      expect(screen.getByTestId("edge-label")).toHaveTextContent("All 3");
+    });
+
+    it("keeps a typed label over the item", () => {
+      renderArray({ arrayItemIndex: 1, label: "hero" });
+      expect(screen.getByTestId("edge-label")).toHaveTextContent("hero");
+    });
+
+    it("shows no label while the Array has no items", () => {
+      renderArray({ arrayItemIndex: 1 }, { outputItems: [] });
+      expect(screen.queryByTestId("edge-label")).toBeNull();
+    });
+  });
+
   it("offsets labels of parallel connections between the same nodes", () => {
     renderWith([
       { ...visibleEdge({ createdAt: 1, label: "first" }), id: "edge-0", targetHandle: "image-0" },
