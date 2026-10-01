@@ -1,4 +1,6 @@
-import type { ArrayNodeData, WorkflowEdge } from "@/types";
+import type { ArrayNodeData, WorkflowEdge, WorkflowNode } from "@/types";
+import { edgeGraphIndex, nodeGraphIndex } from "./graphIndex";
+import type { HandleLabelRow } from "./labels";
 
 /**
  * Which Array item each outgoing connection carries. An Array node has one
@@ -64,4 +66,24 @@ export function arrayEdgeLabel(edge: WorkflowEdge, data: ArraySource): string | 
   if (data.batchMode) return `All ${count}`;
   const index = arrayEdgeItemIndex(edge, count);
   return index === null ? null : `Item ${index + 1}`;
+}
+
+/**
+ * The item names that sit at the target ends of the visible Array connections
+ * into a node, as rows for the hidden-stub stack beside its handles. Matches
+ * when EditableEdge draws the name there: no typed label, not a loop, and the
+ * Array has items. Reads the edges through their index, so it stays cheap on
+ * every store update.
+ */
+export function arrayLabelRows(nodes: WorkflowNode[], edges: WorkflowEdge[], targetId: string): HandleLabelRow[] {
+  const candidates = edgeGraphIndex(edges).itemEdgesByTarget.get(targetId);
+  if (!candidates) return [];
+  const { byId } = nodeGraphIndex(nodes);
+  const rows: HandleLabelRow[] = [];
+  for (const edge of candidates) {
+    const source = byId.get(edge.source);
+    if (source?.type !== "array" || !arrayEdgeLabel(edge, source.data as ArrayNodeData)) continue;
+    rows.push({ edgeId: edge.id, handleId: edge.targetHandle ?? null, createdAt: edge.data?.createdAt || 0 });
+  }
+  return rows;
 }

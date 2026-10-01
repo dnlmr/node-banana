@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { WorkflowEdge } from "@/types";
+import type { WorkflowEdge, WorkflowNode } from "@/types";
 import {
   arrayEdgeItemIndex,
   arrayEdgeLabel,
   arrayItemWireCounts,
+  arrayLabelRows,
   arrayOutputEdges,
   nextArrayItemIndex,
 } from "../arrayItems";
@@ -74,5 +75,31 @@ describe("arrayEdgeLabel", () => {
   it("is null with no items, or no index outside batch mode", () => {
     expect(arrayEdgeLabel(edge("a", { arrayItemIndex: 1 }), { outputItems: [], selectedOutputIndex: null, batchMode: false })).toBeNull();
     expect(arrayEdgeLabel(edge("a"), { outputItems: items, selectedOutputIndex: null, batchMode: false })).toBeNull();
+  });
+});
+
+describe("arrayLabelRows", () => {
+  const nodes = (data: Record<string, unknown> = {}) =>
+    [
+      { id: "arr", type: "array", position: { x: 0, y: 0 }, data: { outputItems: items, selectedOutputIndex: null, batchMode: false, ...data } },
+      { id: "p", type: "prompt", position: { x: 0, y: 0 }, data: {} },
+    ] as unknown as WorkflowNode[];
+  const into = (id: string, data: Record<string, unknown>, source = "arr"): WorkflowEdge => ({
+    id, source, sourceHandle: "text", target: "gen", targetHandle: "text", data,
+  });
+
+  it("lists the Array connections whose name sits at this node", () => {
+    const edges = [into("a", { arrayItemIndex: 0, createdAt: 3 }), into("other", { arrayItemIndex: 0 }, "p")];
+    expect(arrayLabelRows(nodes(), edges, "gen")).toEqual([{ edgeId: "a", handleId: "text", createdAt: 3 }]);
+  });
+
+  it("skips hidden, named and loop connections, and an Array with no items", () => {
+    const edges = [
+      into("hidden", { arrayItemIndex: 0, hidden: true }),
+      into("named", { arrayItemIndex: 0, label: "hero" }),
+      into("loop", { arrayItemIndex: 0, isLoop: true }),
+    ];
+    expect(arrayLabelRows(nodes(), edges, "gen")).toEqual([]);
+    expect(arrayLabelRows(nodes({ outputItems: [] }), [into("a", { arrayItemIndex: 0 })], "gen")).toEqual([]);
   });
 });

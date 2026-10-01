@@ -850,8 +850,8 @@ describe("EditableEdge labels", () => {
 
     it("puts the item name at the target end of the noodle", () => {
       renderArray({ arrayItemIndex: 0 });
-      // Target handle at (300, 50) on the left: the pill's right edge sits 14px before it
-      expect(screen.getByTestId("edge-label").style.transform).toBe("translate(286px, 50px) translate(-100%, -50%)");
+      // Target handle at (300, 50) on the left: the pill's right edge lines up with the hidden stubs, 12px before it
+      expect(screen.getByTestId("edge-label").style.transform).toBe("translate(288px, 50px) translate(-100%, -50%)");
     });
 
     it("keeps a typed label at the midpoint", () => {

@@ -113,6 +113,17 @@ export function hiddenStubRole(
 }
 
 /**
+ * A pill that is not a hidden stub but sits in the same column beside a
+ * handle (an Array connection's item name at its target end), so it stacks
+ * with the stubs instead of landing on one.
+ */
+export interface HandleLabelRow {
+  edgeId: string;
+  handleId: string | null;
+  createdAt: number;
+}
+
+/**
  * Where each hidden stub on one side of a node should sit, so the pills never
  * overlap. A handle with several hidden connections takes one row unless its
  * group is expanded. Stubs are ordered by their handle's y (then creation),
@@ -128,6 +139,7 @@ export function stackHiddenStubs(
   handleY: (handleId: string | null) => number | undefined,
   fallbackY = 0,
   expandedGroup: string | null = null,
+  labelRows: HandleLabelRow[] = [],
   spacing = HIDDEN_STUB_SPACING,
 ): Map<string, number> {
   const handleOf = (e: WorkflowEdge) => (side === "source" ? e.sourceHandle : e.targetHandle) ?? null;
@@ -146,6 +158,10 @@ export function stackHiddenStubs(
     } else {
       for (const id of group.members) rows.push({ ids: [id], key, y, rank, createdAt: byId.get(id)?.data?.createdAt || 0 });
     }
+  }
+  for (const row of labelRows) {
+    const key = stubGroupKey(nodeId, side, row.handleId);
+    rows.push({ ids: [row.edgeId], key, y: handleY(row.handleId) ?? fallbackY, rank: 0, createdAt: row.createdAt });
   }
   // Handles at one height keep the order their first connection was made in
   const handleOrder = new Map<string, number>();
@@ -172,7 +188,7 @@ export function stackHiddenStubs(
   return placed;
 }
 
-/** How far below its handle a hidden edge's stub sits on the given side. */
+/** How far below its handle a hidden edge's stub (or a stacked label row) sits on the given side. */
 export function hiddenStubOffset(
   edgeId: string,
   edges: WorkflowEdge[],
@@ -180,11 +196,12 @@ export function hiddenStubOffset(
   handleY: (handleId: string | null) => number | undefined,
   ownY: number,
   expandedGroup: string | null = null,
+  labelRows: HandleLabelRow[] = [],
 ): number {
   const edge = edgeGraphIndex(edges).byId.get(edgeId);
   if (!edge) return 0;
   const nodeId = side === "source" ? edge.source : edge.target;
-  const y = stackHiddenStubs(edges, nodeId, side, handleY, ownY, expandedGroup).get(edgeId);
+  const y = stackHiddenStubs(edges, nodeId, side, handleY, ownY, expandedGroup, labelRows).get(edgeId);
   if (y === undefined) return 0;
   const own = handleY((side === "source" ? edge.sourceHandle : edge.targetHandle) ?? null) ?? ownY;
   return y - own;
