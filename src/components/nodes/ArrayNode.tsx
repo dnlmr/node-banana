@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CircleAlert, SlidersHorizontal, Split } from "lucide-react";
+import { ChevronRight, CircleAlert, SlidersHorizontal, Split } from "lucide-react";
 import { Node, NodeProps, useReactFlow } from "@xyflow/react";
 import { NodeShell } from "./NodeShell";
 import { LogicRow, LogicRows, PanelButton, SelectWell, cn, ellipsisClass, useLocalEdit, wellClass, type SocketSpec } from "./ui";
@@ -10,7 +10,7 @@ import { nodeGraphIndex } from "@/lib/edges/graphIndex";
 import { ArrayNodeData } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import { parseTextToArray } from "@/utils/arrayParser";
-import { arrayItemWireCounts, nextArrayItemIndex } from "@/lib/edges/arrayItems";
+import { arrayItemWireCounts } from "@/lib/edges/arrayItems";
 
 type ArrayNodeType = Node<ArrayNodeData, "array">;
 
@@ -109,6 +109,8 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
   const lastDerivedWriteRef = useRef<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showAllItems, setShowAllItems] = useState(false);
+  // The item shown in full; the others stay one truncated line
+  const [openItem, setOpenItem] = useState<number | null>(null);
 
   const hasIncomingTextConnection = useMemo(
     () =>
@@ -270,17 +272,14 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
     }
   }, [id, nodeData.selectedOutputIndex, previewItems.length, updateNodeData]);
 
+  // A new split closes the open item rather than opening whatever now sits at its index
+  useEffect(() => {
+    setOpenItem(null);
+  }, [parsed.items]);
+
   const itemTotal = previewItems.length;
   const batch = nodeData.batchMode;
   const wireCounts = useMemo(() => arrayItemWireCounts(id, itemTotal, edges), [edges, id, itemTotal]);
-  // The item the next new connection will take: the pinned one, or the next in turn
-  const nextIndex = useMemo(
-    () =>
-      itemTotal > 0
-        ? nextArrayItemIndex(id, { outputItems: previewItems, selectedOutputIndex: nodeData.selectedOutputIndex, batchMode: batch }, edges)
-        : null,
-    [batch, edges, id, itemTotal, nodeData.selectedOutputIndex, previewItems]
-  );
   const visibleItems = showAllItems ? previewItems : previewItems.slice(0, PREVIEW_ITEMS);
   const hiddenCount = itemTotal - visibleItems.length;
 
@@ -379,54 +378,41 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
             ) : (
               <div className={cn("py-1", showAllItems && "max-h-[240px] overflow-y-auto nowheel")}>
                 {visibleItems.map((item, index) => {
-                  const number = <span className="w-3 shrink-0 text-right text-neutral-500 tabular-nums">{index + 1}</span>;
-                  const text = <span className={cn("flex-1 min-w-0", ellipsisClass)}>{item}</span>;
-                  const rowClass = "w-[calc(100%-0.5rem)] mx-1 my-0.5 rounded-[6px] squircle pl-1.5 pr-1 h-[22px] flex items-center gap-1.5 text-node text-left";
-                  if (batch) {
-                    return (
-                      <div key={`${index}-${item}`} className={cn(rowClass, "bg-neutral-800/60 text-neutral-300")}>
-                        {number}
-                        {text}
-                      </div>
-                    );
-                  }
-                  const pinned = nodeData.selectedOutputIndex === index;
-                  const wires = wireCounts.get(index) ?? 0;
-                  const isNext = nextIndex === index;
+                  const open = openItem === index;
+                  const wires = batch ? 0 : wireCounts.get(index) ?? 0;
                   return (
                     <button
                       key={`${index}-${item}`}
                       type="button"
-                      onClick={() => updateNodeData(id, { selectedOutputIndex: pinned ? null : index })}
-                      aria-pressed={pinned}
+                      onClick={() => setOpenItem(open ? null : index)}
+                      aria-expanded={open}
                       className={cn(
-                        "nodrag nopan transition-colors",
-                        rowClass,
-                        pinned
-                          ? "bg-blue-900/40 text-blue-200 ring-1 ring-blue-500/60"
-                          : "bg-neutral-800/60 text-neutral-300 hover:bg-neutral-700/60"
+                        "nodrag nopan w-[calc(100%-0.5rem)] mx-1 my-0.5 rounded-[6px] squircle pl-1.5 pr-1 flex gap-1.5 text-node text-left transition-colors",
+                        open ? "items-start py-[4px] bg-neutral-700/60 text-neutral-100" : "items-center h-[22px] bg-neutral-800/60 text-neutral-300 hover:bg-neutral-700/60"
                       )}
-                      title={pinned ? "The next connection takes this item (click to unpin)" : "Pin: the next connection takes this item"}
+                      title={open ? "Collapse" : "Show the full text"}
                     >
-                      {number}
-                      {text}
+                      <span className="w-3 shrink-0 text-right text-neutral-500 tabular-nums">{index + 1}</span>
+                      {open ? (
+                        <span className="flex-1 min-w-0 max-h-[160px] overflow-y-auto nowheel whitespace-pre-wrap break-words" data-testid="array-item-full">
+                          {item}
+                        </span>
+                      ) : (
+                        <span className={cn("flex-1 min-w-0", ellipsisClass)}>{item}</span>
+                      )}
                       {wires > 0 && (
                         <span
-                          className="shrink-0 w-1.5 h-1.5 mx-1 rounded-full bg-handle-text"
+                          className={cn("shrink-0 w-1.5 h-1.5 mx-0.5 rounded-full bg-handle-text", open && "mt-[4px]")}
                           title={wires === 1 ? "On 1 connection" : `On ${wires} connections`}
                           data-testid="array-item-wired"
                         />
                       )}
-                      {isNext && (
-                        <span
-                          className={cn(
-                            "shrink-0 h-4 px-1.5 flex items-center rounded-[5px] squircle",
-                            pinned ? "bg-blue-500/20 text-blue-200" : "bg-white/[0.06] text-neutral-400"
-                          )}
-                        >
-                          next
-                        </span>
-                      )}
+                      <ChevronRight
+                        size={12}
+                        strokeWidth={2}
+                        className={cn("shrink-0 text-neutral-500 transition-transform", open && "rotate-90 mt-px")}
+                        aria-hidden
+                      />
                     </button>
                   );
                 })}

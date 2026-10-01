@@ -88,32 +88,43 @@ describe("ArrayNode", () => {
     expect(screen.getByRole("button", { name: /Make Prompts/ })).toBeDisabled();
   });
 
-  it("previews the first five items and marks the wired ones and the next", () => {
+  it("previews the first five items and marks the wired ones", () => {
     setup(nodeData({ inputText: ITEMS.join("*"), outputItems: ITEMS }), [incoming, outgoing(0), outgoing(1)]);
     const list = screen.getByTestId("array-items");
     expect(screen.getByTestId("array-item-count")).toHaveTextContent("7 items");
     expect(within(list).getByText("greenhouse")).toBeInTheDocument();
     expect(within(list).queryByText("market")).toBeNull();
     expect(within(list).getAllByTestId("array-item-wired")).toHaveLength(2);
-    expect(within(list).getByText("koi").closest("button")).toHaveTextContent("next");
+    expect(within(list).queryByText("next")).toBeNull();
 
     fireEvent.click(within(list).getByText("2 more"));
     expect(within(list).getByText("harbour")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Make 7 Prompts/ })).toBeEnabled();
   });
 
-  it("pins an item for the next connection", () => {
-    setup(nodeData({ inputText: ITEMS.join("*"), outputItems: ITEMS }), [incoming]);
-    fireEvent.click(screen.getByText("motel"));
-    expect(mockUpdateNodeData).toHaveBeenCalledWith(NODE_ID, { selectedOutputIndex: 3 });
+  it("opens an item to show its full text, and closes it again", () => {
+    const long = "a desert motel at noon, film grain, wide shot, sun bleached sign, two cars parked out front";
+    const items = ["fox", long];
+    setup(nodeData({ inputText: items.join("*"), outputItems: items }), [incoming]);
+    expect(screen.queryByTestId("array-item-full")).toBeNull();
+
+    const row = screen.getByText(long).closest("button")!;
+    fireEvent.click(row);
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("array-item-full")).toHaveTextContent(long);
+    // Opening an item never changes which item a connection takes
+    expect(mockUpdateNodeData).not.toHaveBeenCalledWith(NODE_ID, expect.objectContaining({ selectedOutputIndex: expect.anything() }));
+
+    fireEvent.click(row);
+    expect(screen.queryByTestId("array-item-full")).toBeNull();
   });
 
   it("explains batch mode and drops the Prompt action", () => {
-    setup(nodeData({ inputText: ITEMS.join("*"), outputItems: ITEMS, batchMode: true }), [incoming]);
+    setup(nodeData({ inputText: ITEMS.join("*"), outputItems: ITEMS, batchMode: true }), [incoming, outgoing(0)]);
     expect(screen.getByRole("switch")).toBeChecked();
     expect(screen.getByText("Each connected Generate or LLM node runs 7 times, once per item.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Make/ })).toBeNull();
-    expect(screen.queryByText("next")).toBeNull();
+    expect(screen.queryByTestId("array-item-wired")).toBeNull();
   });
 
   it("shows a parse error in the list", () => {
