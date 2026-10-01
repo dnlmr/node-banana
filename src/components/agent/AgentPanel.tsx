@@ -403,6 +403,16 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
     chat.retry();
     focusInput();
   }, [chat, focusInput]);
+  // A queued message goes back into the box to be edited (after anything already typed there).
+  const editQueued = useCallback(
+    (id: string) => {
+      const text = chat.takeQueued(id);
+      if (text === undefined) return;
+      setDraft((current) => (current.trim() ? `${current}\n${text}` : text));
+      focusInput();
+    },
+    [chat, focusInput],
+  );
   const dismissError = useCallback(() => {
     chat.clearError();
     focusInput();
@@ -575,6 +585,11 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
             textareaRef={textareaRef}
             draft={draft}
             onDraftChange={setDraft}
+            queued={chat.queued}
+            queueHeld={chat.queueHeld}
+            onEditQueued={editQueued}
+            onRemoveQueued={chat.removeQueued}
+            onSendQueuedNow={chat.sendQueuedNow}
           />
         ) : (
           hasMessages && signInCard("inline")

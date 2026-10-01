@@ -237,3 +237,225 @@ describe("useAgentChat: provider keys", () => {
     }
   });
 });
+
+describe("useAgentChat: messages sent while a turn runs are queued", () => {
+  /** Every request gets its own stream; turn n is streams[n]. */
+  function fakeTurns() {
+    const streams: ReturnType<typeof controlledStream>[] = [];
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const stream = controlledStream();
+        if (init.signal) stream.abortWith(init.signal);
+        streams.push(stream);
+        bodies.push(String(init.body));
+        return stream.response;
+      }),
+    );
+    return { streams, bodies };
+  }
+
+  function renderChat(harness: "claude" | "codex" = "claude") {
+    return renderHook(
+      ({ harness: current }) =>
+        useAgentChat({ harness: current, getViewport: () => ({ x: 0, y: 0, width: 800, height: 600, zoom: 1 }) }),
+      { initialProps: { harness } },
+    );
+  }
+
+  /** Sends the first message and waits until its turn is streaming. */
+  async function busyChat(harness: "claude" | "codex" = "claude") {
+    const turns = fakeTurns();
+    const hook = renderChat(harness);
+    act(() => {
+      hook.result.current.send("first");
+    });
+    await waitFor(() => expect(turns.streams).toHaveLength(1));
+    turns.streams[0].push({ type: "start", messageId: "assistant-1" });
+    await waitFor(() => expect(hook.result.current.busy).toBe(true));
+    return { ...hook, ...turns };
+  }
+
+  async function finishTurn(stream: ReturnType<typeof controlledStream>) {
+    await act(async () => {
+      stream.push({ type: "finish" });
+      stream.end();
+      await sleep(20);
+    });
+  }
+
+  beforeEach(async () => {
+    toastShow.mockClear();
+    useWorkflowStore.getState().clearWorkflow();
+    await act(() => useWorkflowStore.getState().loadWorkflow(workflow("wf-A", "A", "a cat")));
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("queues instead of sending, and still clears the composer", async () => {
+    const { result, streams } = await busyChat();
+
+    let accepted = false;
+    act(() => {
+      accepted = result.current.send("  then make it blue  ");
+    });
+
+    expect(accepted).toBe(true);
+    expect(result.current.queued.map((entry) => entry.text)).toEqual(["then make it blue"]);
+    await sleep(20);
+    expect(streams).toHaveLength(1);
+    expect(result.current.send("   ")).toBe(false);
+    streams[0].end();
+  });
+
+  it("sends queued messages one turn at a time once each turn ends normally", async () => {
+    const { result, streams, bodies } = await busyChat();
+    act(() => {
+      result.current.send("second");
+    });
+    act(() => {
+      result.current.send("third");
+    });
+
+    await finishTurn(streams[0]);
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(bodies[1]).toContain('"second"');
+    expect(result.current.queued.map((entry) => entry.text)).toEqual(["third"]);
+
+    // The second turn is running: the third waits for it.
+    streams[1].push({ type: "start", messageId: "assistant-2" });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+    await sleep(20);
+    expect(streams).toHaveLength(2);
+
+    await finishTurn(streams[1]);
+    await waitFor(() => expect(streams).toHaveLength(3));
+    expect(bodies[2]).toContain('"third"');
+    expect(result.current.queued).toEqual([]);
+    streams[2].end();
+  });
+
+  it("holds the queue after Stop until the user sends it", async () => {
+    const { result, streams, bodies } = await busyChat();
+    act(() => {
+      result.current.send("second");
+    });
+
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    await waitFor(() => expect(result.current.queueHeld).toBe(true));
+    await sleep(20);
+    expect(streams).toHaveLength(1);
+    expect(result.current.queued.map((entry) => entry.text)).toEqual(["second"]);
+
+    act(() => result.current.sendQueuedNow());
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(bodies[1]).toContain('"second"');
+    expect(result.current.queued).toEqual([]);
+    expect(result.current.queueHeld).toBe(false);
+    streams[1].end();
+  });
+
+  it("holds the queue after a failed turn", async () => {
+    const turns = fakeTurns();
+    // The first turn fails, answered only once the second message is queued.
+    let fail!: () => void;
+    vi.mocked(fetch).mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (fail = () => resolve(new Response("boom", { status: 500 })))),
+    );
+    const { result } = renderChat();
+    act(() => {
+      result.current.send("first");
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+    act(() => {
+      result.current.send("second");
+    });
+    act(() => fail());
+
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    await waitFor(() => expect(result.current.queueHeld).toBe(true));
+    await sleep(20);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.sendQueuedNow());
+    await waitFor(() => expect(turns.streams).toHaveLength(1));
+    expect(turns.bodies[0]).toContain('"second"');
+    turns.streams[0].end();
+  });
+
+  it("takeQueued hands back the text and removeQueued drops a message", async () => {
+    const { result, streams } = await busyChat();
+    act(() => {
+      result.current.send("second");
+    });
+    act(() => {
+      result.current.send("third");
+    });
+    const [second, third] = result.current.queued;
+
+    let taken: string | undefined;
+    act(() => {
+      taken = result.current.takeQueued(second.id);
+    });
+    expect(taken).toBe("second");
+    act(() => result.current.removeQueued(third.id));
+    expect(result.current.queued).toEqual([]);
+
+    // Nothing is left to follow the turn.
+    await finishTurn(streams[0]);
+    await sleep(20);
+    expect(streams).toHaveLength(1);
+  });
+
+  it("clears the queue on New chat", async () => {
+    const { result, streams } = await busyChat();
+    act(() => {
+      result.current.send("second");
+    });
+    act(() => result.current.newChat());
+    expect(result.current.queued).toEqual([]);
+    await sleep(20);
+    expect(streams).toHaveLength(1);
+  });
+
+  it("clears the queue when another conversation is opened", async () => {
+    const { result } = await busyChat();
+    act(() => {
+      result.current.send("second");
+    });
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.queueHeld).toBe(true));
+
+    act(() => result.current.openConversation({ id: "older", messages: [] }));
+    expect(result.current.queued).toEqual([]);
+    expect(result.current.queueHeld).toBe(false);
+  });
+
+  it("clears the queue when another workflow is opened", async () => {
+    const { result, streams } = await busyChat();
+    act(() => {
+      result.current.send("second");
+    });
+    await act(() => useWorkflowStore.getState().loadWorkflow(workflow("wf-B", "B", "a mountain lake")));
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    expect(result.current.queued).toEqual([]);
+    expect(result.current.queueHeld).toBe(false);
+    await sleep(20);
+    expect(streams).toHaveLength(1);
+  });
+
+  it("clears the queue on a harness switch and says so", async () => {
+    const { result, rerender } = await busyChat();
+    act(() => {
+      result.current.send("second");
+    });
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.queueHeld).toBe(true));
+
+    rerender({ harness: "codex" });
+    expect(result.current.queued).toEqual([]);
+    expect(toastShow).toHaveBeenCalledWith("Cleared the queued message: switched to Codex", "info");
+  });
+});

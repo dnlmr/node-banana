@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TooltipProvider } from "@/components/agent/ui/tooltip";
 import { AgentComposer, type AgentComposerProps } from "@/components/agent/AgentComposer";
 
@@ -64,16 +64,73 @@ describe("AgentComposer", () => {
     expect(textarea.value).toBe("hello");
   });
 
-  it("while a turn runs, Enter does nothing and the button stops it", async () => {
+  it("while a turn runs, Enter queues the message and the button stops the turn", async () => {
     const { textarea, onSend, onStop } = renderComposer({ busy: true, status: "streaming" });
+    expect(textarea.placeholder).toBe("Queue a message…");
     fireEvent.change(textarea, { target: { value: "next question" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(onSend).not.toHaveBeenCalled();
-    expect(textarea.value).toBe("next question");
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("next question"));
+    await waitFor(() => expect(textarea.value).toBe(""));
+    expect(onStop).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("while a turn runs, Shift+Enter still breaks the line", async () => {
+    const { textarea, onSend } = renderComposer({ busy: true, status: "streaming" });
+    fireEvent.change(textarea, { target: { value: "line one" } });
+    expect(fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true })).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("lists queued messages with edit and remove", () => {
+    const onEditQueued = vi.fn();
+    const onRemoveQueued = vi.fn();
+    renderComposer({
+      busy: true,
+      status: "streaming",
+      queued: [
+        { id: "q1", text: "make it blue" },
+        { id: "q2", text: "then add an upscaler" },
+      ],
+      onEditQueued,
+      onRemoveQueued,
+      onSendQueuedNow: vi.fn(),
+    });
+    const strip = screen.getByRole("region", { name: "Queued messages (2)" });
+    expect(within(strip).getAllByRole("listitem")).toHaveLength(2);
+    expect(strip).toHaveTextContent("make it blue");
+    // Only a held queue offers "Send now".
+    expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message: make it blue" }));
+    expect(onEditQueued).toHaveBeenCalledWith("q1");
+    fireEvent.click(screen.getByRole("button", { name: "Remove queued message: then add an upscaler" }));
+    expect(onRemoveQueued).toHaveBeenCalledWith("q2");
+  });
+
+  it("offers Send now on the first queued message once the queue is held", () => {
+    const onSendQueuedNow = vi.fn();
+    renderComposer({
+      queued: [
+        { id: "q1", text: "make it blue" },
+        { id: "q2", text: "then add an upscaler" },
+      ],
+      queueHeld: true,
+      onSendQueuedNow,
+    });
+    expect(screen.getByRole("region", { name: "Queued messages (2)" })).toHaveTextContent("Paused · these wait for you");
+    const sendNow = screen.getAllByRole("button", { name: "Send now" });
+    expect(sendNow).toHaveLength(1);
+    fireEvent.click(sendNow[0]);
+    expect(onSendQueuedNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no queue strip when nothing is queued", () => {
+    renderComposer({ busy: true, status: "streaming" });
+    expect(screen.queryByRole("region", { name: /Queued messages/ })).not.toBeInTheDocument();
   });
 
   it("shows context notes beside send", () => {

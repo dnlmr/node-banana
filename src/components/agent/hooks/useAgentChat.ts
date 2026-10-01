@@ -7,6 +7,7 @@ import { useWorkflowStore } from "@/store/workflowStore";
 import { useToast } from "@/components/Toast";
 import { AGENT_CHAT_API } from "@/lib/agent/client/api";
 import { countRenderedParts } from "@/lib/agent/client/messages";
+import { HARNESS_LABELS } from "@/lib/agent/client/readiness";
 import { agentProviderHeaders, buildAgentChatRequestBody, whenProviderKeysReady } from "@/lib/agent/client/request";
 import type {
   AgentDataParts,
@@ -22,6 +23,12 @@ export interface AgentStatusLine {
   text: string;
   /** Rendered parts of the reply when the line arrived; it hides once more appear. */
   renderedParts: number;
+}
+
+/** A message typed while a turn ran, waiting to go as the next turn. */
+export interface AgentQueuedMessage {
+  id: string;
+  text: string;
 }
 
 export interface UseAgentChatOptions {
@@ -45,7 +52,20 @@ export interface UseAgentChatResult {
   statusLine: AgentStatusLine | null;
   /** Messages after which the user pressed stop. */
   stoppedMessageIds: ReadonlySet<string>;
+  /** Sends the message, or queues it while a turn runs. False only for an empty message. */
   send: (text: string) => boolean;
+  /** Messages waiting for the running turn to end, oldest first. Never persisted. */
+  queued: AgentQueuedMessage[];
+  /**
+   * The last turn was stopped or failed with messages still queued: they wait
+   * for the user (sendQueuedNow) instead of going on their own.
+   */
+  queueHeld: boolean;
+  removeQueued: (id: string) => void;
+  /** Removes a queued message and returns its text (to edit it in the composer). */
+  takeQueued: (id: string) => string | undefined;
+  /** Sends the first queued message now, and lets the rest follow it. */
+  sendQueuedNow: () => void;
   stop: () => void;
   retry: () => void;
   clearError: () => void;
@@ -57,7 +77,7 @@ export interface UseAgentChatResult {
 
 interface ChatCallbacks {
   onData: (part: AgentDataPart) => void;
-  onFinish: (event: { message: AgentUIMessage; messages: AgentUIMessage[]; isAbort: boolean }) => void;
+  onFinish: (event: { message: AgentUIMessage; messages: AgentUIMessage[]; isAbort: boolean; isError: boolean }) => void;
   onError: (error: Error) => void;
 }
 
@@ -87,6 +107,16 @@ export function useAgentChat({
 
   const [statusLine, setStatusLine] = useState<AgentStatusLine | null>(null);
   const [stoppedMessageIds, setStoppedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [queued, setQueued] = useState<AgentQueuedMessage[]>([]);
+  const queuedRef = useRef(queued);
+  queuedRef.current = queued;
+  const [queueHeld, setQueueHeld] = useState(false);
+  // Bumped by each turn that ends normally; the queue sends one message per bump.
+  // Decided in onFinish, which knows how the turn ended, and sent from an effect:
+  // the chat is still closing the turn while onFinish runs.
+  const [turnsFinished, setTurnsFinished] = useState(0);
+  const releasedTurnRef = useRef(0);
+  const queueIdRef = useRef(0);
   // The store's canvasGeneration the current turn was sent from.
   const turnGenerationRef = useRef(useWorkflowStore.getState().canvasGeneration);
 
@@ -198,8 +228,14 @@ export function useAgentChat({
           break;
       }
     },
-    onFinish: ({ message, messages: finished, isAbort }) => {
+    onFinish: ({ message, messages: finished, isAbort, isError }) => {
       setStatusLine(null);
+      if (isAbort || isError) {
+        // Whatever was queued no longer follows on its own: the user decides.
+        if (queuedRef.current.length > 0) setQueueHeld(true);
+      } else {
+        setTurnsFinished((count) => count + 1);
+      }
       if (!isAbort) return;
       // Stopped before any reply arrived: mark the user's message instead.
       const anchor = finished.some((m) => m.id === message.id) ? message.id : finished.at(-1)?.id;
@@ -226,16 +262,98 @@ export function useAgentChat({
     useToast.getState().show("Stopped the agent: a different workflow was opened", "warning");
   }, [busy, canvasGeneration, chat]);
 
+  const clearQueue = useCallback(() => {
+    setQueued([]);
+    setQueueHeld(false);
+  }, []);
+
+  // Queued messages were written about the canvas that was open: a new one drops them.
+  const queueGenerationRef = useRef(canvasGeneration);
+  useEffect(() => {
+    if (canvasGeneration === queueGenerationRef.current) return;
+    queueGenerationRef.current = canvasGeneration;
+    clearQueue();
+  }, [canvasGeneration, clearQueue]);
+
+  // Another harness picks up the conversation: the queue was for the old one.
+  const queueHarnessRef = useRef(harness);
+  useEffect(() => {
+    if (harness === queueHarnessRef.current) return;
+    queueHarnessRef.current = harness;
+    const count = queuedRef.current.length;
+    if (count === 0) return;
+    clearQueue();
+    useToast
+      .getState()
+      .show(
+        `Cleared ${count === 1 ? "the queued message" : `${count} queued messages`}: switched to ${HARNESS_LABELS[harness]}`,
+        "info",
+      );
+  }, [harness, clearQueue]);
+
+  const startTurn = useCallback(
+    (text: string) => {
+      beginTurn();
+      void sendMessage({ text });
+    },
+    [beginTurn, sendMessage],
+  );
+
   const send = useCallback(
     (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || busy) return false;
-      beginTurn();
-      void sendMessage({ text: trimmed });
+      if (!trimmed) return false;
+      if (busy) {
+        // The server refuses a second turn on a chat that has one running: wait for it.
+        // A hold left by an earlier stop belongs to messages that are gone.
+        if (queuedRef.current.length === 0) setQueueHeld(false);
+        queueIdRef.current += 1;
+        const entry = { id: `queued-${queueIdRef.current}`, text: trimmed };
+        setQueued((previous) => [...previous, entry]);
+        return true;
+      }
+      startTurn(trimmed);
       return true;
     },
-    [busy, beginTurn, sendMessage],
+    [busy, startTurn],
   );
+
+  // A turn ended normally: the next queued message goes, one per finished turn.
+  useEffect(() => {
+    if (busy || queueHeld || turnsFinished === releasedTurnRef.current) return;
+    releasedTurnRef.current = turnsFinished;
+    const [next, ...rest] = queued;
+    if (!next) return;
+    setQueued(rest);
+    startTurn(next.text);
+  }, [busy, queueHeld, turnsFinished, queued, startTurn]);
+
+  const removeQueued = useCallback((id: string) => {
+    setQueued((previous) => {
+      const rest = previous.filter((entry) => entry.id !== id);
+      if (rest.length === 0) setQueueHeld(false);
+      return rest;
+    });
+  }, []);
+
+  const takeQueued = useCallback(
+    (id: string) => {
+      const entry = queuedRef.current.find((candidate) => candidate.id === id);
+      if (entry) removeQueued(id);
+      return entry?.text;
+    },
+    [removeQueued],
+  );
+
+  const sendQueuedNow = useCallback(() => {
+    const [next, ...rest] = queuedRef.current;
+    if (busy || !next) return;
+    // A turn that ended while the queue was held must not send a second message beside this one.
+    releasedTurnRef.current = turnsFinished;
+    setQueueHeld(false);
+    setQueued(rest);
+    startTurn(next.text);
+  }, [busy, turnsFinished, startTurn]);
 
   const retry = useCallback(() => {
     if (busy) return;
@@ -245,20 +363,22 @@ export function useAgentChat({
 
   const newChat = useCallback(() => {
     if (busy) void chat.stop();
+    clearQueue();
     beginTurn();
     setStoppedMessageIds(new Set());
     setChat(createChat());
-  }, [busy, beginTurn, chat, createChat]);
+  }, [busy, beginTurn, chat, createChat, clearQueue]);
 
   /** Carry on a past conversation: its messages, and its chat id (the harness session resumes from them). */
   const openConversation = useCallback(
     (saved: { id: string; messages: AgentUIMessage[] }) => {
       if (busy) return;
+      clearQueue();
       beginTurn();
       setStoppedMessageIds(new Set());
       setChat(createChat(saved));
     },
-    [busy, beginTurn, createChat],
+    [busy, beginTurn, createChat, clearQueue],
   );
 
   // Leaving the canvas (unmount) must not leave a CLI turn running on the server.
@@ -272,6 +392,11 @@ export function useAgentChat({
     statusLine,
     stoppedMessageIds,
     send,
+    queued,
+    queueHeld: queueHeld && queued.length > 0,
+    removeQueued,
+    takeQueued,
+    sendQueuedNow,
     stop: () => void stop(),
     retry,
     clearError,

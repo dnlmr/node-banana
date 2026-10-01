@@ -60,6 +60,8 @@ function harnessStatus(id: "claude" | "codex", overrides: Partial<AgentHarnessSt
 let statuses: Record<"claude" | "codex", AgentHarnessStatus>;
 let chatBodies: Array<Record<string, unknown>>;
 let chatChunks: Array<Array<Record<string, unknown>>>;
+/** When set, the chat route answers only once it settles (the turn stays running). */
+let chatGate: Promise<void> | undefined;
 let signInResponse: Record<string, unknown>;
 /** Bodies the panel posted to /api/agent/sign-in, in order. */
 let signInBodies: Array<Record<string, unknown>>;
@@ -88,6 +90,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   }
   if (url === "/api/agent/chat") {
     chatBodies.push(JSON.parse(String(init?.body)));
+    const gate = chatGate;
+    chatGate = undefined;
+    if (gate) await gate;
     return sse(chatChunks.shift() ?? []);
   }
   throw new Error(`unexpected fetch ${url}`);
@@ -157,6 +162,7 @@ describe("AgentPanel", () => {
     statuses = { claude: harnessStatus("claude"), codex: harnessStatus("codex") };
     chatBodies = [];
     chatChunks = [];
+    chatGate = undefined;
     signInResponse = { state: "pending" };
     signInBodies = [];
     onSignInStarted = undefined;
@@ -532,6 +538,54 @@ describe("AgentPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(screen.queryByText("First reply.")).not.toBeInTheDocument();
     expect(screen.getByText("What should we build?")).toBeInTheDocument();
+  });
+
+  it("queues a message typed while a turn runs, edits one back into the box, and sends the rest next", async () => {
+    let answer!: () => void;
+    chatGate = new Promise((resolve) => (answer = resolve));
+    chatChunks.push(replyChunks({ text: "First reply." }));
+    chatChunks.push(replyChunks({ text: "Third reply." }));
+    renderPanel();
+    const textarea = await waitForComposer();
+
+    fireEvent.change(textarea, { target: { value: "first" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await screen.findByRole("button", { name: "Stop" });
+    expect(textarea.placeholder).toBe("Queue a message…");
+
+    for (const text of ["second", "third"]) {
+      fireEvent.change(textarea, { target: { value: text } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() => expect(textarea.value).toBe(""));
+    }
+    expect(screen.getByRole("region", { name: "Queued messages (2)" })).toBeInTheDocument();
+
+    // Edit: the message leaves the queue and joins what is already typed.
+    fireEvent.change(textarea, { target: { value: "also" } });
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message: second" }));
+    expect(textarea.value).toBe("also\nsecond");
+    expect(screen.getByRole("region", { name: "Queued messages (1)" })).toHaveTextContent("third");
+
+    // The running turn ends: the remaining message goes as the next turn.
+    answer();
+    expect(await screen.findByText("Third reply.")).toBeInTheDocument();
+    expect(chatBodies).toHaveLength(2);
+    expect(JSON.stringify(chatBodies[1])).toContain('"third"');
+    expect(screen.queryByRole("region", { name: /Queued messages/ })).not.toBeInTheDocument();
+    expect(textarea.value).toBe("also\nsecond");
+  });
+
+  it("doesn't label a finished reply with its model", async () => {
+    const [start, ...rest] = replyChunks({ text: "All set." });
+    chatChunks.push([{ ...start, messageMetadata: { harness: "claude", modelLabel: "Sonnet 4.5" } }, ...rest]);
+    renderPanel();
+    const textarea = await waitForComposer();
+    fireEvent.change(textarea, { target: { value: "hi" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await screen.findByText("All set.");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument());
+    expect(screen.queryByText("Sonnet 4.5")).not.toBeInTheDocument();
   });
 
   it("keeps typing away from canvas shortcuts on window", async () => {
