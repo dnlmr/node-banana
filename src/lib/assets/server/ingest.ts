@@ -386,6 +386,7 @@ export class Ingestor {
         workflowId: meta.workflowId,
         workflowName: meta.workflowName,
         runId: meta.runId,
+        ...(meta.batch ? { batch: meta.batch } : {}),
         tags: meta.tags ?? [],
         favorite: false,
         ...(unreadable ? { unreadable: true as const } : {}),

@@ -115,6 +115,15 @@ import type { SplitGridTemplate } from "@/types";
 import { evaluateRule } from "./utils/ruleEvaluation";
 import { computeDimmedNodes } from "./utils/dimmingUtils";
 import {
+  batchTag,
+  clampRunCount,
+  newBatchId,
+  runBatchLoop,
+  type RunBatch,
+  type RunOutcome,
+  type RunScope,
+} from "./utils/runBatch";
+import {
   executeAnnotation,
   executeArray,
   executePrompt,
@@ -278,6 +287,8 @@ export interface WorkflowFile {
   edgeStyle: EdgeStyle;
   edgeAppearance?: EdgeAppearance;  // Optional: older files fall back to the user default
   groups?: Record<string, NodeGroup>;  // Optional for backward compatibility
+  /** Runs per press of Run ("Run 10×"); absent means one. */
+  runCount?: number;
 }
 
 // Clipboard data structure for copy/paste
@@ -421,6 +432,15 @@ export interface WorkflowStore {
   regenerateNode: (nodeId: string) => Promise<void>;
   executeSelectedNodes: (nodeIds: string[]) => Promise<void>;
   stopWorkflow: () => void;
+  /** Runs per press of Run, saved with the workflow (1–MAX_RUN_COUNT). */
+  runCount: number;
+  setRunCount: (count: number) => void;
+  /** The batch in progress, or null (a single run, or nothing running). */
+  batch: RunBatch | null;
+  /** Run `scope` runCount times, one run after another. */
+  runBatch: (scope: RunScope) => Promise<void>;
+  /** The Run button's Stop: mid-batch the first press lets this run finish, the second stops now. */
+  requestStop: () => void;
   mockTutorialExecution: () => Promise<void>;
   setMaxConcurrentCalls: (value: number) => void;
 
@@ -614,6 +634,10 @@ let deleteCheckpointActive = false;
 // into a single store update per animation frame
 let hoverRafId: number | null = null;
 
+// How the latest executeWorkflow / executeSelectedNodes went, for runBatch:
+// the serial moves when a run starts, `failed` is set when it ends in error.
+const lastRun = { serial: 0, failed: false };
+
 // Track pending save-generation syncs to ensure IDs are resolved before workflow save
 const pendingImageSyncs = new Map<string, Promise<void>>();
 
@@ -655,6 +679,7 @@ function openAssetRun(get: () => WorkflowStore): CurrentAssetRun | null {
     workflowName: state.workflowName,
     projectDir: state.saveDirectoryPath,
     startedAt: Date.now(),
+    ...(state.batch ? { batch: batchTag(state.batch) } : {}),
   };
   try {
     beginRun(run, captureGraph(state));
@@ -906,6 +931,7 @@ function applyTabSnapshot(
     isRunning: false,
     currentNodeIds: [],
     _abortController: null,
+    batch: null,
     workflowLoadCount: get().workflowLoadCount + 1,
     showQuickstart: false,
     // A different canvas: a running agent turn must not edit it
@@ -984,6 +1010,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   maxConcurrentCalls: loadConcurrencySetting(),  // Default 3, configurable 1-10
   _abortController: null,  // Internal: for cancellation
   _currentRun: null,
+  runCount: 1,
+  batch: null,
   globalImageHistory: [],
 
   // Auto-save initial state
@@ -2164,6 +2192,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     providerSettings: get().providerSettings,
     addIncurredCost: (cost: number) => get().addIncurredCost(cost),
     addToGlobalHistory: (item) => get().addToGlobalHistory(item),
+    batch: batchTag(get().batch),
     generationsPath: get().generationsPath,
     saveDirectoryPath: get().saveDirectoryPath,
     trackSaveGeneration: (key: string, promise: Promise<void>) => {
@@ -2238,6 +2267,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     };
     const assetRun = openAssetRun(get);
     set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController, _currentRun: assetRun });
+    lastRun.serial += 1;
+    lastRun.failed = false;
     // Nodes that had nothing to work with, named for the end-of-run summary
     const unreadyNodes: string[] = [];
 
@@ -2629,6 +2660,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('workflow.end', 'Workflow execution cancelled by user');
       } else {
+        lastRun.failed = true;
         logger.error('workflow.error', 'Workflow execution failed', {}, error instanceof Error ? error : undefined);
         // Show error toast for the failed node
         useToast.getState().show(
@@ -2651,7 +2683,58 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (controller) {
       controller.abort("user-cancelled");
     }
-    set({ isRunning: false, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: null });
+    set({ isRunning: false, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: null, batch: null });
+  },
+
+  setRunCount: (count: number) => {
+    const runCount = clampRunCount(count);
+    if (get().runCount === runCount) return;
+    set({ runCount, hasUnsavedChanges: true });
+  },
+
+  runBatch: async (scope: RunScope) => {
+    if (get().isRunning || get().batch) return;
+    const runOnce = async (): Promise<RunOutcome> => {
+      const serial = lastRun.serial;
+      if (scope.kind === "all") await get().executeWorkflow();
+      else if (scope.kind === "from") await get().executeWorkflow(scope.nodeId);
+      else await get().executeSelectedNodes(scope.nodeIds);
+      return { started: lastRun.serial !== serial, failed: lastRun.failed };
+    };
+    const count = clampRunCount(get().runCount);
+    if (count === 1) {
+      await runOnce();
+      return;
+    }
+    const id = newBatchId();
+    const canvasGeneration = get().canvasGeneration;
+    const ours = () => get().batch?.id === id;
+    set({ batch: { id, index: 1, count, stopping: false } });
+    try {
+      await runBatchLoop({
+        count,
+        setIndex: (index) => {
+          const batch = get().batch;
+          if (batch?.id === id && batch.index !== index) set({ batch: { ...batch, index } });
+        },
+        runOnce,
+        // A hard Stop clears the batch; a pause edge, or a canvas replaced
+        // under the batch, ends it too.
+        keepGoing: () =>
+          ours() && !get().batch?.stopping && !get().pausedAtNodeId && get().canvasGeneration === canvasGeneration,
+      });
+    } finally {
+      if (ours()) set({ batch: null });
+    }
+  },
+
+  requestStop: () => {
+    const batch = get().batch;
+    if (batch && !batch.stopping && batch.index < batch.count) {
+      set({ batch: { ...batch, stopping: true } });
+      return;
+    }
+    get().stopWorkflow();
   },
 
   mockTutorialExecution: async () => {
@@ -2924,6 +3007,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const abortController = new AbortController();
     const assetRun = openAssetRun(get);
     set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController, _currentRun: assetRun });
+    lastRun.serial += 1;
+    lastRun.failed = false;
 
     await logger.startSession();
     logger.info('node.execution', 'Executing selected nodes', {
@@ -3121,6 +3206,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('node.execution', 'Selected nodes execution cancelled by user');
       } else {
+        lastRun.failed = true;
         logger.error('node.error', 'Selected nodes execution failed', {}, error instanceof Error ? error : undefined);
         useToast.getState().show(
           `Execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -3135,7 +3221,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   saveWorkflow: (name?: string) => {
-    const { nodes, edges, edgeStyle, edgeAppearance, groups } = get();
+    const { nodes, edges, edgeStyle, edgeAppearance, groups, runCount } = get();
 
     const workflow: WorkflowFile = {
       version: 1,
@@ -3146,6 +3232,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       edgeStyle,
       edgeAppearance,
       groups: groups && Object.keys(groups).length > 0 ? groups : undefined,
+      ...(runCount > 1 ? { runCount } : {}),
     };
 
     const json = JSON.stringify(workflow, null, 2);
@@ -3293,6 +3380,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         ? normalizeEdgeAppearance(hydratedWorkflow.edgeAppearance)
         : getEdgeDefaults().appearance,
       groups: hydratedWorkflow.groups || {},
+      runCount: clampRunCount(hydratedWorkflow.runCount ?? 1),
+      batch: null,
       isRunning: false,
       currentNodeIds: [],
       // Restore workflow ID and paths from localStorage if available
@@ -3473,6 +3562,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       hookDrag: null,
       edgeStyle: getEdgeDefaults().edgeStyle,
       edgeAppearance: getEdgeDefaults().appearance,
+      runCount: 1,
+      batch: null,
       isRunning: false,
       currentNodeIds: [],
       pausedAtNodeId: null,
@@ -3510,8 +3601,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => {
+    const batch = batchTag(get().batch);
     const newItem: ImageHistoryItem = {
       ...item,
+      ...(batch && !item.batch ? { batch } : {}),
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
 
@@ -3627,6 +3720,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       edgeStyle,
       edgeAppearance,
       groups,
+      runCount,
       workflowId,
       workflowName,
       saveDirectoryPath,
@@ -3692,6 +3786,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const savedEdgeStyleSnapshot = edgeStyle;
       const savedEdgeAppearanceSnapshot = edgeAppearance;
       const savedGroupsSnapshot = groups;
+      const savedRunCountSnapshot = runCount;
       const savedWorkflowNameSnapshot = workflowName;
 
       let workflow: WorkflowFile = {
@@ -3705,6 +3800,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edgeStyle,
         edgeAppearance,
         groups: groups && Object.keys(groups).length > 0 ? groups : undefined,
+        ...(runCount > 1 ? { runCount } : {}),
       };
 
       // If external media storage is enabled, externalize media before saving
@@ -3739,6 +3835,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           fresh.edgeStyle !== savedEdgeStyleSnapshot ||
           fresh.edgeAppearance !== savedEdgeAppearanceSnapshot ||
           fresh.groups !== savedGroupsSnapshot ||
+          fresh.runCount !== savedRunCountSnapshot ||
           fresh.workflowName !== savedWorkflowNameSnapshot;
 
         // If we externalized media, update store nodes with the refs

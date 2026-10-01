@@ -11,6 +11,7 @@ import type {
   WorkflowNodeData,
   ProviderSettings,
   ImageHistoryItem,
+  RunBatchTag,
 } from "@/types";
 import type { ConnectedInputs } from "@/store/utils/connectedInputs";
 import type { AssetRunContext, RecordAssetInput, RecordedAssetHandle } from "@/lib/assets/types";
@@ -47,6 +48,8 @@ export interface NodeExecutionContext {
   providerSettings: ProviderSettings;
   addIncurredCost: (cost: number) => void;
   addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => void;
+  /** Set during a batch ("Run 10×"): which run this is. Goes on the node's carousel entries. */
+  batch?: RunBatchTag;
   generationsPath: string | null;
   saveDirectoryPath: string | null;
   trackSaveGeneration: (key: string, promise: Promise<void>) => void;

@@ -146,6 +146,18 @@ export interface AvailableVariable {
 }
 
 /**
+ * Which run of a batch ("Run 10×") an output came from. Absent on outputs of
+ * a single run.
+ */
+export interface RunBatchTag {
+  /** Shared by every run of one batch. */
+  id: string;
+  /** 1-based. */
+  index: number;
+  count: number;
+}
+
+/**
  * Image history item for tracking generated images
  */
 export interface ImageHistoryItem {
@@ -157,6 +169,7 @@ export interface ImageHistoryItem {
   aspectRatio: AspectRatio;
   /** A Gemini model, or a free-form producer name (e.g. a ComfyUI app). */
   model: ModelType | string;
+  batch?: RunBatchTag;
 }
 
 /**
@@ -171,6 +184,7 @@ export interface CarouselImageItem {
   prompt: string;
   aspectRatio: AspectRatio;
   model: ModelType | string;
+  batch?: RunBatchTag;
 }
 
 /**
@@ -183,6 +197,7 @@ export interface CarouselVideoItem {
   timestamp: number;
   prompt: string;
   model: string; // Model ID for video (not ModelType since external providers)
+  batch?: RunBatchTag;
 }
 
 /**
@@ -282,6 +297,7 @@ export interface CarouselAudioItem {
   timestamp: number;
   prompt: string;
   model: string; // Model ID for audio (not ModelType since external providers)
+  batch?: RunBatchTag;
 }
 
 /**

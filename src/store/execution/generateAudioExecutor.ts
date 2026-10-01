@@ -182,6 +182,7 @@ export async function executeGenerateAudio(
           timestamp,
           prompt: text || "",
           model: modelToUse.modelId || "",
+          ...(ctx.batch ? { batch: ctx.batch } : {}),
         };
         const updatedHistory = [newHistoryItem, ...(nodeData.audioHistory || [])].slice(0, 50);
 

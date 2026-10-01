@@ -143,4 +143,21 @@ describe("validateRecordMeta", () => {
     const now = Date.now();
     expect(validateRecordMeta({ ...valid, createdAt: 5 }, now).createdAt).toBe(now);
   });
+
+  it("keeps a batch tag that holds up and drops one that does not", () => {
+    const batch = { id: "batch-1", index: 3, count: 10 };
+    expect(validateRecordMeta({ ...valid, batch }).batch).toEqual(batch);
+    expect(validateRecordMeta({ ...valid, batch: { ...batch, index: 11 } }).batch).toBeUndefined();
+    expect(validateRecordMeta({ ...valid, batch: { ...batch, index: 0 } }).batch).toBeUndefined();
+    expect(validateRecordMeta({ ...valid, batch: { ...batch, count: 2.5 } }).batch).toBeUndefined();
+    expect(validateRecordMeta({ ...valid, batch: { index: 1, count: 2 } }).batch).toBeUndefined();
+    expect(validateRecordMeta({ ...valid, batch: "batch-1" }).batch).toBeUndefined();
+  });
+});
+
+describe("scrubRecord batch", () => {
+  it("keeps a sound batch tag and removes a broken one", () => {
+    expect(scrubRecord(baseRecord({ batch: { id: "b", index: 1, count: 2 } })).batch).toEqual({ id: "b", index: 1, count: 2 });
+    expect("batch" in scrubRecord(baseRecord({ batch: { id: "b", index: 4, count: 2 } }))).toBe(false);
+  });
 });
