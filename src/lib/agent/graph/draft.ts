@@ -46,6 +46,7 @@ import {
   type NodeHandle,
 } from "./handles";
 import {
+  alignNewNodes,
   arrangeWithGroups,
   boxesOverlap,
   fitGroupBox,
@@ -73,6 +74,8 @@ export interface DraftNode extends GraphNodeLike {
   content?: AgentSnapshotNode["content"];
   status?: string;
   error?: string | null;
+  /** The canvas has not measured the node: its height is an estimate, redone when its settings change. */
+  heightEstimated?: boolean;
 }
 
 export type DraftEdge = GraphEdgeLike;
@@ -210,6 +213,7 @@ export class GraphDraft {
         ...(node.content ? { content: { ...node.content } } : {}),
         ...(node.status ? { status: node.status } : {}),
         ...(node.error ? { error: node.error } : {}),
+        ...(node.heightEstimated ? { heightEstimated: true } : {}),
       });
     }
     this.edges = (Array.isArray(snapshot?.edges) ? snapshot.edges : [])
@@ -471,15 +475,15 @@ export class DraftTransaction {
     }
 
     const id = this.allocateId(type);
-    const size = { ...defaultNodeDimensions[type], height: estimatedNodeHeight(type) };
     const defaults = this.draft.options.createDefaultNodeData(type);
     const node: DraftNode = {
       id,
       type,
       position: { x: 0, y: 0 },
-      width: size.width,
-      height: size.height,
+      width: defaultNodeDimensions[type].width,
+      height: 0,
       data: agentView(type, defaults),
+      heightEstimated: true,
     };
     // Switch outputs and rules are handle ids: the browser must get the same
     // ones, so they are always sent. When the call supplies its own list the
@@ -488,6 +492,7 @@ export class DraftTransaction {
     if (type === "switch") opData.switches = hasSetting(input.settings, "switches") ? [] : this.freshSwitches();
     if (type === "conditionalSwitch") opData.rules = hasSetting(input.settings, "rules") ? [] : this.freshRules();
     node.data = agentView(type, { ...node.data, ...cloneJson(opData) });
+    estimateHeight(node);
 
     this.nodes.set(id, node);
     const op: AddNodeOp = { op: "addNode", id, nodeType: type, position: { x: 0, y: 0 }, data: opData };
@@ -1099,6 +1104,7 @@ export class DraftTransaction {
     const before = cloneNode(node);
     // Keep the draft's view of the node exactly what the next snapshot will show.
     node.data = agentView(node.type, { ...node.data, ...cloneJson(outcome.patch) });
+    estimateHeight(node);
     this.emitUpdate(node.id, outcome.patch);
     this.recordChanges(node.id, outcome);
     this.touched.add(node.id);
@@ -1361,6 +1367,21 @@ export class DraftTransaction {
       this.setGroupBox(id, box);
       this.settle.delete(id);
     }
+    // A loose node that joined nodes already on the canvas lines up with
+    // their columns and rows; those nodes stay put. Group blocks stay as laid out.
+    const inBlock = new Set(blocks.flatMap((g) => g.members));
+    const loose = new Set(toPlace.filter((id) => !inBlock.has(id)));
+    if (loose.size === 0) return;
+    const aligned = alignNewNodes({
+      place: [...loose].map((id) => nodeBox(this.nodes.get(id)!)),
+      fixed: [...this.nodes.values()].filter((n) => !loose.has(n.id)).map(nodeBox),
+      edges: this.edges.map(layoutEdge),
+      areas: this.groups
+        .map((g) => ({ box: groupBox(g), members: this.membersOf(g.id).map((n) => n.id) }))
+        .filter((a): a is { box: LayoutBox; members: string[] } => !!a.box)
+        .map((a) => ({ box: groupFootprint(a.box), members: a.members })),
+    });
+    for (const [id, position] of aligned) this.placeNode(id, position);
   }
 
   /**
@@ -1827,6 +1848,12 @@ function cloneGroup(group: DraftGroup): DraftGroup {
 /** `"Scene set" [group-ag1]`: how results and errors name a group. */
 export function groupLabel(group: DraftGroup): string {
   return `"${group.name}" [${group.id}]`;
+}
+
+/** An unmeasured node's height from its current settings (a model, an aspect ratio), as the snapshot estimates it. */
+function estimateHeight(node: DraftNode): void {
+  if (!node.heightEstimated) return;
+  node.height = estimatedNodeHeight(node.type, { data: node.data, width: node.width });
 }
 
 function nodeBox(node: DraftNode): LayoutBox {

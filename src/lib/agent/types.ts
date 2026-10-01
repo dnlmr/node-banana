@@ -320,6 +320,8 @@ export interface AgentSnapshotNode {
   position: { x: number; y: number };
   width: number;
   height: number;
+  /** The canvas has not measured the node yet: `height` is an estimate from its type and settings. */
+  heightEstimated?: true;
   /** data.customTitle */
   title?: string;
   groupId?: string;
