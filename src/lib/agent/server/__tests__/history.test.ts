@@ -36,6 +36,23 @@ describe("withConversationHistory", () => {
     expect(text).toMatch(/\(\d+ earlier messages omitted\.\)/);
   });
 
+  it("drops the agent's older replies before the user's messages, and keeps the order", () => {
+    const long = "x".repeat(100);
+    const history = [
+      { role: "user" as const, text: "Use Seedream for every image." },
+      { role: "assistant" as const, text: `reply 1 ${long}` },
+      { role: "user" as const, text: "Group them." },
+      { role: "assistant" as const, text: `reply 2 ${long}` },
+      { role: "user" as const, text: "Add a landscape branch." },
+      { role: "assistant" as const, text: `reply 3 ${long}` },
+    ];
+    const text = withConversationHistory(history, "p", 250);
+    expect(text).toContain(
+      "(2 earlier messages omitted.)\nUser: Use Seedream for every image.\n\nUser: Group them.\n\n" +
+        `User: Add a landscape branch.\n\nAssistant: reply 3 ${long}`,
+    );
+  });
+
   it("truncates a single message longer than the whole budget", () => {
     const text = withConversationHistory([{ role: "user", text: "y".repeat(1000) }], "p", 100);
     expect(text).toContain(`User: ${"y".repeat(94)}…`);

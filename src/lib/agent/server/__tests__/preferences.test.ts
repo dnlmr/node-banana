@@ -2,8 +2,7 @@
 /**
  * Preferences stated early in a chat must still reach the agent later in it.
  * Each case is one place a turn-1 preference used to fall out by turn 3
- * (docs/agent-memory-spike.md has the trace). `it.fails` marks a loss that
- * still happens.
+ * (docs/agent-memory-spike.md has the trace).
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -107,7 +106,7 @@ describe("a preference stated earlier in the chat", () => {
     expect(after.prompt).toContain("You are running on GPT B");
   });
 
-  it.fails("stays in the replay that seeds a new session, even when later turns fill the budget", () => {
+  it("stays in the replay that seeds a new session, even when later turns fill the budget", () => {
     const history = [
       { role: "user" as const, text: PREFERENCE },
       ...Array.from({ length: 12 }, (_, i) => ({
