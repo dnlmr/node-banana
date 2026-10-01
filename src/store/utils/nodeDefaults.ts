@@ -102,15 +102,28 @@ export function migrateNodeGeometry<T extends WorkflowNode>(node: T): T {
 }
 
 /**
- * Group color palette (dark mode tints).
+ * Group hues: the "Earth" set, one base colour per key. The keys are what
+ * saved workflows and the agent carry, so they stay as they are; only the
+ * hue behind each has changed. `src/utils/groupColors.ts` turns a hue into
+ * the group's fill and label colour.
  */
 export const GROUP_COLORS: Record<GroupColor, string> = {
-  neutral: "#262626",
-  blue: "#1e3a5f",
-  green: "#1a3d2e",
-  purple: "#2d2458",
-  orange: "#3d2a1a",
-  red: "#3d1a1a",
+  neutral: "#8a929c",
+  blue: "#4f9d93",
+  green: "#8fa34a",
+  purple: "#a66a8f",
+  orange: "#d08c34",
+  red: "#c4604f",
+};
+
+/** What the colour picker calls each key. */
+export const GROUP_COLOR_LABELS: Record<GroupColor, string> = {
+  neutral: "Slate",
+  blue: "Teal",
+  green: "Olive",
+  purple: "Plum",
+  orange: "Amber",
+  red: "Terracotta",
 };
 
 /**

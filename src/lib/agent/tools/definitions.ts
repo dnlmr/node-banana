@@ -54,7 +54,7 @@ const groupNameField = z.string().describe('What the group\'s nodes do, shown as
 const groupColorField = z
   .string()
   .optional()
-  .describe("Group colour: neutral, blue, green, purple, orange or red. Omit to take the next colour no group uses; give related groups different colours.");
+  .describe("Group colour key: neutral (slate), blue (teal), green (olive), purple (plum), orange (amber) or red (terracotta). Omit to take the next colour no group uses; give related groups different colours.");
 
 export const getWorkflowShape = {
   nodeIds: z.array(z.string()).optional().describe("Only these nodes and their connections. Omit for the whole canvas."),
