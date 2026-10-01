@@ -387,6 +387,7 @@ function buildMeta(assetId: string, input: RecordAssetInput, run: AssetRunContex
     projectDir: run.projectDir,
     runId: run.runId,
   };
+  if (run.batch) meta.batch = run.batch;
   if (mime) meta.mime = mime;
   if (input.prompt) meta.prompt = input.prompt;
   if (input.model) meta.model = input.model;

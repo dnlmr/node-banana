@@ -194,6 +194,7 @@ export async function executeGenerateVideo(
           timestamp,
           prompt: text || "",
           model: modelToUse.modelId || "",
+          ...(ctx.batch ? { batch: ctx.batch } : {}),
         };
         const updatedHistory = [newHistoryItem, ...(nodeData.videoHistory || [])].slice(0, 50);
 

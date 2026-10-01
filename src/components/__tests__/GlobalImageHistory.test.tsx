@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
-import { GlobalImageHistory } from "@/components/GlobalImageHistory";
+import { GlobalImageHistory, groupRecentByBatch } from "@/components/GlobalImageHistory";
 import { ImageHistoryItem } from "@/types";
 
 // Mock createPortal for sidebar rendering
@@ -245,6 +245,46 @@ describe("GlobalImageHistory", () => {
 
       const button = screen.getByTitle("2 images in history");
       expect(button).toBeInTheDocument();
+    });
+  });
+
+  describe("Batches", () => {
+    const batch = (index: number) => ({ id: "b1", index, count: 3 });
+
+    it("groups neighbouring outputs of one batch, and of no batch", () => {
+      const items = [
+        createHistoryItem({ id: "single-new" }),
+        createHistoryItem({ id: "r3", batch: batch(3), timestamp: 3000 }),
+        createHistoryItem({ id: "r2", batch: batch(2), timestamp: 2000 }),
+        createHistoryItem({ id: "r1", batch: batch(1), timestamp: 1000 }),
+        createHistoryItem({ id: "old-1" }),
+        createHistoryItem({ id: "old-2" }),
+      ];
+      const sections = groupRecentByBatch(items);
+      expect(sections.map((section) => section.items.map(({ item }) => item.id))).toEqual([
+        ["single-new"],
+        ["r3", "r2", "r1"],
+        ["old-1", "old-2"],
+      ]);
+      expect(sections[1].batch).toEqual({ count: 3, startedAt: 1000 });
+      expect(sections[0].batch).toBeUndefined();
+      // Indexes stay those of the whole list, which the viewer opens
+      expect(sections[2].items[0].index).toBe(4);
+    });
+
+    it("heads a batch in the drop-down and numbers each run", () => {
+      const history = [
+        createHistoryItem({ id: "r2", batch: batch(2) }),
+        createHistoryItem({ id: "r1", batch: batch(1) }),
+        createHistoryItem({ id: "old" }),
+      ];
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ globalImageHistory: history })));
+      render(<GlobalImageHistory />, { wrapper });
+      fireEvent.click(screen.getByRole("button"));
+      expect(screen.getByText("Batch · 3 runs")).toBeInTheDocument();
+      expect(screen.getByText("Earlier")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
     });
   });
 

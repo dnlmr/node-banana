@@ -69,6 +69,13 @@ export interface AssetCost {
   estimated: boolean;
 }
 
+/** Which run of a batch ("Run 10×") made an asset: the batch's id, the run (1-based) and the batch's size. */
+export interface AssetBatch {
+  id: string;
+  index: number;
+  count: number;
+}
+
 export interface AssetProducer {
   nodeId: string;
   nodeType: string;
@@ -117,6 +124,8 @@ export interface AssetRecord {
   /** The workflow's name when the asset was made; the workflows table has the current one. */
   workflowName: string | null;
   runId: string;
+  /** Set when the asset came from one run of a batch ("Run 10×"). */
+  batch?: AssetBatch;
   tags: string[];
   favorite: boolean;
   /** Set when the asset is in the in-app Trash. */
@@ -302,6 +311,7 @@ export interface RecordAssetMeta {
   /** The workflow's project folder, if it has one. The server writes into `<projectDir>/generations` (created if the project folder exists), else into the library. */
   projectDir?: string | null;
   runId: string;
+  batch?: AssetBatch;
   width?: number;
   height?: number;
   durationSec?: number;
@@ -650,6 +660,8 @@ export interface AssetRunContext {
   /** The workflow's project folder, or null. */
   projectDir: string | null;
   startedAt: number;
+  /** Set when the run is one of a batch ("Run 10×"). */
+  batch?: AssetBatch;
 }
 
 /** Returned synchronously so the id can go into node data with the output itself. */

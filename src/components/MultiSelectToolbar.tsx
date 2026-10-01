@@ -71,8 +71,9 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
   const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
   const createGroup = useWorkflowStore((state) => state.createGroup);
   const removeNodesFromGroup = useWorkflowStore((state) => state.removeNodesFromGroup);
-  const executeSelectedNodes = useWorkflowStore((state) => state.executeSelectedNodes);
+  const runBatch = useWorkflowStore((state) => state.runBatch);
   const isRunning = useWorkflowStore((state) => state.isRunning);
+  const runCount = useWorkflowStore((state) => state.runCount);
   const applyModelToNodes = useWorkflowStore((state) => state.applyModelToNodes);
   // One model for the whole selection, offered when every node is the same kind of generator
   const generateType = useMemo(() => sharedGenerateType(selectedNodes), [selectedNodes]);
@@ -244,9 +245,9 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
     >
       {/* Run just the selection */}
       <ToolbarButton
-        onClick={() => executeSelectedNodes(selectedNodes.map((node) => node.id))}
+        onClick={() => runBatch({ kind: "nodes", nodeIds: selectedNodes.map((node) => node.id) })}
         disabled={isRunning}
-        label="Run selected nodes"
+        label={runCount > 1 ? `Run selected nodes ${runCount}×` : "Run selected nodes"}
         shortcut="⌥↵"
       >
         <Play size={16} strokeWidth={0} fill="currentColor" />

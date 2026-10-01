@@ -111,6 +111,39 @@ const GridIcon = () => (
   <LayoutGrid size={14} strokeWidth={1.75} />
 );
 
+/** A run of the recent list: one batch's outputs, or outputs of single runs. */
+export interface RecentSection {
+  key: string;
+  /** Set for a batch's section. */
+  batch?: { count: number; startedAt: number };
+  /** Each item with its index in the full history (what the viewer opens). */
+  items: { item: ImageHistoryItem; index: number }[];
+}
+
+/**
+ * Splits the recent list (newest first) into sections: neighbours from the
+ * same batch share one, as do neighbours from no batch.
+ */
+export function groupRecentByBatch(items: ImageHistoryItem[]): RecentSection[] {
+  const sections: RecentSection[] = [];
+  items.forEach((item, index) => {
+    const batchId = item.batch?.id ?? null;
+    const last = sections[sections.length - 1];
+    const lastId = last?.batch ? last.key : null;
+    if (last && lastId === batchId) {
+      last.items.push({ item, index });
+      if (last.batch) last.batch.startedAt = Math.min(last.batch.startedAt, item.timestamp);
+      return;
+    }
+    sections.push({
+      key: batchId ?? `single-${index}`,
+      ...(item.batch ? { batch: { count: item.batch.count, startedAt: item.timestamp } } : {}),
+      items: [{ item, index }],
+    });
+  });
+  return sections;
+}
+
 /** One thumbnail in the drop-down grid: click to view, drag to place. */
 function RecentThumb({
   item,
@@ -131,7 +164,7 @@ function RecentThumb({
       onDragStart={(e) => onDragStart(e, item)}
       aria-label={`View ${item.prompt?.substring(0, 60) || `history image ${index + 1}`}`}
       className="group relative h-20 cursor-pointer overflow-hidden rounded-lg squircle bg-well shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)] transition-[box-shadow,transform] duration-[120ms] ease-out hover:shadow-[inset_0_0_0_2px_#3b82f6] hover:scale-[1.04] active:cursor-grabbing focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_2px_#3b82f6]"
-      title={`${formatRelativeTime(item.timestamp)} · ${describeProducer(item.model)}\n${item.prompt?.substring(0, 80) || "No prompt"}${item.generation ? `\n${generationDetails(item)}` : ""}`}
+      title={`${item.batch ? `Run ${item.batch.index} of ${item.batch.count} · ` : ""}${formatRelativeTime(item.timestamp)} · ${describeProducer(item.model)}\n${item.prompt?.substring(0, 80) || "No prompt"}${item.generation ? `\n${generationDetails(item)}` : ""}`}
     >
       <img
         src={item.image}
@@ -139,6 +172,14 @@ function RecentThumb({
         className="pointer-events-none h-full w-full object-cover"
         draggable={false}
       />
+      {item.batch && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-1 left-1 min-w-4 rounded-[4px] bg-neutral-950/80 px-1 text-center font-mono text-[10px] leading-4 tabular-nums text-neutral-200"
+        >
+          {item.batch.index}
+        </span>
+      )}
       <span
         aria-hidden="true"
         className="pointer-events-none absolute bottom-1 right-1 flex h-[22px] w-[22px] items-center justify-center rounded-md bg-neutral-950/80 text-white opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100 group-focus-visible:opacity-100"
@@ -341,7 +382,7 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({
     return () => window.clearTimeout(timer);
   }, [addedId]);
 
-  const recent = history.slice(0, RECENT_COUNT);
+  const recentSections = useMemo(() => groupRecentByBatch(history.slice(0, RECENT_COUNT)), [history]);
   const hasOverflow = history.length > RECENT_COUNT;
 
   // Close the drop-down on click outside (but not while the sidebar is up)
@@ -502,11 +543,25 @@ export const GlobalImageHistory = memo(function GlobalImageHistory({
               Clear list
             </button>
           </div>
-          <div className="grid grid-cols-4 gap-1">
-            {recent.map((item, index) => (
-              <RecentThumb key={item.id} item={item} index={index} onOpen={openViewer} onDragStart={handleDragStart} />
-            ))}
-          </div>
+          {recentSections.map((section, sectionIndex) => (
+            <div key={section.key} className="flex flex-col gap-1.5">
+              {section.batch ? (
+                <div className="flex items-center justify-between px-1.5 font-mono text-[10px] uppercase leading-[14px] tracking-eyebrow">
+                  <span className="text-neutral-300">Batch · {section.batch.count} runs</span>
+                  <span className="text-ink-3">
+                    {new Date(section.batch.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
+              ) : sectionIndex > 0 ? (
+                <span className="px-1.5 font-mono text-[10px] uppercase leading-[14px] tracking-eyebrow text-ink-3">Earlier</span>
+              ) : null}
+              <div className="grid grid-cols-4 gap-1">
+                {section.items.map(({ item, index }) => (
+                  <RecentThumb key={item.id} item={item} index={index} onOpen={openViewer} onDragStart={handleDragStart} />
+                ))}
+              </div>
+            </div>
+          ))}
           <span className="px-1.5 text-[10px] leading-[13px] text-neutral-500">Click to view · drag onto the canvas</span>
           <div className="flex gap-1">
             {hasOverflow && (

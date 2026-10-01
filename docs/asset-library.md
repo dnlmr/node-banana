@@ -83,6 +83,9 @@ to `/api/save-generation` for project workflows otherwise.
   easeCurve, videoFrameGrab, splitGrid cells, the annotation editor (Done
   with at least one shape), and canvas split-to-nodes. An edited output
   identical to the previous one is not recorded again.
+- A run that is one of a batch ("Run 10×") carries `batch` (`id`, `index`,
+  `count`) in its run context, and every asset it records keeps it in its
+  sidecar. The server drops a tag that does not hold up.
 
 ## Files nothing can read
 

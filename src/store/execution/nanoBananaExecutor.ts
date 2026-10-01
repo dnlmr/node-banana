@@ -252,6 +252,7 @@ export async function executeNanoBanana(
           aspectRatio: nodeData.aspectRatio,
           model: historyModel,
           ...(generation ? { generation } : {}),
+          ...(ctx.batch ? { batch: ctx.batch } : {}),
         };
         const updatedHistory = [newHistoryItem, ...(nodeData.imageHistory || [])].slice(0, 50);
 

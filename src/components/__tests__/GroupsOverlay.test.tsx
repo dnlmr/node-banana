@@ -27,16 +27,21 @@ const mockUpdateGroup = vi.fn();
 const mockDeleteGroup = vi.fn();
 const mockMoveGroupNodes = vi.fn();
 const mockToggleGroupLock = vi.fn();
+const mockRunBatch = vi.fn();
+const mockSetRunCount = vi.fn();
 const mockUseWorkflowStore = vi.fn();
+const mockGetState = vi.fn(() => ({ nodes: [] as { id: string; groupId?: string }[] }));
 
-vi.mock("@/store/workflowStore", () => ({
-  useWorkflowStore: (selector?: (state: unknown) => unknown) => {
+vi.mock("@/store/workflowStore", () => {
+  const useWorkflowStore = (selector?: (state: unknown) => unknown) => {
     if (selector) {
       return mockUseWorkflowStore(selector);
     }
     return mockUseWorkflowStore((s: unknown) => s);
-  },
-}));
+  };
+  useWorkflowStore.getState = () => mockGetState();
+  return { useWorkflowStore };
+});
 
 // Helper to create mock group
 const createMockGroup = (overrides: Partial<Group> = {}): Group => ({
@@ -56,6 +61,10 @@ const createDefaultState = (overrides: { groups?: Record<string, Group> } = {}) 
   deleteGroup: mockDeleteGroup,
   moveGroupNodes: mockMoveGroupNodes,
   toggleGroupLock: mockToggleGroupLock,
+  runCount: 1,
+  setRunCount: mockSetRunCount,
+  runBatch: mockRunBatch,
+  isRunning: false,
   ...overrides,
 });
 
@@ -496,6 +505,37 @@ describe("GroupControlsOverlay", () => {
       expect(row).toHaveAttribute("aria-checked", "true");
       fireEvent.click(row);
       expect(mockUpdateGroup).toHaveBeenCalledWith("group-1", { isNbpInput: false });
+    });
+  });
+
+  describe("Run group", () => {
+    it("runs the group's nodes as a batch of the workflow's run count", () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector({ ...createDefaultState({ groups: { "group-1": createMockGroup() } }), runCount: 4 })
+      );
+      mockGetState.mockReturnValue({
+        nodes: [{ id: "node-1", groupId: "group-1" }, { id: "node-2", groupId: "group-1" }, { id: "other" }],
+      });
+
+      render(<GroupControlsOverlay />);
+      fireEvent.click(screen.getByTitle("Group options"));
+      expect(screen.getByRole("group", { name: "Runs" })).toHaveTextContent("4");
+      fireEvent.click(screen.getByRole("button", { name: "More runs" }));
+      expect(mockSetRunCount).toHaveBeenCalledWith(5);
+
+      fireEvent.click(screen.getByText("Run group 4×"));
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "nodes", nodeIds: ["node-1", "node-2"] });
+    });
+
+    it("cannot run a locked group", () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ groups: { "group-1": createMockGroup({ locked: true }) } }))
+      );
+      render(<GroupControlsOverlay />);
+      fireEvent.click(screen.getByTitle("Group options"));
+      const row = screen.getByText("Run group").closest("button")!;
+      expect(row).toBeDisabled();
+      expect(row).toHaveAttribute("title", "Unlock the group to run it");
     });
   });
 

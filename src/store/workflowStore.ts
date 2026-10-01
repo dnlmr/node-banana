@@ -115,6 +115,15 @@ import type { SplitGridTemplate } from "@/types";
 import { evaluateRule } from "./utils/ruleEvaluation";
 import { computeDimmedNodes } from "./utils/dimmingUtils";
 import {
+  batchTag,
+  clampRunCount,
+  newBatchId,
+  runBatchLoop,
+  type RunBatch,
+  type RunOutcome,
+  type RunScope,
+} from "./utils/runBatch";
+import {
   executeAnnotation,
   executeArray,
   executePrompt,
@@ -278,6 +287,8 @@ export interface WorkflowFile {
   edgeStyle: EdgeStyle;
   edgeAppearance?: EdgeAppearance;  // Optional: older files fall back to the user default
   groups?: Record<string, NodeGroup>;  // Optional for backward compatibility
+  /** Runs per press of Run ("Run 10×"); absent means one. */
+  runCount?: number;
 }
 
 // Clipboard data structure for copy/paste
@@ -418,11 +429,21 @@ export interface WorkflowStore {
   _abortController: AbortController | null;  // Internal: for cancellation
   /** Internal: the run the asset library is recording, set with `_abortController`; null when it is not recording. */
   _currentRun: CurrentAssetRun | null;
-  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal) => NodeExecutionContext;
+  /** `assetRun`: the asset library run to record under (a single node's own run); defaults to `_currentRun`. */
+  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null) => NodeExecutionContext;
   executeWorkflow: (startFromNodeId?: string) => Promise<void>;
   regenerateNode: (nodeId: string) => Promise<void>;
   executeSelectedNodes: (nodeIds: string[]) => Promise<void>;
   stopWorkflow: () => void;
+  /** Runs per press of Run, saved with the workflow (1–MAX_RUN_COUNT). */
+  runCount: number;
+  setRunCount: (count: number) => void;
+  /** The batch in progress, or null (a single run, or nothing running). */
+  batch: RunBatch | null;
+  /** Run `scope` runCount times, one run after another. */
+  runBatch: (scope: RunScope) => Promise<void>;
+  /** The Run button's Stop: mid-batch the first press lets this run finish, the second stops now. */
+  requestStop: () => void;
   mockTutorialExecution: () => Promise<void>;
   setMaxConcurrentCalls: (value: number) => void;
 
@@ -616,6 +637,25 @@ let deleteCheckpointActive = false;
 // into a single store update per animation frame
 let hoverRafId: number | null = null;
 
+// Single-node runs (a node's own Run button) in flight, by node. Several can
+// run at once, each with its own abort and asset library run; `isRunning`
+// stays set until the last one ends. A workflow or selection run still holds
+// the canvas on its own.
+const nodeRuns = new Map<string, { controller: AbortController; assetRun: CurrentAssetRun | null }>();
+
+/** Aborts every single-node run and closes its asset run (Stop, load, clear, tab switch, disconnect). */
+function abortNodeRuns(state: WorkflowStore, reason: string): void {
+  for (const { controller, assetRun } of nodeRuns.values()) {
+    controller.abort(reason);
+    if (assetRun) closeAssetRun(assetRun, state);
+  }
+  nodeRuns.clear();
+}
+
+// How the latest executeWorkflow / executeSelectedNodes went, for runBatch:
+// the serial moves when a run starts, `failed` is set when it ends in error.
+const lastRun = { serial: 0, failed: false };
+
 // Track pending save-generation syncs to ensure IDs are resolved before workflow save
 const pendingImageSyncs = new Map<string, Promise<void>>();
 
@@ -657,6 +697,7 @@ function openAssetRun(get: () => WorkflowStore): CurrentAssetRun | null {
     workflowName: state.workflowName,
     projectDir: state.saveDirectoryPath,
     startedAt: Date.now(),
+    ...(state.batch ? { batch: batchTag(state.batch) } : {}),
   };
   try {
     beginRun(run, captureGraph(state));
@@ -899,6 +940,7 @@ function applyTabSnapshot(
 ): void {
   const inflight = get()._abortController;
   if (inflight) inflight.abort("workflow-switched");
+  abortNodeRuns(get(), "workflow-switched");
   syncIdCounters(snapshot.nodes, snapshot.groups);
   set({
     ...snapshot,
@@ -908,6 +950,7 @@ function applyTabSnapshot(
     isRunning: false,
     currentNodeIds: [],
     _abortController: null,
+    batch: null,
     workflowLoadCount: get().workflowLoadCount + 1,
     showQuickstart: false,
     // A different canvas: a running agent turn must not edit it
@@ -940,7 +983,10 @@ const initialTabId = createTabId();
 const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   setDesktopConnected: (online) => {
     // Stop the old execution chain before a replacement backend can accept work.
-    if (!online) get()._abortController?.abort("desktop-backend-disconnected");
+    if (!online) {
+      get()._abortController?.abort("desktop-backend-disconnected");
+      abortNodeRuns(get(), "desktop-backend-disconnected");
+    }
     set({ desktopConnected: online });
   },
   desktopConnected: typeof window === "undefined" || !window.nodeBananaDesktop,
@@ -986,6 +1032,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   maxConcurrentCalls: loadConcurrencySetting(),  // Default 3, configurable 1-10
   _abortController: null,  // Internal: for cancellation
   _currentRun: null,
+  runCount: 1,
+  batch: null,
   globalImageHistory: [],
 
   // Auto-save initial state
@@ -2159,7 +2207,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     return nodeReadinessPure(nodes, edges);
   },
 
-  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal): NodeExecutionContext => ({
+  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null): NodeExecutionContext => ({
     node,
     getConnectedInputs: get().getConnectedInputs,
     updateNodeData: get().updateNodeData,
@@ -2170,6 +2218,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     providerSettings: get().providerSettings,
     addIncurredCost: (cost: number) => get().addIncurredCost(cost),
     addToGlobalHistory: (item) => get().addToGlobalHistory(item),
+    batch: batchTag(get().batch),
     generationsPath: get().generationsPath,
     saveDirectoryPath: get().saveDirectoryPath,
     trackSaveGeneration: (key: string, promise: Promise<void>) => {
@@ -2201,7 +2250,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }));
     },
     materializeSplitGridCells: (nodeId: string) => get().materializeSplitGridCells(nodeId),
-    ...assetRecordingFor(get()._currentRun),
+    ...assetRecordingFor(assetRun !== undefined ? assetRun : get()._currentRun),
     get: get as () => unknown,
   }),
 
@@ -2244,6 +2293,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     };
     const assetRun = openAssetRun(get);
     set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController, _currentRun: assetRun });
+    lastRun.serial += 1;
+    lastRun.failed = false;
     // Nodes that had nothing to work with, named for the end-of-run summary
     const unreadyNodes: string[] = [];
 
@@ -2635,6 +2686,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('workflow.end', 'Workflow execution cancelled by user');
       } else {
+        lastRun.failed = true;
         logger.error('workflow.error', 'Workflow execution failed', {}, error instanceof Error ? error : undefined);
         // Show error toast for the failed node
         useToast.getState().show(
@@ -2657,7 +2709,59 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (controller) {
       controller.abort("user-cancelled");
     }
-    set({ isRunning: false, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: null });
+    abortNodeRuns(get(), "user-cancelled");
+    set({ isRunning: false, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: null, batch: null });
+  },
+
+  setRunCount: (count: number) => {
+    const runCount = clampRunCount(count);
+    if (get().runCount === runCount) return;
+    set({ runCount, hasUnsavedChanges: true });
+  },
+
+  runBatch: async (scope: RunScope) => {
+    if (get().isRunning || get().batch) return;
+    const runOnce = async (): Promise<RunOutcome> => {
+      const serial = lastRun.serial;
+      if (scope.kind === "all") await get().executeWorkflow();
+      else if (scope.kind === "from") await get().executeWorkflow(scope.nodeId);
+      else await get().executeSelectedNodes(scope.nodeIds);
+      return { started: lastRun.serial !== serial, failed: lastRun.failed };
+    };
+    const count = clampRunCount(get().runCount);
+    if (count === 1) {
+      await runOnce();
+      return;
+    }
+    const id = newBatchId();
+    const canvasGeneration = get().canvasGeneration;
+    const ours = () => get().batch?.id === id;
+    set({ batch: { id, index: 1, count, stopping: false } });
+    try {
+      await runBatchLoop({
+        count,
+        setIndex: (index) => {
+          const batch = get().batch;
+          if (batch?.id === id && batch.index !== index) set({ batch: { ...batch, index } });
+        },
+        runOnce,
+        // A hard Stop clears the batch; a pause edge, or a canvas replaced
+        // under the batch, ends it too.
+        keepGoing: () =>
+          ours() && !get().batch?.stopping && !get().pausedAtNodeId && get().canvasGeneration === canvasGeneration,
+      });
+    } finally {
+      if (ours()) set({ batch: null });
+    }
+  },
+
+  requestStop: () => {
+    const batch = get().batch;
+    if (batch && !batch.stopping && batch.index < batch.count) {
+      set({ batch: { ...batch, stopping: true } });
+      return;
+    }
+    get().stopWorkflow();
   },
 
   mockTutorialExecution: async () => {
@@ -2753,8 +2857,13 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (!canStartExecution(get().desktopConnected)) return;
     const { nodes, updateNodeData, isRunning } = get();
 
-    if (isRunning) {
+    // Other single-node runs do not block this one; a workflow or selection run does
+    if (isRunning && nodeRuns.size === 0) {
       logger.warn('node.execution', 'Cannot regenerate node, workflow already running', { nodeId });
+      return;
+    }
+    if (nodeRuns.has(nodeId)) {
+      logger.warn('node.execution', 'Node is already running', { nodeId });
       return;
     }
 
@@ -2770,19 +2879,36 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       get().materializeSplitGridCells(nodeId);
     }
 
-    // Create AbortController so stopWorkflow() can cancel regeneration
+    // Its own AbortController, so stopWorkflow() can cancel it, and its own
+    // asset run, so its outputs are recorded under this run alone
     const abortController = new AbortController();
     const assetRun = openAssetRun(get);
-    set({ isRunning: true, currentNodeIds: [nodeId], _abortController: abortController, _currentRun: assetRun });
+    const firstNodeRun = nodeRuns.size === 0;
+    nodeRuns.set(nodeId, { controller: abortController, assetRun });
+    set({ isRunning: true, currentNodeIds: [...get().currentNodeIds.filter((id) => id !== nodeId), nodeId] });
 
-    await logger.startSession();
+    // The last node run to end clears the running state and the log session
+    const finish = async () => {
+      if (nodeRuns.get(nodeId)?.controller !== abortController) return; // stopped, or the canvas went away
+      nodeRuns.delete(nodeId);
+      if (assetRun) closeAssetRun(assetRun, get());
+      if (nodeRuns.size > 0) {
+        set({ currentNodeIds: get().currentNodeIds.filter((id) => id !== nodeId) });
+        return;
+      }
+      set({ isRunning: false, currentNodeIds: [] });
+      saveLogSession();
+      await logger.endSession();
+    };
+
+    if (firstNodeRun) await logger.startSession();
     logger.info('node.execution', 'Regenerating node', {
       nodeId,
       nodeType: node.type,
     });
 
     try {
-      const executionCtx = get()._buildExecutionContext(node, abortController.signal);
+      const executionCtx = get()._buildExecutionContext(node, abortController.signal, assetRun);
 
       const regenOptions = { useStoredFallback: true };
 
@@ -2807,45 +2933,37 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         await executeSplitGrid(executionCtx);
       } else if (node.type === "videoStitch") {
         await executeVideoStitch(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "easeCurve") {
         await executeEaseCurve(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "videoTrim") {
         await executeVideoTrim(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "videoFrameGrab") {
         await executeVideoFrameGrab(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "removeBackground") {
         await executeRemoveBackground(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "imageResize") {
         await executeImageResize(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "gifEncoder") {
         await executeGifEncoder(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "comfyApp") {
         await executeComfyApp(executionCtx);
       } else if (node.type === "output") {
         await executeOutput(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       }
 
@@ -2856,7 +2974,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       for (const edge of downstreamEdges) {
         const targetNode = get().nodes.find(n => n.id === edge.target);
         if (!targetNode) continue;
-        const targetCtx = get()._buildExecutionContext(targetNode);
+        const targetCtx = get()._buildExecutionContext(targetNode, undefined, assetRun);
         switch (targetNode.type) {
           case "glbViewer":
             await executeGlbViewer(targetCtx);
@@ -2874,10 +2992,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }
 
       logger.info('node.execution', 'Node regeneration completed successfully', { nodeId });
-      set({ isRunning: false, currentNodeIds: [], _abortController: null });
-
-      saveLogSession();
-      await logger.endSession();
+      await finish();
     } catch (error) {
       logger.error('node.error', 'Node regeneration failed', {
         nodeId,
@@ -2886,10 +3001,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         status: "error",
         error: error instanceof Error ? error.message : "Regeneration failed",
       });
-      set({ isRunning: false, currentNodeIds: [], _abortController: null });
-
-      saveLogSession();
-      await logger.endSession();
+      await finish();
     }
   },
 
@@ -2930,6 +3042,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const abortController = new AbortController();
     const assetRun = openAssetRun(get);
     set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController, _currentRun: assetRun });
+    lastRun.serial += 1;
+    lastRun.failed = false;
 
     await logger.startSession();
     logger.info('node.execution', 'Executing selected nodes', {
@@ -3127,6 +3241,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('node.execution', 'Selected nodes execution cancelled by user');
       } else {
+        lastRun.failed = true;
         logger.error('node.error', 'Selected nodes execution failed', {}, error instanceof Error ? error : undefined);
         useToast.getState().show(
           `Execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -3141,7 +3256,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   saveWorkflow: (name?: string) => {
-    const { nodes, edges, edgeStyle, edgeAppearance, groups } = get();
+    const { nodes, edges, edgeStyle, edgeAppearance, groups, runCount } = get();
 
     const workflow: WorkflowFile = {
       version: 1,
@@ -3152,6 +3267,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       edgeStyle,
       edgeAppearance,
       groups: groups && Object.keys(groups).length > 0 ? groups : undefined,
+      ...(runCount > 1 ? { runCount } : {}),
     };
 
     const json = JSON.stringify(workflow, null, 2);
@@ -3173,6 +3289,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     // the freshly loaded nodes — especially when ids are reused across reloads.
     const inflight = get()._abortController;
     if (inflight) inflight.abort("workflow-replaced");
+    abortNodeRuns(get(), "workflow-replaced");
     set({ isRunning: false, pausedAtNodeId: null, currentNodeIds: [], _abortController: null });
 
     // Keep generated ids clear of the loaded graph's ids
@@ -3299,6 +3416,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         ? normalizeEdgeAppearance(hydratedWorkflow.edgeAppearance)
         : getEdgeDefaults().appearance,
       groups: hydratedWorkflow.groups || {},
+      runCount: clampRunCount(hydratedWorkflow.runCount ?? 1),
+      batch: null,
       isRunning: false,
       currentNodeIds: [],
       // Restore workflow ID and paths from localStorage if available
@@ -3465,6 +3584,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     // Abort any in-flight run so old executors stop writing into the cleared graph.
     const inflight = get()._abortController;
     if (inflight) inflight.abort("workflow-cleared");
+    abortNodeRuns(get(), "workflow-cleared");
     // Revoke any blob: object URLs held by the outgoing nodes before they are
     // discarded. Safe here because the undo history that also referenced them
     // is cleared below.
@@ -3479,6 +3599,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       hookDrag: null,
       edgeStyle: getEdgeDefaults().edgeStyle,
       edgeAppearance: getEdgeDefaults().appearance,
+      runCount: 1,
+      batch: null,
       isRunning: false,
       currentNodeIds: [],
       pausedAtNodeId: null,
@@ -3516,8 +3638,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => {
+    const batch = batchTag(get().batch);
     const newItem: ImageHistoryItem = {
       ...item,
+      ...(batch && !item.batch ? { batch } : {}),
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
 
@@ -3633,6 +3757,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       edgeStyle,
       edgeAppearance,
       groups,
+      runCount,
       workflowId,
       workflowName,
       saveDirectoryPath,
@@ -3698,6 +3823,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const savedEdgeStyleSnapshot = edgeStyle;
       const savedEdgeAppearanceSnapshot = edgeAppearance;
       const savedGroupsSnapshot = groups;
+      const savedRunCountSnapshot = runCount;
       const savedWorkflowNameSnapshot = workflowName;
 
       let workflow: WorkflowFile = {
@@ -3711,6 +3837,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edgeStyle,
         edgeAppearance,
         groups: groups && Object.keys(groups).length > 0 ? groups : undefined,
+        ...(runCount > 1 ? { runCount } : {}),
       };
 
       // If external media storage is enabled, externalize media before saving
@@ -3745,6 +3872,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           fresh.edgeStyle !== savedEdgeStyleSnapshot ||
           fresh.edgeAppearance !== savedEdgeAppearanceSnapshot ||
           fresh.groups !== savedGroupsSnapshot ||
+          fresh.runCount !== savedRunCountSnapshot ||
           fresh.workflowName !== savedWorkflowNameSnapshot;
 
         // If we externalized media, update store nodes with the refs

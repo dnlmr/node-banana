@@ -373,6 +373,15 @@ describe("recordAsset", () => {
     expect(put.headers["content-type"]).toBe("image/png");
   });
 
+  it("sends the batch tag of a run that is one of a batch, and none otherwise", async () => {
+    const server = fakeLibrary();
+    const batch = { id: "batch-1", index: 2, count: 4 };
+    await recorder.recordAsset(input(dataUrlOf("A")), { ...RUN, batch }).done;
+    await recorder.recordAsset(input(dataUrlOf("B")), RUN).done;
+    expect(server.records[0].meta.batch).toEqual(batch);
+    expect("batch" in server.records[1].meta).toBe(false);
+  });
+
   it("decodes a data: URL with parameters, and one that is percent-encoded", async () => {
     const server = fakeLibrary();
     await recorder.recordAsset(input("data:image/svg+xml;charset=utf-8,%3Csvg%2F%3E"), RUN).done;

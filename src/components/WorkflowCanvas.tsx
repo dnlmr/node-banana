@@ -335,7 +335,7 @@ export function WorkflowCanvas() {
   const getNodeById = useWorkflowStore((state) => state.getNodeById);
   const addToGlobalHistory = useWorkflowStore((state) => state.addToGlobalHistory);
   const setNodeGroupId = useWorkflowStore((state) => state.setNodeGroupId);
-  const executeWorkflow = useWorkflowStore((state) => state.executeWorkflow);
+  const runBatch = useWorkflowStore((state) => state.runBatch);
   const setShowQuickstart = useWorkflowStore((state) => state.setShowQuickstart);
   const quickstartView = useWorkflowStore((state) => state.quickstartView);
   useBringInRequest();
@@ -344,7 +344,7 @@ export function WorkflowCanvas() {
   const setWorkflowMetadata = useWorkflowStore((state) => state.setWorkflowMetadata);
   const setShortcutsDialogOpen = useWorkflowStore((state) => state.setShortcutsDialogOpen);
   const regenerateNode = useWorkflowStore((state) => state.regenerateNode);
-  const executeSelectedNodes = useWorkflowStore((state) => state.executeSelectedNodes);
+
   const clearWorkflow = useWorkflowStore((state) => state.clearWorkflow);
   const setHoveredNodeId = useWorkflowStore((state) => state.setHoveredNodeId);
   const openAnnotationModal = useAnnotationStore((state) => state.openModal);
@@ -1790,7 +1790,7 @@ export function WorkflowCanvas() {
       const selected = nodes.filter((n) => n.selected);
       if (selected.length > 0) {
         event.preventDefault();
-        executeSelectedNodes(selected.map((n) => n.id));
+        runBatch({ kind: "nodes", nodeIds: selected.map((n) => n.id) });
       }
       return;
     }
@@ -1818,9 +1818,9 @@ export function WorkflowCanvas() {
     // Handle workflow execution (Ctrl/Cmd + Enter)
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       event.preventDefault();
-      // Resume-from-pause is handled inside executeWorkflow when no explicit
-      // start node is given.
-      executeWorkflow();
+      // As many runs as the Run menu's count. Resume-from-pause is handled
+      // inside executeWorkflow when no explicit start node is given.
+      runBatch({ kind: "all" });
       return;
     }
 
@@ -1992,7 +1992,7 @@ export function WorkflowCanvas() {
       } else if (event.key === "g" || event.key === "G") {
         onNodesChange(arrangeNodes("grid", selectedNodes));
       }
-  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, executeSelectedNodes, setShortcutsDialogOpen, undo, redo, connectionDrop, nodeSearchMenu]);
+  }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, runBatch, setShortcutsDialogOpen, undo, redo, connectionDrop, nodeSearchMenu]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);

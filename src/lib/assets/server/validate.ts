@@ -12,6 +12,7 @@ import {
   RUN_ID_PATTERN,
   SHA256_PATTERN,
   WORKFLOW_ID_PATTERN,
+  type AssetBatch,
   type AssetKind,
   type AssetModelRef,
   type AssetPatch,
@@ -387,6 +388,9 @@ export function scrubRecord(record: AssetRecord): AssetRecord {
     out.model = model;
   }
   out.producer = scrubProducer(record.producer);
+  const batch = scrubBatch(record.batch);
+  if (batch) out.batch = batch;
+  else delete out.batch;
   if (record.parameters !== undefined) {
     const parameters = scrubValue(record.parameters, 0);
     if (parameters && typeof parameters === "object" && !Array.isArray(parameters)) {
@@ -414,6 +418,16 @@ function scrubProducer(producer: AssetProducer): AssetProducer {
     out.batchIndex = producer.batchIndex;
   }
   return out;
+}
+
+/** A batch tag that holds up (an id, 1 ≤ index ≤ count ≤ 1000), else undefined. */
+function scrubBatch(value: unknown): AssetBatch | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = scrubString(value.id, 128);
+  const { index, count } = value;
+  if (!id || !Number.isInteger(index) || !Number.isInteger(count)) return undefined;
+  if ((index as number) < 1 || (count as number) < (index as number) || (count as number) > 1000) return undefined;
+  return { id, index: index as number, count: count as number };
 }
 
 /* ------------------------------------------------------------------ */
@@ -510,6 +524,8 @@ export function validateRecordMeta(value: unknown, now: number = Date.now()): Re
   if (durationSec) meta.durationSec = durationSec;
   const tags = normaliseTags(value.tags);
   if (tags.length) meta.tags = tags;
+  const batch = scrubBatch(value.batch);
+  if (batch) meta.batch = batch;
   return meta;
 }
 

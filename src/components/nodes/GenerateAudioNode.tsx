@@ -19,6 +19,7 @@ import { useLoadGenerationById } from "@/hooks/useLoadGenerationById";
 import { useGenerationCarousel } from "@/hooks/useGenerationCarousel";
 import {
   CarouselControls,
+  RunBatchChip,
   ControlsCard,
   EmptyState,
   ErrorMessage,
@@ -294,6 +295,10 @@ export function GenerateAudioNode({ id, data, selected }: NodeProps<GenerateAudi
                 <span className="text-xs text-neutral-200">Generating audio...</span>
               </div>
             )}
+            <RunBatchChip
+              batch={nodeData.audioHistory?.[nodeData.selectedAudioHistoryIndex || 0]?.batch}
+              timestamp={nodeData.audioHistory?.[nodeData.selectedAudioHistoryIndex || 0]?.timestamp}
+            />
             <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
               <button
                 onClick={() => downloadMedia(nodeData.outputAudio!, "audio").catch(() => {})}

@@ -22,6 +22,7 @@ import { parseAspectRatio } from "@/utils/nodeDimensions";
 import { calculateGenerationCost, formatCost } from "@/utils/costCalculator";
 import {
   CarouselControls,
+  RunBatchChip,
   CheckboxField,
   ControlsCard,
   EmptyState,
@@ -477,6 +478,7 @@ export function GenerateImageNode({ id, data, selected }: NodeProps<NanoBananaNo
             {nodeData.status === "loading" && <LoadingOverlay />}
             {nodeData.status === "error" && <ErrorOverlay />}
             {isLoadingCarouselImage && <LoadingOverlay size={16} dim="light" />}
+            <RunBatchChip batch={selectedHistoryItem?.batch} timestamp={selectedHistoryItem?.timestamp} />
             <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
               <button
                 onClick={() => downloadMedia(nodeData.outputImage!, "image").catch(() => {})}
