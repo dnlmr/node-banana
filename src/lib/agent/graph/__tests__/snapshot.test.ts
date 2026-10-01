@@ -41,10 +41,14 @@ describe("buildAgentSnapshot", () => {
       position: { x: 10, y: 21 },
       width: 300,
       height: 280,
+      heightEstimated: true,
       data: {},
       content: { image: true },
     });
     expect(gen.title).toBe("Hero");
+    // Unmeasured, so sized as NodeShell lays it out: a 16:9 card (290 / (16 / 9) + 10),
+    // the 8px gap, and Nano Banana Pro's four settings rows (2 + 28 + 14 + 4 × 22 + 3 × 4).
+    expect(gen).toMatchObject({ height: 173 + 8 + 144, heightEstimated: true });
     expect(gen.data).toEqual({
       model: "nano-banana-pro",
       selectedModel: { provider: "gemini", modelId: "nano-banana-pro", displayName: "Nano Banana Pro" },

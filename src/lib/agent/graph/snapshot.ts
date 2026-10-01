@@ -133,6 +133,7 @@ function snapshotNode(node: WorkflowNode): AgentSnapshotNode {
     position: { x: round(node.position?.x), y: round(node.position?.y) },
     width: size.width,
     height: size.height,
+    ...(size.estimated ? { heightEstimated: true as const } : {}),
     ...(typeof data.customTitle === "string" && data.customTitle ? { title: data.customTitle } : {}),
     ...(node.groupId ? { groupId: node.groupId } : {}),
     data: pickAgentData(type, data),
@@ -146,17 +147,17 @@ function snapshotNode(node: WorkflowNode): AgentSnapshotNode {
  * The size the node occupies on the canvas: the width it was given (as the
  * canvas's own `getNodeSize` reads it) and the height React Flow measured
  * from its content. Nodes are width-driven and their height is never stored,
- * so a node not yet measured gets its type's rendered-height estimate.
+ * so a node not yet measured gets a height estimated from its type and settings.
  */
-function nodeSize(node: WorkflowNode): { width: number; height: number } {
+function nodeSize(node: WorkflowNode): { width: number; height: number; estimated: boolean } {
   const type = node.type as NodeType;
   const fallbackWidth = defaultNodeDimensions[type]?.width ?? 300;
   const positive = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined);
   const styleHeight = typeof node.style?.height === "number" ? node.style.height : undefined;
-  return {
-    width: positive(getNodeSize(node).width) ?? fallbackWidth,
-    height: positive(node.measured?.height ?? node.height ?? styleHeight) ?? estimatedNodeHeight(type),
-  };
+  const width = positive(getNodeSize(node).width) ?? fallbackWidth;
+  const height = positive(node.measured?.height ?? node.height ?? styleHeight);
+  if (height !== undefined) return { width, height, estimated: false };
+  return { width, height: estimatedNodeHeight(type, { data: pickAgentData(type, node.data as Record<string, unknown>), width }), estimated: true };
 }
 
 function present(value: unknown): boolean {

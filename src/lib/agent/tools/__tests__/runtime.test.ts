@@ -431,6 +431,26 @@ describe("new nodes joining a cluster", () => {
   });
 });
 
+describe("generators sized by their settings", () => {
+  it("stacks a grouped fan-out of Nano Banana 2 Lite nodes a row gap apart, not 460px each", async () => {
+    const gens = ["a", "b", "c", "d", "e"];
+    const result = await call(runtimeFor(EMPTY, { viewport: VIEWPORT }), "create_workflow", {
+      nodes: [
+        { ref: "p", type: "prompt", settings: { prompt: "shot one * shot two * shot three * shot four * shot five" } },
+        { ref: "arr", type: "array" },
+        ...gens.map((ref) => ({ ref, type: "nanoBanana", settings: { model: "nano-banana-2-lite", aspectRatio: "16:9" } })),
+        { ref: "gal", type: "outputGallery" },
+      ],
+      connections: [{ from: "p", to: "arr" }, ...gens.flatMap((ref) => [{ from: "arr", to: ref }, { from: ref, to: "gal" }])],
+      groups: [{ name: "Parisian editorial pack", nodes: ["p", "arr", ...gens, "gal"] }],
+    });
+    expect(result.ok, result.text).toBe(true);
+    const ys = addNodeOps(result.ops).filter((op) => op.nodeType === "nanoBanana").map((op) => op.position.y).sort((a, b) => a - b);
+    // 16:9 card 173 + gap 8 + two settings rows 92 = 273, then the 40px row gap.
+    expect(ys.slice(1).map((y, i) => y - ys[i])).toEqual([313, 313, 313, 313]);
+  });
+});
+
 describe("edit_workflow", () => {
   const base = (): StoreState => ({
     nodes: [

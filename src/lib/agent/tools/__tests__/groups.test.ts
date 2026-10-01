@@ -68,7 +68,7 @@ function boxOf(node: WorkflowNode): Box {
 /** The space a node takes once rendered: its measured height, or the layout's estimate for an unmeasured one. */
 function renderedBox(node: WorkflowNode): Box {
   const box = boxOf(node);
-  return node.measured?.height ? box : { ...box, height: estimatedNodeHeight(node.type as NodeType) };
+  return node.measured?.height ? box : { ...box, height: estimatedNodeHeight(node.type as NodeType, { data: node.data as Record<string, unknown>, width: box.width }) };
 }
 
 function boxOfGroup(g: NodeGroup): Box {
@@ -380,14 +380,14 @@ describe("the agent's own groups", () => {
     expect(result.ok, result.text).toBe(true);
     expect(moveOps(result.ops)).toEqual([]);
     const add = result.ops.find((op) => op.op === "addGroup") as Extract<AgentGraphOp, { op: "addGroup" }>;
-    // The canvas's fit: the nodes' bounding box (the generator rendered ~460 tall) plus padding.
+    // The canvas's fit: the nodes' bounding box (the generator as its settings render it) plus padding.
     expect(add).toEqual({
       op: "addGroup",
       id: "group-ag1",
       name: "Stills",
       color: "green",
       position: { x: -30, y: -30 },
-      size: { width: 720 + 60, height: estimatedNodeHeight("nanoBanana") + 60 },
+      size: { width: 720 + 60, height: estimatedNodeHeight("nanoBanana", { data: state.nodes[1].data as Record<string, unknown> }) + 60 },
       nodeIds: ["prompt-1", "nanoBanana-2"],
     });
     expect(result.text).toContain('Created group "Stills" [group-ag1] (green');
