@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, Columns2, Cpu, Download, Group, LayoutGrid, Play, Rows2, Shrink } from "lucide-react";
-import { MenuDivider, MenuIconButton, MenuItem, MenuList, MenuShortcut, MenuSurface } from "@/components/ui/Menu";
+import { MenuDivider, MenuIconButton, MenuSurface } from "@/components/ui/Menu";
 import { useReactFlow } from "@xyflow/react";
 import { useShallow } from "zustand/shallow";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -328,27 +328,27 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
         )}
         {arrangeMenuOpen && (
           <MenuSurface
+            variant="bar"
             floating={false}
             role="menu"
             aria-label="Arrange nodes"
-            className="nodrag nopan min-w-[184px]"
+            aria-orientation="horizontal"
+            className="nodrag nopan"
             {...stopCanvasEvents}
           >
-            <MenuList>
-              {ARRANGEMENTS.map(({ mode, label, shortcut, Icon }) => (
-                <MenuItem
-                  key={mode}
-                  role="menuitemradio"
-                  aria-checked={activeArrangement?.mode === mode}
-                  selected={activeArrangement?.mode === mode}
-                  onClick={() => chooseArrangement(mode)}
-                >
-                  <Icon size={16} strokeWidth={1.5} className="text-neutral-400" />
-                  <span className="whitespace-nowrap">{label}</span>
-                  {shortcut && <MenuShortcut>{shortcut}</MenuShortcut>}
-                </MenuItem>
-              ))}
-            </MenuList>
+            {ARRANGEMENTS.map(({ mode, label, shortcut, Icon }) => (
+              <MenuIconButton
+                key={mode}
+                role="menuitemradio"
+                aria-checked={activeArrangement?.mode === mode}
+                aria-label={label}
+                title={shortcut ? `${label} (${shortcut})` : label}
+                onClick={() => chooseArrangement(mode)}
+                className={cn(activeArrangement?.mode === mode && "bg-neutral-700 text-neutral-100")}
+              >
+                <Icon size={16} strokeWidth={1.5} />
+              </MenuIconButton>
+            ))}
           </MenuSurface>
         )}
         </div>

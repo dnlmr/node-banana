@@ -202,10 +202,11 @@ describe("MultiSelectToolbar", () => {
 
       expect(button).toHaveAttribute("aria-expanded", "true");
       const items = screen.getAllByRole("menuitemradio");
-      expect(items.map((item) => item.textContent)).toEqual([
-        "Stack horizontally",
-        "Stack verticallyV",
-        "Arrange as gridG",
+      // Icons only: the names live in the labels and tooltips
+      expect(items.map((item) => [item.getAttribute("aria-label"), item.title, item.textContent])).toEqual([
+        ["Stack horizontally", "Stack horizontally", ""],
+        ["Stack vertically", "Stack vertically (V)", ""],
+        ["Arrange as grid", "Arrange as grid (G)", ""],
       ]);
       expect(mockOnNodesChange).not.toHaveBeenCalled();
     });
