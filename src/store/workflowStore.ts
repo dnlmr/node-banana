@@ -52,6 +52,7 @@ import type { AgentGraphOpBatch } from "@/lib/agent/types";
 import { findNearestFreePosition } from "@/utils/spatialLayout";
 import { getNodeSize } from "@/utils/nodeDimensions";
 import { hookHandles, insertHookHandle, withHookHandles } from "@/lib/edges/hook";
+import { nextArrayItemIndex } from "@/lib/edges/arrayItems";
 import {
   loadSaveConfigs,
   saveSaveConfig,
@@ -111,7 +112,7 @@ import {
   getSplitGridTemplate,
   needsMaterialization,
 } from "./utils/splitGridTemplate";
-import type { SplitGridTemplate } from "@/types";
+import type { ArrayNodeData, SplitGridTemplate } from "@/types";
 import { evaluateRule } from "./utils/ruleEvaluation";
 import { computeDimmedNodes } from "./utils/dimmingUtils";
 import {
@@ -199,47 +200,9 @@ function buildConnectionEdgeData(
   const sourceNode = nodes.find((n) => n.id === connection.source);
 
   // Array node uses a single output handle; assign each edge a stable item index.
+  // Batch mode is derived in connectedInputs.ts from the source's batchMode.
   if (sourceNode?.type === "array" && (connection.sourceHandle || "text") === "text") {
-    const sourceData = sourceNode.data as Record<string, unknown>;
-
-    // Batch mode is now derived dynamically in connectedInputs.ts from
-    // the source node's batchMode — no need to stamp edge metadata.
-
-    const selectedIndex = sourceData.selectedOutputIndex;
-    const outputItems = Array.isArray(sourceData.outputItems) ? sourceData.outputItems : [];
-    const outputCount = outputItems.length;
-
-    if (
-      typeof selectedIndex === "number" &&
-      Number.isInteger(selectedIndex) &&
-      selectedIndex >= 0 &&
-      (outputCount === 0 || selectedIndex < outputCount)
-    ) {
-      baseData.arrayItemIndex = selectedIndex;
-      return baseData;
-    }
-
-    if (outputCount > 0) {
-      const existingArrayEdges = edges.filter(
-        (e) => e.source === connection.source && (e.sourceHandle || "text") === "text"
-      );
-
-      const lastEdge = existingArrayEdges.reduce<WorkflowEdge | null>((latest, edge) => {
-        if (!latest) return edge;
-        const latestTime = (latest.data as Record<string, unknown> | undefined)?.createdAt;
-        const edgeTime = (edge.data as Record<string, unknown> | undefined)?.createdAt;
-        return (typeof edgeTime === "number" && typeof latestTime === "number" && edgeTime > latestTime) ? edge : latest;
-      }, null);
-
-      const lastIndex = (lastEdge?.data as Record<string, unknown> | undefined)?.arrayItemIndex;
-      const startIndex = typeof lastIndex === "number" && Number.isInteger(lastIndex) && lastIndex >= 0
-        ? lastIndex + 1
-        : existingArrayEdges.length;
-
-      baseData.arrayItemIndex = startIndex % outputCount;
-    } else {
-      baseData.arrayItemIndex = 0;
-    }
+    baseData.arrayItemIndex = nextArrayItemIndex(sourceNode.id, sourceNode.data as ArrayNodeData, edges);
   }
 
   return baseData;
