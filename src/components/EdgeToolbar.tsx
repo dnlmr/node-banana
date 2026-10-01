@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, EyeOff, Minus, Pause, Play, Plus, Target, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Minus, Pause, Play, Plus, Crosshair, Trash2 } from "lucide-react";
 import { MenuSurface } from "@/components/ui/Menu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EdgeLabelRenderer, useViewport } from "@xyflow/react";
@@ -110,11 +110,6 @@ export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
               {selectedIds.length} noodles
             </span>
           )}
-          {sequenceNumber !== null && (
-            <span className="text-[10px] font-medium text-neutral-300 px-2 border-r border-neutral-600 whitespace-nowrap">
-              Image {sequenceNumber}
-            </span>
-          )}
           {isLoop && (
             <>
               <span className="text-[10px] font-medium text-fuchsia-300 px-1.5">Loop</span>
@@ -142,7 +137,8 @@ export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
             <input
               type="text"
               value={draftLabel}
-              placeholder="Label"
+              // The image order is the name an unlabelled connection goes by
+              placeholder={sequenceNumber !== null ? `Image ${sequenceNumber}` : "Label"}
               aria-label="Connection label"
               onChange={(e) => setDraftLabel(e.target.value)}
               onBlur={() => {
@@ -189,7 +185,7 @@ export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
               title="Go to upstream connection"
               aria-label="Go to upstream connection"
             >
-              <Target size={16} strokeWidth={1.5} />
+              <Crosshair size={16} strokeWidth={1.5} />
             </button>
           )}
           {isHiddenEdge ? (

@@ -185,13 +185,14 @@ describe("EdgeToolbar", () => {
     expect(mockRemoveEdges).toHaveBeenCalledWith(["e1"]);
   });
 
-  it("shows the image order among connections into the same handle", () => {
+  it("puts the image order in the empty label field instead of a separate chip", () => {
     withEdges([
       edge("e1", { data: { createdAt: 1 } }),
-      edge("e2", { selected: true, source: "c", data: { createdAt: 2 } }),
+      edge("e2", { selected: true, source: "c", data: { createdAt: 2, label: "model" } }),
     ]);
     render(<EdgeToolbar edgeId="e2" x={0} y={0} />);
-    expect(screen.getByText("Image 2")).toBeInTheDocument();
+    expect(screen.queryByText("Image 2")).toBeNull();
+    expect(screen.getByLabelText("Connection label")).toHaveAttribute("placeholder", "Image 2");
   });
 
   it("offers loop controls instead of pause on a loop edge", () => {
