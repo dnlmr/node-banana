@@ -1281,12 +1281,41 @@ describe("ProjectSetupModal", () => {
         expect(screen.getByText("OpenAI")).toBeInTheDocument();
         expect(screen.getByText("Replicate")).toBeInTheDocument();
         expect(screen.getByText("fal.ai")).toBeInTheDocument();
-        // "ComfyUI" is also the settings tab label, so the provider card is
-        // identified by its Comfy Cloud fallback hint as well.
+        // "ComfyUI" is also the settings tab label, so the provider row is
+        // identified by its description as well.
         expect(screen.getAllByText("ComfyUI").length).toBeGreaterThanOrEqual(2);
         expect(
-          screen.getByText("Uses your Comfy Cloud key from the ComfyUI tab when left empty.")
+          screen.getByText("One key for Comfy Cloud, Comfy-hosted models and partner nodes.")
         ).toBeInTheDocument();
+      });
+    });
+
+    it("the ComfyUI page reports the Comfy key from Providers and links there", async () => {
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          mode="settings"
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "ComfyUI" }));
+      await waitFor(() => {
+        expect(screen.getByText("No Comfy key yet")).toBeInTheDocument();
+        expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Add in Providers/ }));
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("comfyui-...")).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByLabelText("ComfyUI API key"), { target: { value: "comfyui-abc" } });
+
+      fireEvent.click(screen.getByRole("button", { name: "ComfyUI" }));
+      await waitFor(() => {
+        expect(screen.getByText("Using your Comfy key")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Change/ })).toBeInTheDocument();
       });
     });
 

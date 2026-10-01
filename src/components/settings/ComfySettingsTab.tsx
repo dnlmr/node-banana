@@ -12,13 +12,17 @@ import {
   type ComfySettings,
 } from "@/lib/comfy/settings";
 import type { ComfyBackendMode } from "@/lib/comfy/types";
-import { DialogButton, DialogStatus } from "@/components/ui/Dialog";
+import { DialogButton, DialogStatus, DialogTextButton } from "@/components/ui/Dialog";
 import { Field, Segmented, Switch, TextInput, helpClass, inputClass, labelClass } from "@/components/ui/Controls";
 import { cn } from "@/components/nodes/ui/cn";
 
 interface ComfySettingsTabProps {
   settings: ComfySettings;
   onChange: (settings: ComfySettings) => void;
+  /** The Comfy key as entered on the Providers page (Cloud runs, Comfy-hosted models and partner nodes share it). */
+  accountKey?: string | null;
+  /** Takes the person to the Providers page to add or change that key. */
+  onOpenProviders?: () => void;
 }
 
 interface ConnectionResult {
@@ -43,10 +47,9 @@ const MODE_OPTIONS = MODES.map((mode) => ({ value: mode.value, label: mode.label
  * remote are there for people who already run their own ComfyUI and have the
  * models a workflow needs.
  */
-export function ComfySettingsTab({ settings, onChange }: ComfySettingsTabProps) {
+export function ComfySettingsTab({ settings, onChange, accountKey = null, onOpenProviders }: ComfySettingsTabProps) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<ConnectionResult | null>(null);
-  const [showKey, setShowKey] = useState(false);
   const [showOrgKey, setShowOrgKey] = useState(false);
 
   const configError = comfyConfigError(settings);
@@ -146,29 +149,28 @@ export function ComfySettingsTab({ settings, onChange }: ComfySettingsTabProps) 
       <div className="flex flex-col gap-3.5 mt-[18px] pt-[18px] border-t border-card">
         {settings.mode === "cloud" && (
           <>
-            <Field id="comfy-cloud-key" label="API key">
-              <div className="flex gap-2">
-                <TextInput
-                  id="comfy-cloud-key"
-                  type={showKey ? "text" : "password"}
-                  value={settings.cloudApiKey ?? ""}
-                  onChange={(e) => update({ cloudApiKey: e.target.value || null })}
-                  placeholder="comfyui-..."
-                />
-                <DialogButton variant="outline" size="md" className="shrink-0" onClick={() => setShowKey((v) => !v)}>
-                  {showKey ? "Hide" : "Show"}
-                </DialogButton>
+            {/* The key itself lives on the Providers page; this row says which one is in use */}
+            <div className="flex items-center justify-between gap-6" data-testid="comfy-account">
+              <div>
+                <div className="text-[13px] leading-[18px] text-neutral-100">
+                  {accountKey ? "Using your Comfy key" : "No Comfy key yet"}
+                </div>
+                <p className="mt-0.5 text-xs leading-4 text-ink-3">
+                  {accountKey
+                    ? "From Providers. Cloud runs, Comfy-hosted models and partner nodes share it."
+                    : "Cloud runs need the key from platform.comfy.org, entered under Providers."}
+                </p>
               </div>
-            </Field>
-            <a
-              href="https://platform.comfy.org/profile/api-keys"
-              target="_blank"
-              rel="noreferrer"
-              className="-mt-1.5 self-start inline-flex items-center gap-1.5 text-xs leading-4 text-neutral-400 hover:text-neutral-100 transition-colors"
-            >
-              Get a key at platform.comfy.org
-              <ArrowIcon />
-            </a>
+              <div className="flex shrink-0 items-center gap-3.5">
+                <DialogStatus tone={accountKey ? "ok" : "neutral"}>{accountKey ? "Key set" : "No key"}</DialogStatus>
+                {onOpenProviders && (
+                  <DialogTextButton onClick={onOpenProviders} className="inline-flex items-center gap-1.5">
+                    {accountKey ? "Change" : "Add in Providers"}
+                    <ArrowIcon />
+                  </DialogTextButton>
+                )}
+              </div>
+            </div>
 
             {settings.cloudUrl !== COMFY_CLOUD_URL && (
               <Field id="comfy-cloud-url" label="Cloud URL">
@@ -280,7 +282,7 @@ export function ComfySettingsTab({ settings, onChange }: ComfySettingsTabProps) 
                 type={showOrgKey ? "text" : "password"}
                 value={settings.comfyOrgApiKey ?? ""}
                 onChange={(e) => update({ comfyOrgApiKey: e.target.value || null })}
-                placeholder={settings.cloudApiKey ? "Same as the Cloud key" : "comfyui-..."}
+                placeholder={settings.cloudApiKey ? "Same as your Comfy key" : "comfyui-..."}
               />
               <DialogButton variant="outline" size="md" className="shrink-0" onClick={() => setShowOrgKey((v) => !v)}>
                 {showOrgKey ? "Hide" : "Show"}

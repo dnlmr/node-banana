@@ -113,7 +113,7 @@ const PROVIDER_ROWS: { id: ProviderType; name: string; placeholder: string; desc
   { id: "fal", name: "fal.ai", placeholder: "..." },
   { id: "kie", name: "Kie.ai", placeholder: "..." },
   { id: "wavespeed", name: "WaveSpeed", placeholder: "..." },
-  { id: "comfy", name: "ComfyUI", placeholder: "comfyui-...", description: "Uses your Comfy Cloud key from the ComfyUI tab when left empty." },
+  { id: "comfy", name: "ComfyUI", placeholder: "comfyui-...", description: "One key for Comfy Cloud, Comfy-hosted models and partner nodes." },
 ];
 
 const PAN_MODES: SegmentedOption<PanMode>[] = [
@@ -783,43 +783,51 @@ export function ProjectSetupModal({
                   first={index === 0 && !hasImportRow}
                   className={index === 0 && !hasImportRow ? "pt-0 pb-2" : "py-2"}
                 >
-                  {fromEnv && !overrideActive[provider.id] ? (
-                    <div className="flex items-center gap-3.5">
-                      <DialogStatus tone="ok">Configured via .env</DialogStatus>
-                      <DialogTextButton
-                        onClick={() => setOverrideActive((prev) => ({ ...prev, [provider.id]: true }))}
-                      >
-                        Override
-                      </DialogTextButton>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
-                      <TextInput
-                        type={showApiKey[provider.id] ? "text" : "password"}
-                        value={localProviders.providers[provider.id]?.apiKey || ""}
-                        onChange={(e) => updateLocalProvider(provider.id, { apiKey: e.target.value || null })}
-                        placeholder={provider.placeholder}
-                        aria-label={`${provider.name} API key`}
-                        className="w-[220px] h-8"
-                      />
-                      <DialogTextButton
-                        onClick={() => setShowApiKey((prev) => ({ ...prev, [provider.id]: !prev[provider.id] }))}
-                      >
-                        {showApiKey[provider.id] ? "Hide" : "Show"}
-                      </DialogTextButton>
-                      {fromEnv && (
+                  {/* One grid for every row, so the inputs and buttons line up
+                      whether or not a row has a third action. */}
+                  <div className="grid shrink-0 grid-cols-[220px_44px_56px] items-center gap-x-1.5">
+                    {fromEnv && !overrideActive[provider.id] ? (
+                      <>
+                        <DialogStatus tone="ok" className="col-span-2 justify-self-end">Configured via .env</DialogStatus>
                         <DialogTextButton
-                          className="text-neutral-500"
-                          onClick={() => {
-                            setOverrideActive((prev) => ({ ...prev, [provider.id]: false }));
-                            updateLocalProvider(provider.id, { apiKey: null });
-                          }}
+                          className="justify-self-start"
+                          onClick={() => setOverrideActive((prev) => ({ ...prev, [provider.id]: true }))}
                         >
-                          Cancel
+                          Override
                         </DialogTextButton>
-                      )}
-                    </div>
-                  )}
+                      </>
+                    ) : (
+                      <>
+                        <TextInput
+                          type={showApiKey[provider.id] ? "text" : "password"}
+                          value={localProviders.providers[provider.id]?.apiKey || ""}
+                          onChange={(e) => updateLocalProvider(provider.id, { apiKey: e.target.value || null })}
+                          placeholder={provider.placeholder}
+                          aria-label={`${provider.name} API key`}
+                          className="w-[220px] h-8"
+                        />
+                        <DialogTextButton
+                          className="justify-self-start"
+                          onClick={() => setShowApiKey((prev) => ({ ...prev, [provider.id]: !prev[provider.id] }))}
+                        >
+                          {showApiKey[provider.id] ? "Hide" : "Show"}
+                        </DialogTextButton>
+                        {fromEnv ? (
+                          <DialogTextButton
+                            className="justify-self-start text-neutral-500"
+                            onClick={() => {
+                              setOverrideActive((prev) => ({ ...prev, [provider.id]: false }));
+                              updateLocalProvider(provider.id, { apiKey: null });
+                            }}
+                          >
+                            Cancel
+                          </DialogTextButton>
+                        ) : (
+                          <span aria-hidden="true" />
+                        )}
+                      </>
+                    )}
+                  </div>
                 </DialogRow>
               );
             })}
@@ -1026,7 +1034,12 @@ export function ProjectSetupModal({
 
         {/* ComfyUI Tab Content */}
         {activeTab === "comfy" && (
-          <ComfySettingsTab settings={localComfySettings} onChange={setLocalComfySettings} />
+          <ComfySettingsTab
+            settings={localComfySettings}
+            onChange={setLocalComfySettings}
+            accountKey={localProviders.providers.comfy?.apiKey ?? null}
+            onOpenProviders={() => setActiveTab("providers")}
+          />
         )}
 
         {/* Canvas Tab Content */}

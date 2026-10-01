@@ -6,6 +6,7 @@ import { DesktopRecovery } from './DesktopRecovery';
 import { DesktopWindowControls, DesktopStartupDragRegion } from './DesktopWindowControls';
 import { useEffect, useState, type ReactNode } from 'react';
 import { initializeDesktopCredentials, isDesktop, useSessionCredentials } from '@/lib/desktop/credentials';
+import { getComfySettings, migrateLegacyComfyCloudKey } from '@/lib/comfy/settings';
 import { getProviderSettings } from '@/store/utils/localStorage';
 import { useWorkflowStore } from '@/store/workflowStore';
 import { Dialog, DialogBody, DialogButton, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/Dialog';
@@ -50,7 +51,11 @@ export function DesktopSession({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
   const hydrate = () => {
-    useWorkflowStore.setState({ providerSettings: getProviderSettings() });
+    // The store was created before the encrypted credentials were readable;
+    // the key mirror has to be refreshed here too, or the Comfy key never
+    // reaches the Generate nodes on the desktop.
+    migrateLegacyComfyCloudKey();
+    useWorkflowStore.setState({ providerSettings: getProviderSettings(), comfyCloudApiKey: getComfySettings().cloudApiKey });
     setReady(true);
   };
   const fail = (error: Error & { code?: string }) => setError({ message: error.message, code: error.code });

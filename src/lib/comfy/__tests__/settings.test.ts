@@ -8,12 +8,14 @@ import {
   comfyConfigError,
   defaultComfySettings,
   getComfySettings,
+  migrateLegacyComfyCloudKey,
   normalizeComfySettings,
   resolveComfyConnection,
   saveComfySettings,
   COMFY_SETTINGS_KEY,
   type ComfySettings,
 } from "../settings";
+import { getProviderSettings, saveProviderSettings } from "@/store/utils/localStorage";
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};
@@ -152,7 +154,7 @@ describe("resolveComfyConnection", () => {
 
 describe("comfyConfigError", () => {
   it("names the missing piece per mode", () => {
-    expect(comfyConfigError(settings({ mode: "cloud" }))).toMatch(/API key/);
+    expect(comfyConfigError(settings({ mode: "cloud" }))).toMatch(/Comfy key in Providers/);
     expect(comfyConfigError(settings({ mode: "remote" }))).toMatch(/remote ComfyUI/);
     expect(comfyConfigError(settings({ mode: "local" }))).toBeNull();
     expect(comfyConfigError(settings({ mode: "cloud", cloudApiKey: "k" }))).toBeNull();
@@ -190,5 +192,49 @@ describe("buildComfyHeaders", () => {
   it("omits connection headers entirely when nothing is configured", () => {
     const headers = buildComfyHeaders(settings({ mode: "cloud" }));
     expect(headers[COMFY_HEADERS.baseUrl]).toBeUndefined();
+  });
+});
+
+describe("the one Comfy key", () => {
+  beforeEach(() => {
+    localStorageMock.clear();
+  });
+
+  const withProviderKey = (apiKey: string | null) => {
+    const current = getProviderSettings();
+    saveProviderSettings({ providers: { ...current.providers, comfy: { ...current.providers.comfy, apiKey } } });
+  };
+
+  it("resolves the Cloud key from the Providers entry", () => {
+    withProviderKey("comfyui-providers");
+    expect(getComfySettings().cloudApiKey).toBe("comfyui-providers");
+    expect(comfyConfigError(getComfySettings())).toBeNull();
+    expect(buildComfyHeaders(getComfySettings())[COMFY_HEADERS.apiKey]).toBe("comfyui-providers");
+  });
+
+  it("never writes the key back into the ComfyUI slot", () => {
+    withProviderKey("comfyui-providers");
+    saveComfySettings(getComfySettings());
+    expect(JSON.parse(localStorage.getItem(COMFY_SETTINGS_KEY)!).cloudApiKey).toBeNull();
+    expect(getComfySettings().cloudApiKey).toBe("comfyui-providers");
+  });
+
+  it("moves a Cloud key an older build kept on the ComfyUI tab into Providers, once", () => {
+    localStorage.setItem(COMFY_SETTINGS_KEY, JSON.stringify({ mode: "cloud", cloudApiKey: "comfyui-old" }));
+    // Until the migration runs the old key still works
+    expect(getComfySettings().cloudApiKey).toBe("comfyui-old");
+    expect(migrateLegacyComfyCloudKey()).toBe(true);
+    expect(getProviderSettings().providers.comfy.apiKey).toBe("comfyui-old");
+    expect(JSON.parse(localStorage.getItem(COMFY_SETTINGS_KEY)!)).toMatchObject({ mode: "cloud", cloudApiKey: null });
+    expect(getComfySettings().cloudApiKey).toBe("comfyui-old");
+    expect(migrateLegacyComfyCloudKey()).toBe(false);
+  });
+
+  it("keeps a Providers key that is already set over the old one", () => {
+    withProviderKey("comfyui-new");
+    localStorage.setItem(COMFY_SETTINGS_KEY, JSON.stringify({ mode: "cloud", cloudApiKey: "comfyui-old" }));
+    expect(migrateLegacyComfyCloudKey()).toBe(true);
+    expect(getProviderSettings().providers.comfy.apiKey).toBe("comfyui-new");
+    expect(JSON.parse(localStorage.getItem(COMFY_SETTINGS_KEY)!).cloudApiKey).toBeNull();
   });
 });
