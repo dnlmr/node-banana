@@ -1,11 +1,11 @@
 "use client";
 
-import { Columns2, Cpu, Download, Group, LayoutGrid, Play, Rows2, Shrink } from "lucide-react";
+import { ChevronDown, Columns2, Cpu, Download, Group, LayoutGrid, Play, Rows2, Shrink } from "lucide-react";
 import { MenuDivider, MenuIconButton, MenuSurface } from "@/components/ui/Menu";
 import { useReactFlow } from "@xyflow/react";
 import { useShallow } from "zustand/shallow";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { memo, useMemo, useCallback, useState } from "react";
+import { memo, useMemo, useCallback, useEffect, useRef, useState } from "react";
 import JSZip from "jszip";
 import type {
   ImageInputNodeData,
@@ -16,10 +16,11 @@ import type {
 import { parseDataUrl } from "@/utils/dataUrl";
 import { sniffExtension } from "@/utils/mediaSniff";
 import { getNodeSize } from "@/utils/nodeDimensions";
+import { arrangeNodes, STACK_GAP, type Arrangement } from "@/utils/arrangeNodes";
+import { cn } from "@/components/nodes/ui/cn";
 import { ModelSearchDialog } from "@/components/modals/ModelSearchDialog";
 import { GENERATE_NODE_LABEL, capabilityForGenerateNode, sharedGenerateType } from "@/store/utils/modelSelection";
 
-const STACK_GAP = 20;
 /** A zipped image's extension when its bytes don't prove one. */
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/png": "png",
@@ -28,7 +29,17 @@ const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/webp": "webp",
   "image/svg+xml": "svg",
 };
-type Arrangement = "horizontal" | "vertical" | "grid";
+const ARRANGEMENTS: { mode: Arrangement; label: string; shortcut?: string; Icon: typeof LayoutGrid }[] = [
+  { mode: "horizontal", label: "Stack horizontally", Icon: Columns2 },
+  { mode: "vertical", label: "Stack vertically", shortcut: "V", Icon: Rows2 },
+  { mode: "grid", label: "Arrange as grid", shortcut: "G", Icon: LayoutGrid },
+];
+/** Keeps a press inside the menu or slider from panning, dragging or deselecting on the canvas beneath. */
+const stopCanvasEvents = {
+  onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
+  onKeyDown: (event: React.KeyboardEvent) => event.stopPropagation(),
+  onDoubleClick: (event: React.MouseEvent) => event.stopPropagation(),
+};
 
 // Memoised: rendered by the canvas, which re-renders on every drag frame
 export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
@@ -52,12 +63,37 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
     position: { x: number; y: number };
     gap: number;
   } | null>(null);
+  const [arrangeMenuOpen, setArrangeMenuOpen] = useState(false);
+  const toolbarRef = useRef<HTMLDivElement>(null);
 
   // Clear the spacing control when the selection changes, including deselection.
   if (arrangement && arrangement.selectionKey !== selectionKey) {
     setArrangement(null);
   }
   const activeArrangement = arrangement?.selectionKey === selectionKey ? arrangement : null;
+  const popoverOpen = arrangeMenuOpen || activeArrangement !== null;
+
+  // The menu and the spacing slider behave like a popover: a press outside the
+  // toolbar closes both; Escape closes the menu first, then the slider.
+  useEffect(() => {
+    if (!popoverOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (toolbarRef.current?.contains(event.target as Node)) return;
+      setArrangeMenuOpen(false);
+      setArrangement(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (arrangeMenuOpen) setArrangeMenuOpen(false);
+      else setArrangement(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [popoverOpen, arrangeMenuOpen]);
 
   // Check if any selected nodes are in a group
   const selectedNodeGroups = useMemo(() => {
@@ -93,109 +129,14 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
     return { x: screenX, y: screenY };
   }, [selectedNodes, getViewport]);
 
-  const handleStackHorizontally = (gap: number, nodes = selectedNodes) => {
-    if (selectedNodes.length < 2) return;
-
-    // Sort by current x position to maintain relative order
-    const sortedNodes = [...nodes].sort((a, b) => a.position.x - b.position.x);
-
-    // Use the topmost y position as the alignment point
-    const alignY = Math.min(...sortedNodes.map((n) => n.position.y));
-
-    let currentX = sortedNodes[0].position.x;
-
-    const changes = sortedNodes.map((node) => {
-      const nodeWidth = getNodeSize(node).width;
-
-      const change = {
-        type: "position" as const,
-        id: node.id,
-        position: { x: currentX, y: alignY },
-      };
-
-      currentX += nodeWidth + gap;
-      return change;
-    });
-
-    onNodesChange(changes);
-  };
-
-  const handleStackVertically = (gap: number, nodes = selectedNodes) => {
-    if (selectedNodes.length < 2) return;
-
-    // Sort by current y position to maintain relative order
-    const sortedNodes = [...nodes].sort((a, b) => a.position.y - b.position.y);
-
-    // Use the leftmost x position as the alignment point
-    const alignX = Math.min(...sortedNodes.map((n) => n.position.x));
-
-    let currentY = sortedNodes[0].position.y;
-
-    const changes = sortedNodes.map((node) => {
-      const nodeHeight = getNodeSize(node).height;
-
-      const change = {
-        type: "position" as const,
-        id: node.id,
-        position: { x: alignX, y: currentY },
-      };
-
-      currentY += nodeHeight + gap;
-      return change;
-    });
-
-    onNodesChange(changes);
-  };
-
-  const handleArrangeAsGrid = (gap: number, nodes = selectedNodes) => {
-    if (selectedNodes.length < 2) return;
-
-    // Calculate optimal grid dimensions (as square as possible)
-    const count = nodes.length;
-    const cols = Math.ceil(Math.sqrt(count));
-
-    // Sort nodes by their current position (top-to-bottom, left-to-right)
-    const sortedNodes = [...nodes].sort((a, b) => {
-      const rowA = Math.floor(a.position.y / 100);
-      const rowB = Math.floor(b.position.y / 100);
-      if (rowA !== rowB) return rowA - rowB;
-      return a.position.x - b.position.x;
-    });
-
-    // Find the starting position (top-left of bounding box)
-    const startX = Math.min(...sortedNodes.map((n) => n.position.x));
-    const startY = Math.min(...sortedNodes.map((n) => n.position.y));
-
-    // Get max node dimensions for consistent spacing
-    const maxWidth = Math.max(...sortedNodes.map((n) => getNodeSize(n).width));
-    const maxHeight = Math.max(...sortedNodes.map((n) => getNodeSize(n).height));
-
-    // Position each node in the grid
-    const changes = sortedNodes.map((node, index) => {
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-
-      return {
-        type: "position" as const,
-        id: node.id,
-        position: {
-          x: startX + col * (maxWidth + gap),
-          y: startY + row * (maxHeight + gap),
-        },
-      };
-    });
-
-    onNodesChange(changes);
-  };
-
   const applyArrangement = (mode: Arrangement, gap: number, nodes = selectedNodes) => {
-    if (mode === "horizontal") handleStackHorizontally(gap, nodes);
-    else if (mode === "vertical") handleStackVertically(gap, nodes);
-    else handleArrangeAsGrid(gap, nodes);
+    if (selectedNodes.length < 2) return;
+    onNodesChange(arrangeNodes(mode, nodes, gap));
   };
 
   const chooseArrangement = (mode: Arrangement) => {
-    if (!toolbarPosition) return;
+    setArrangeMenuOpen(false);
+    if (!toolbarPosition || activeArrangement?.mode === mode) return;
     const gap = activeArrangement?.gap ?? STACK_GAP;
     setArrangement({
       selectionKey, mode, nodes: selectedNodes, gap,
@@ -269,6 +210,7 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
 
   return (
     <MenuSurface
+      ref={toolbarRef}
       variant="bar"
       className="nodrag nopan"
       style={{
@@ -291,25 +233,22 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
       <MenuDivider variant="bar" className="mx-0.5" />
 
       <MenuIconButton
-        onClick={() => chooseArrangement("horizontal")}
-        aria-pressed={activeArrangement?.mode === "horizontal"}
-        title="Stack horizontally"
-      >
-        <Columns2 size={16} strokeWidth={1.5} />
-      </MenuIconButton>
-      <MenuIconButton
-        onClick={() => chooseArrangement("vertical")}
-        aria-pressed={activeArrangement?.mode === "vertical"}
-        title="Stack vertically (V)"
-      >
-        <Rows2 size={16} strokeWidth={1.5} />
-      </MenuIconButton>
-      <MenuIconButton
-        onClick={() => chooseArrangement("grid")}
-        aria-pressed={activeArrangement?.mode === "grid"}
-        title="Arrange as grid (G)"
+        onClick={() => setArrangeMenuOpen((open) => !open)}
+        aria-label="Arrange nodes"
+        aria-haspopup="menu"
+        aria-expanded={arrangeMenuOpen}
+        title="Arrange nodes"
+        className={cn(
+          "flex items-center gap-0.5 pr-1",
+          (arrangeMenuOpen || activeArrangement) && "bg-neutral-700 text-neutral-100"
+        )}
       >
         <LayoutGrid size={16} strokeWidth={1.5} />
+        <ChevronDown
+          size={12}
+          strokeWidth={2.25}
+          className={cn("transition-transform duration-[120ms]", arrangeMenuOpen && "rotate-180")}
+        />
       </MenuIconButton>
 
       {/* Separator */}
@@ -355,35 +294,64 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
       >
         <Download size={16} strokeWidth={1.5} />
       </MenuIconButton>
-      {activeArrangement && (
-        <MenuSurface
-          variant="bar"
-          floating={false}
-          className="absolute top-full left-1/2 mt-1.5 -translate-x-1/2 w-[200px] gap-2 px-2.5 py-1.5"
-          onPointerDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-          onDoubleClick={(event) => event.stopPropagation()}
-        >
-          <span className="text-[10px] text-neutral-400">Gap</span>
-          <input
-            type="range"
-            aria-label="Node spacing"
-            aria-valuetext={`${activeArrangement.gap} pixels`}
-            min={0}
-            max={200}
-            step={1}
-            value={activeArrangement.gap}
-            className="nodrag nopan min-w-0 flex-1 h-4 accent-neutral-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection rounded"
-            onChange={(event) => {
-              const gap = Number(event.target.value);
-              setArrangement({ ...activeArrangement, gap });
-              applyArrangement(activeArrangement.mode, gap, activeArrangement.nodes);
-            }}
-          />
-          <span className="w-9 text-right text-[10px] text-neutral-400 tabular-nums">
-            {activeArrangement.gap}px
-          </span>
-        </MenuSurface>
+
+      {/* The slider sits directly under the bar, and a reopened menu opens beneath it so the slider never moves */}
+      {popoverOpen && (
+        <div className="absolute top-full left-1/2 mt-1.5 -translate-x-1/2 flex flex-col items-center gap-1.5">
+        {activeArrangement && (
+          <MenuSurface
+            variant="bar"
+            floating={false}
+            className="nodrag nopan w-[200px] gap-2 px-2.5 py-1.5"
+            {...stopCanvasEvents}
+          >
+            <span className="text-[10px] text-neutral-400">Gap</span>
+            <input
+              type="range"
+              aria-label="Node spacing"
+              aria-valuetext={`${activeArrangement.gap} pixels`}
+              min={0}
+              max={200}
+              step={1}
+              value={activeArrangement.gap}
+              className="nodrag nopan min-w-0 flex-1 h-4 accent-neutral-300 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection rounded"
+              onChange={(event) => {
+                const gap = Number(event.target.value);
+                setArrangement({ ...activeArrangement, gap });
+                applyArrangement(activeArrangement.mode, gap, activeArrangement.nodes);
+              }}
+            />
+            <span className="w-9 text-right text-[10px] text-neutral-400 tabular-nums">
+              {activeArrangement.gap}px
+            </span>
+          </MenuSurface>
+        )}
+        {arrangeMenuOpen && (
+          <MenuSurface
+            variant="bar"
+            floating={false}
+            role="menu"
+            aria-label="Arrange nodes"
+            aria-orientation="horizontal"
+            className="nodrag nopan"
+            {...stopCanvasEvents}
+          >
+            {ARRANGEMENTS.map(({ mode, label, shortcut, Icon }) => (
+              <MenuIconButton
+                key={mode}
+                role="menuitemradio"
+                aria-checked={activeArrangement?.mode === mode}
+                aria-label={label}
+                title={shortcut ? `${label} (${shortcut})` : label}
+                onClick={() => chooseArrangement(mode)}
+                className={cn(activeArrangement?.mode === mode && "bg-neutral-700 text-neutral-100")}
+              >
+                <Icon size={16} strokeWidth={1.5} />
+              </MenuIconButton>
+            ))}
+          </MenuSurface>
+        )}
+        </div>
       )}
       {modelDialogOpen && generateType && (
         <ModelSearchDialog

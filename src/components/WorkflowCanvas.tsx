@@ -87,6 +87,7 @@ import { getSavedComfyNode, seedFromSavedComfyNode } from "@/lib/comfy/library";
 import { appInputHandles } from "@/lib/comfy/nodeSchema";
 import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { getNodeSize } from "@/utils/nodeDimensions";
+import { arrangeNodes } from "@/utils/arrangeNodes";
 import { FloatingNodeHeaders } from "./nodes/FloatingNodeHeaders";
 import { NodePlaceholder, useNodeMounted } from "./nodes/nodeCulling";
 import { detectAndSplitGrid } from "@/utils/gridSplitter";
@@ -1986,68 +1987,10 @@ export function WorkflowCanvas() {
       const selectedNodes = nodes.filter((node) => node.selected);
       if (selectedNodes.length < 2) return;
 
-      const STACK_GAP = 20;
-
       if (event.key === "v" || event.key === "V") {
-        // Stack vertically - sort by current y position to maintain relative order
-        const sortedNodes = [...selectedNodes].sort((a, b) => a.position.y - b.position.y);
-
-        // Use the leftmost x position as the alignment point
-        const alignX = Math.min(...sortedNodes.map((n) => n.position.x));
-
-        let currentY = sortedNodes[0].position.y;
-
-        const changes = sortedNodes.map((node) => {
-          const nodeHeight = getNodeSize(node).height;
-
-          const change = {
-            type: "position" as const,
-            id: node.id,
-            position: { x: alignX, y: currentY },
-          };
-
-          currentY += nodeHeight + STACK_GAP;
-          return change;
-        });
-
-        onNodesChange(changes);
+        onNodesChange(arrangeNodes("vertical", selectedNodes));
       } else if (event.key === "g" || event.key === "G") {
-        // Arrange as grid
-        const count = selectedNodes.length;
-        const cols = Math.ceil(Math.sqrt(count));
-
-        // Sort nodes by their current position (top-to-bottom, left-to-right)
-        const sortedNodes = [...selectedNodes].sort((a, b) => {
-          const rowA = Math.floor(a.position.y / 100);
-          const rowB = Math.floor(b.position.y / 100);
-          if (rowA !== rowB) return rowA - rowB;
-          return a.position.x - b.position.x;
-        });
-
-        // Find the starting position (top-left of bounding box)
-        const startX = Math.min(...sortedNodes.map((n) => n.position.x));
-        const startY = Math.min(...sortedNodes.map((n) => n.position.y));
-
-        // Get max node dimensions for consistent spacing
-        const maxWidth = Math.max(...sortedNodes.map((n) => getNodeSize(n).width));
-        const maxHeight = Math.max(...sortedNodes.map((n) => getNodeSize(n).height));
-
-        // Position each node in the grid
-        const changes = sortedNodes.map((node, index) => {
-          const col = index % cols;
-          const row = Math.floor(index / cols);
-
-          return {
-            type: "position" as const,
-            id: node.id,
-            position: {
-              x: startX + col * (maxWidth + STACK_GAP),
-              y: startY + row * (maxHeight + STACK_GAP),
-            },
-          };
-        });
-
-        onNodesChange(changes);
+        onNodesChange(arrangeNodes("grid", selectedNodes));
       }
   }, [nodes, onNodesChange, copySelectedNodes, pasteNodes, clearClipboard, clipboard, getViewport, addNode, updateNodeData, executeWorkflow, executeSelectedNodes, setShortcutsDialogOpen, undo, redo, connectionDrop, nodeSearchMenu]);
 
