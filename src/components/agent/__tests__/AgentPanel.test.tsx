@@ -342,6 +342,19 @@ describe("AgentPanel", () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY)!).harness).toBe("codex"));
   });
 
+  it("adds no note to a live model list", async () => {
+    renderPanel();
+    await waitForComposer();
+    expect(within(openHarnessMenu()).queryByText(/Couldn't read your models/)).not.toBeInTheDocument();
+  });
+
+  it("notes a fallback model list in the picker", async () => {
+    statuses.claude = harnessStatus("claude", { modelsFallback: true });
+    renderPanel();
+    await waitForComposer();
+    expect(within(openHarnessMenu()).getByText("Couldn't read your models. Showing defaults.")).toBeInTheDocument();
+  });
+
   it("keeps each harness's model pick across switches and turns", async () => {
     statuses.codex = harnessStatus("codex");
     renderPanel();

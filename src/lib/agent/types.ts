@@ -67,6 +67,11 @@ export interface AgentHarnessStatus {
   billing: AgentBilling;
   account?: { email?: string; plan?: string };
   models: AgentModelOption[];
+  /**
+   * `models` is the built-in list because the CLI's own couldn't be read; the
+   * picker says so. The panel re-checks status each time it opens.
+   */
+  modelsFallback?: boolean;
   signIn: AgentSignInState;
   /**
    * Why the harness cannot run right now, in plain words for the panel

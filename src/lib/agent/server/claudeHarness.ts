@@ -448,6 +448,7 @@ export function createClaudeHarness(overrides: Partial<ClaudeHarnessDeps> = {}):
       signedIn: false,
       billing: "unknown",
       models: CLAUDE_MODELS,
+      modelsFallback: true,
       signIn: deps.signIn.state(),
       signInCommand: CLAUDE_SIGN_IN_COMMAND,
     };
@@ -580,6 +581,7 @@ export function createClaudeHarness(overrides: Partial<ClaudeHarnessDeps> = {}):
       billing: verdict.billing,
       account: verdict.account,
       models,
+      modelsFallback: models === CLAUDE_MODELS ? true : undefined,
       signIn: ready ? { state: "idle" } : deps.signIn.state(),
       problem: ready ? undefined : verdict.problem,
     };

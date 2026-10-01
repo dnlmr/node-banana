@@ -20,6 +20,7 @@ import {
   type ClaudeHarnessDeps,
 } from "../claudeHarness";
 import { ClaudeSignIn, type SignInProcess } from "../claudeSignIn";
+import { CLAUDE_MODELS } from "../claudeStatus";
 import { buildClaudeEnv } from "../env";
 
 const recorded = JSON.parse(readFileSync(path.join(__dirname, "fixtures", "claude-turn.json"), "utf8")) as SDKMessage[];
@@ -33,6 +34,8 @@ const SUBSCRIPTION = { email: "person@example.com", subscriptionType: "Claude Ma
 
 interface FakeScript {
   account?: Record<string, unknown>;
+  /** initializationResult().models. Absent: a live list with Sonnet in it. */
+  models?: unknown[];
   initError?: Error;
   /**
    * Claude Code's /usage answer (experimental control request). Absent: a plan
@@ -62,6 +65,11 @@ function usageReport(windows: Record<string, number>, extraUsage?: boolean): Rec
   return { rate_limits_available: true, rate_limits: rateLimits };
 }
 
+const LIVE_MODELS = [
+  { value: "opus", displayName: "Opus 5.5", resolvedModel: "claude-opus-5-5" },
+  { value: "sonnet", displayName: "Sonnet 5.5", resolvedModel: "claude-sonnet-5-5" },
+];
+
 class FakeQuery {
   sent: SDKUserMessage[] = [];
   closed = false;
@@ -75,7 +83,7 @@ class FakeQuery {
 
   async initializationResult() {
     if (this.script.initError) throw this.script.initError;
-    return { account: this.script.account ?? SUBSCRIPTION, models: [], commands: [], agents: [] };
+    return { account: this.script.account ?? SUBSCRIPTION, models: this.script.models ?? LIVE_MODELS, commands: [], agents: [] };
   }
 
   async usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET() {
@@ -711,7 +719,10 @@ describe("Claude harness getStatus", () => {
       signedIn: true,
       billing: "subscription",
       account: { email: "person@example.com", plan: "Max" },
-      models: expect.arrayContaining([expect.objectContaining({ id: "sonnet", isDefault: true })]),
+      models: [
+        { id: "opus", label: "Opus 5.5", resolvedModel: "claude-opus-5-5" },
+        { id: "sonnet", label: "Sonnet 5.5", resolvedModel: "claude-sonnet-5-5", isDefault: true },
+      ],
       signIn: { state: "idle" },
       signInCommand: "claude auth login",
     });
@@ -722,6 +733,11 @@ describe("Claude harness getStatus", () => {
     expect(probe.made[0].sent).toEqual([]);
     expect(probe.made[0].closed).toBe(true);
     expect(runCommand.mock.calls.filter(([, args]) => args.includes("auth"))).toHaveLength(0);
+  });
+
+  it("flags the built-in model list when Claude Code reports none", async () => {
+    const status = await harness({ query: fakeQueries({ models: [] }).query }).getStatus();
+    expect(status).toMatchObject({ signedIn: true, billing: "subscription", models: CLAUDE_MODELS, modelsFallback: true });
   });
 
   it("ignores user settings a turn wouldn't load (an apiKeyHelper in settings.json)", async () => {
@@ -750,7 +766,7 @@ describe("Claude harness getStatus", () => {
     it("falls back to `auth status` with the turn's setting sources", async () => {
       const runCommand = commands({ code: 0, stdout: SIGNED_IN_JSON, stderr: "" });
       const status = await harness({ query: noProbe(), runCommand }).getStatus();
-      expect(status).toMatchObject({ installed: true, signedIn: true, billing: "subscription" });
+      expect(status).toMatchObject({ installed: true, signedIn: true, billing: "subscription", models: CLAUDE_MODELS, modelsFallback: true });
       expect(runCommand).toHaveBeenCalledWith(BIN, CLAUDE_AUTH_STATUS_ARGS, expect.objectContaining({ env: expect.any(Object) }));
       expect(CLAUDE_AUTH_STATUS_ARGS).toEqual(["--setting-sources=", "auth", "status"]);
       expect(runCommand.mock.calls.find(([, args]) => args.includes("auth"))?.[2].env).not.toHaveProperty("ANTHROPIC_API_KEY");

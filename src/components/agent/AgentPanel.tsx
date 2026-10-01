@@ -537,6 +537,7 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
           switchDisabled={busy}
           onHarnessChange={setHarness}
           models={models}
+          modelsFallback={status.statuses[harness]?.modelsFallback}
           model={model}
           onModelChange={chooseModel}
           canStartNewChat={hasMessages}
