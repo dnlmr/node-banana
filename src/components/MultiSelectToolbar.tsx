@@ -16,11 +16,11 @@ import type {
 import { parseDataUrl } from "@/utils/dataUrl";
 import { sniffExtension } from "@/utils/mediaSniff";
 import { getNodeSize } from "@/utils/nodeDimensions";
+import { arrangeNodes, STACK_GAP, type Arrangement } from "@/utils/arrangeNodes";
 import { cn } from "@/components/nodes/ui/cn";
 import { ModelSearchDialog } from "@/components/modals/ModelSearchDialog";
 import { GENERATE_NODE_LABEL, capabilityForGenerateNode, sharedGenerateType } from "@/store/utils/modelSelection";
 
-const STACK_GAP = 20;
 /** A zipped image's extension when its bytes don't prove one. */
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/png": "png",
@@ -29,7 +29,6 @@ const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   "image/webp": "webp",
   "image/svg+xml": "svg",
 };
-type Arrangement = "horizontal" | "vertical" | "grid";
 const ARRANGEMENTS: { mode: Arrangement; label: string; shortcut?: string; Icon: typeof LayoutGrid }[] = [
   { mode: "horizontal", label: "Stack horizontally", Icon: Columns2 },
   { mode: "vertical", label: "Stack vertically", shortcut: "V", Icon: Rows2 },
@@ -130,105 +129,9 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
     return { x: screenX, y: screenY };
   }, [selectedNodes, getViewport]);
 
-  const handleStackHorizontally = (gap: number, nodes = selectedNodes) => {
-    if (selectedNodes.length < 2) return;
-
-    // Sort by current x position to maintain relative order
-    const sortedNodes = [...nodes].sort((a, b) => a.position.x - b.position.x);
-
-    // Use the topmost y position as the alignment point
-    const alignY = Math.min(...sortedNodes.map((n) => n.position.y));
-
-    let currentX = sortedNodes[0].position.x;
-
-    const changes = sortedNodes.map((node) => {
-      const nodeWidth = getNodeSize(node).width;
-
-      const change = {
-        type: "position" as const,
-        id: node.id,
-        position: { x: currentX, y: alignY },
-      };
-
-      currentX += nodeWidth + gap;
-      return change;
-    });
-
-    onNodesChange(changes);
-  };
-
-  const handleStackVertically = (gap: number, nodes = selectedNodes) => {
-    if (selectedNodes.length < 2) return;
-
-    // Sort by current y position to maintain relative order
-    const sortedNodes = [...nodes].sort((a, b) => a.position.y - b.position.y);
-
-    // Use the leftmost x position as the alignment point
-    const alignX = Math.min(...sortedNodes.map((n) => n.position.x));
-
-    let currentY = sortedNodes[0].position.y;
-
-    const changes = sortedNodes.map((node) => {
-      const nodeHeight = getNodeSize(node).height;
-
-      const change = {
-        type: "position" as const,
-        id: node.id,
-        position: { x: alignX, y: currentY },
-      };
-
-      currentY += nodeHeight + gap;
-      return change;
-    });
-
-    onNodesChange(changes);
-  };
-
-  const handleArrangeAsGrid = (gap: number, nodes = selectedNodes) => {
-    if (selectedNodes.length < 2) return;
-
-    // Calculate optimal grid dimensions (as square as possible)
-    const count = nodes.length;
-    const cols = Math.ceil(Math.sqrt(count));
-
-    // Sort nodes by their current position (top-to-bottom, left-to-right)
-    const sortedNodes = [...nodes].sort((a, b) => {
-      const rowA = Math.floor(a.position.y / 100);
-      const rowB = Math.floor(b.position.y / 100);
-      if (rowA !== rowB) return rowA - rowB;
-      return a.position.x - b.position.x;
-    });
-
-    // Find the starting position (top-left of bounding box)
-    const startX = Math.min(...sortedNodes.map((n) => n.position.x));
-    const startY = Math.min(...sortedNodes.map((n) => n.position.y));
-
-    // Get max node dimensions for consistent spacing
-    const maxWidth = Math.max(...sortedNodes.map((n) => getNodeSize(n).width));
-    const maxHeight = Math.max(...sortedNodes.map((n) => getNodeSize(n).height));
-
-    // Position each node in the grid
-    const changes = sortedNodes.map((node, index) => {
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-
-      return {
-        type: "position" as const,
-        id: node.id,
-        position: {
-          x: startX + col * (maxWidth + gap),
-          y: startY + row * (maxHeight + gap),
-        },
-      };
-    });
-
-    onNodesChange(changes);
-  };
-
   const applyArrangement = (mode: Arrangement, gap: number, nodes = selectedNodes) => {
-    if (mode === "horizontal") handleStackHorizontally(gap, nodes);
-    else if (mode === "vertical") handleStackVertically(gap, nodes);
-    else handleArrangeAsGrid(gap, nodes);
+    if (selectedNodes.length < 2) return;
+    onNodesChange(arrangeNodes(mode, nodes, gap));
   };
 
   const chooseArrangement = (mode: Arrangement) => {
