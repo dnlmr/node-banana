@@ -55,6 +55,7 @@ async function runTurn(model: string): Promise<HarnessTurnParams> {
     label: "Codex",
     getStatus: async () => status(),
     startSignIn: async () => ({ state: "pending" }),
+    cancelSignIn: async () => {},
     runTurn: (params) => {
       turns.push(params);
       return (async function* () {})();
