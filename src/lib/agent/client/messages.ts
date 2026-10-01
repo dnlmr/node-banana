@@ -75,33 +75,22 @@ export function lastRenderedPart(messages: readonly AgentUIMessage[]): AgentMess
  * The shimmering progress line under a running turn, or null when the reply
  * itself shows progress (text or reasoning streaming in, a tool card running).
  * A status line from the server ("Planning edits…") shows until something new
- * renders after it, with the harness it names so the panel can colour it.
+ * renders after it.
  */
-export function turnIndicator(
+export function turnIndicatorText(
   messages: readonly AgentUIMessage[],
   busy: boolean,
-  statusLine: { text: string; harness?: AgentHarnessId; renderedParts: number } | null,
-): { text: string; harness?: AgentHarnessId } | null {
+  statusLine: { text: string; renderedParts: number } | null,
+): string | null {
   if (!busy) return null;
-  if (statusLine && statusLine.renderedParts === countRenderedParts(messages)) {
-    return statusLine.harness ? { text: statusLine.text, harness: statusLine.harness } : { text: statusLine.text };
-  }
+  if (statusLine && statusLine.renderedParts === countRenderedParts(messages)) return statusLine.text;
   const last = lastRenderedPart(messages);
-  if (!last) return { text: "Thinking…" };
+  if (!last) return "Thinking…";
   if ((last.type === "text" || last.type === "reasoning") && last.state === "streaming") return null;
   if (last.type === "dynamic-tool" && (last.state === "input-streaming" || last.state === "input-available")) {
     return null;
   }
-  return { text: "Working…" };
-}
-
-/** The progress line's words alone; see `turnIndicator`. */
-export function turnIndicatorText(
-  messages: readonly AgentUIMessage[],
-  busy: boolean,
-  statusLine: { text: string; harness?: AgentHarnessId; renderedParts: number } | null,
-): string | null {
-  return turnIndicator(messages, busy, statusLine)?.text ?? null;
+  return "Working…";
 }
 
 /** Whether an assistant message would render anything at all. */

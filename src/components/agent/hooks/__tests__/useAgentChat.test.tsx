@@ -219,29 +219,7 @@ describe("useAgentChat: status line", () => {
 
   it("shows the opening line as soon as the turn is sent, before the server says anything", async () => {
     const { result, stream } = await startTurn();
-    expect(result.current.statusLine).toEqual({ text: "Fallooning…", harness: "claude", renderedParts: 0 });
-
-    await act(async () => {
-      stream.push({ type: "finish" });
-      stream.end();
-      await sleep(20);
-    });
-  });
-
-  it("keeps the opening line's harness, and takes a text-only part as a plain line", async () => {
-    const { result, stream } = await startTurn();
-
-    await act(async () => {
-      stream.push({ type: "data-agent-status", data: { text: "Fallooning…", harness: "codex" }, transient: true });
-      await sleep(20);
-    });
-    expect(result.current.statusLine).toEqual({ text: "Fallooning…", harness: "codex", renderedParts: 0 });
-
-    await act(async () => {
-      stream.push({ type: "data-agent-status", data: { text: "Planning edits…" }, transient: true });
-      await sleep(20);
-    });
-    expect(result.current.statusLine).toEqual({ text: "Planning edits…", renderedParts: 0 });
+    expect(result.current.statusLine).toEqual({ text: "Fallooning…", renderedParts: 0 });
 
     await act(async () => {
       stream.push({ type: "finish" });

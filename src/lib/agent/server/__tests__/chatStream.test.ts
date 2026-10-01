@@ -257,22 +257,6 @@ describe("createAgentChatStream: text and reasoning", () => {
     expect(message.metadata).toEqual({ harness: "claude", model: "sonnet", modelLabel: "Sonnet" });
   });
 
-  it("opens the turn with Fallooning, naming the harness so the panel can colour it", async () => {
-    const claude = fakeHarness(() => emit({ type: "text-delta", id: "t1", delta: "Hi." }, { type: "text-end", id: "t1" }));
-    const { chunks: claudeChunks } = await run({ harness: claude.harness });
-    expect(chunksOfType(claudeChunks, "data-agent-status")[0].data).toEqual({ text: "Fallooning…", harness: "claude" });
-
-    const codex = fakeHarness(() => emit({ type: "text-delta", id: "t1", delta: "Hi." }, { type: "text-end", id: "t1" }));
-    codex.harness.id = "codex";
-    codex.harness.label = "Codex";
-    const { chunks: codexChunks } = await run({ harness: codex.harness, body: requestBody({ harness: "codex" }) });
-    expect(chunksOfType(codexChunks, "data-agent-status")[0].data).toEqual({ text: "Fallooning…", harness: "codex" });
-    // Clearing the line carries no harness.
-    expect(chunksOfType(codexChunks, "data-agent-status").slice(1)).toEqual([
-      expect.objectContaining({ data: { text: "" } }),
-    ]);
-  });
-
   it("reports the model the panel picked, and passes it to the harness", async () => {
     const { harness, turns } = fakeHarness(() => emit({ type: "text-delta", id: "t", delta: "ok" }));
 
@@ -545,8 +529,6 @@ describe("createAgentChatStream: tool calls", () => {
     const toolChunks = types(chunks).filter((type) => type.startsWith("tool-") || type === "data-graph-ops");
     expect(toolChunks).toEqual(["tool-input-available", "data-graph-ops", "tool-output-available"]);
     expect(statusLines(chunks)).toEqual(["Fallooning…", "", "Planning edits…", ""]);
-    // Tool-call lines are coloured for the harness too.
-    expect(chunksOfType(chunks, "data-agent-status")[2].data).toEqual({ text: "Planning edits…", harness: "claude" });
   });
 
   it("marks a canvas replacement on the ops batch", async () => {

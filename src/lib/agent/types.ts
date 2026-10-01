@@ -25,7 +25,7 @@ export type AgentHarnessId = "claude" | "codex";
 
 export const AGENT_HARNESS_IDS: readonly AgentHarnessId[] = ["claude", "codex"];
 
-/** The turn's opening status line, shown in the answering harness's colour. */
+/** The turn's opening status line, from the moment it is sent until the reply starts. */
 export const AGENT_OPENING_STATUS = "Fallooning…";
 
 /** Who pays for a turn. Only "subscription" may run. */
@@ -403,11 +403,8 @@ export type AgentDataParts = {
   "agent-session": { harness: AgentHarnessId; sessionId: string };
   /** Transient (onData only): canvas changes to apply now. */
   "graph-ops": AgentGraphOpBatch;
-  /**
-   * Transient: a short progress line ("Planning edits…"), with the harness so
-   * the panel can colour it; older parts have none and render plain.
-   */
-  "agent-status": { text: string; harness?: AgentHarnessId };
+  /** Transient: a short progress line ("Planning edits…"). */
+  "agent-status": { text: string };
   /** Persisted: a problem the panel renders inline (sign-in needed, usage limit, ...). */
   "agent-notice": { code: AgentErrorCode; message: string; harness: AgentHarnessId };
   /** Persisted: the conversation's short label in the chat history (the agent's name_conversation call). */

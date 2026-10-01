@@ -21,8 +21,6 @@ type AgentDataPart = DataUIPart<AgentDataParts>;
 
 export interface AgentStatusLine {
   text: string;
-  /** The harness the line is coloured for; absent on parts from older servers. */
-  harness?: AgentHarnessId;
   /** Rendered parts of the reply when the line arrived; it hides once more appear. */
   renderedParts: number;
 }
@@ -191,13 +189,7 @@ export function useAgentChat({
           break;
         case "data-agent-status":
           setStatusLine(
-            part.data.text
-              ? {
-                  text: part.data.text,
-                  ...(part.data.harness ? { harness: part.data.harness } : {}),
-                  renderedParts: countRenderedParts(chat.messages),
-                }
-              : null,
+            part.data.text ? { text: part.data.text, renderedParts: countRenderedParts(chat.messages) } : null,
           );
           break;
         case "data-agent-notice":
@@ -238,7 +230,7 @@ export function useAgentChat({
   // The server sends the opening line only once its checks pass; show it from
   // the moment the turn is sent so the panel doesn't say "Thinking…" first.
   const showOpeningLine = useCallback(() => {
-    setStatusLine({ text: AGENT_OPENING_STATUS, harness: requestRef.current.harness, renderedParts: 0 });
+    setStatusLine({ text: AGENT_OPENING_STATUS, renderedParts: 0 });
   }, []);
 
   const send = useCallback(

@@ -135,12 +135,6 @@ export const HARNESS_LABELS: Record<AgentHarnessId, string> = {
   codex: "Codex",
 };
 
-/** Each harness's brand colour: Claude's clay, and the app's blue for Codex. */
-export const HARNESS_COLORS: Record<AgentHarnessId, string> = {
-  claude: "#D97757",
-  codex: "#3b82f6",
-};
-
 /**
  * What each harness runs on, in the words the panel uses. The app guarantees
  * only what it enforces: never an API key. The vendor may still bill usage past

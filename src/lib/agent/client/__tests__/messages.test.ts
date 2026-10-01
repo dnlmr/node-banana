@@ -13,7 +13,6 @@ import {
   toolDisplayState,
   toolDisplayTitle,
   toolSummaryLine,
-  turnIndicator,
   turnIndicatorText,
 } from "../messages";
 
@@ -125,26 +124,6 @@ describe("turnIndicatorText", () => {
     expect(
       turnIndicatorText([user(), assistant([tool({ state: "output-available", output: { ok: true, summary: "" } })])], true, null),
     ).toBe("Working…");
-  });
-});
-
-describe("turnIndicator", () => {
-  it("carries the opening line's harness, and leaves plain lines plain", () => {
-    expect(turnIndicator([user()], true, { text: "Fallooning…", harness: "codex", renderedParts: 0 })).toEqual({
-      text: "Fallooning…",
-      harness: "codex",
-    });
-    expect(turnIndicatorText([user()], true, { text: "Fallooning…", harness: "claude", renderedParts: 0 })).toBe("Fallooning…");
-    // A status part from before harnesses were sent: text only.
-    expect(turnIndicator([user()], true, { text: "Starting Claude Code…", renderedParts: 0 })).toEqual({
-      text: "Starting Claude Code…",
-    });
-    expect(turnIndicator([user()], true, null)).toEqual({ text: "Thinking…" });
-  });
-
-  it("drops the opening line once the reply renders something", () => {
-    const line = { text: "Fallooning…", harness: "claude" as const, renderedParts: 0 };
-    expect(turnIndicator([user(), assistant([{ type: "text", text: "Hel", state: "streaming" }])], true, line)).toBeNull();
   });
 });
 

@@ -465,13 +465,9 @@ class TurnWriter {
     this.writer.write(kind === "text" ? { type: "text-end", id } : { type: "reasoning-end", id });
   }
 
-  /** A transient progress line for the panel, drawn in the harness's colour; "" clears it. */
+  /** A transient progress line for the panel; "" clears it. */
   status(text: string): void {
-    this.writer.write({
-      type: "data-agent-status",
-      data: text ? { text, harness: this.harnessId } : { text },
-      transient: true,
-    });
+    this.writer.write({ type: "data-agent-status", data: { text }, transient: true });
     this.statusShown = text !== "";
   }
 

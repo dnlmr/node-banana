@@ -29,8 +29,6 @@ export interface TextShimmerProps {
   className?: string;
   duration?: number;
   spread?: number;
-  /** The text's colour under the sweep; ink-3 when unset. */
-  color?: string;
 }
 
 const ShimmerComponent = ({
@@ -39,7 +37,6 @@ const ShimmerComponent = ({
   className,
   duration = 2,
   spread = 2,
-  color = "var(--color-ink-3)",
 }: TextShimmerProps) => {
   const MotionComponent = getMotionComponent(
     Component as keyof JSX.IntrinsicElements
@@ -64,7 +61,7 @@ const ShimmerComponent = ({
         {
           "--spread": `${dynamicSpread}px`,
           backgroundImage:
-            `var(--bg), linear-gradient(${color}, ${color})`,
+            "var(--bg), linear-gradient(var(--color-ink-3), var(--color-ink-3))",
         } as CSSProperties
       }
       transition={{
