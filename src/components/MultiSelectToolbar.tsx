@@ -1,11 +1,12 @@
 "use client";
 
-import { ChevronDown, Columns2, Cpu, Download, Group, LayoutGrid, Play, Rows2, Shrink } from "lucide-react";
+import { ChevronDown, Columns2, Download, LayoutGrid, Play, Replace, Rows2, SquareArrowRightExit, SquareDashed } from "lucide-react";
 import { MenuDivider, MenuIconButton, MenuSurface } from "@/components/ui/Menu";
+import { Tooltip, type TooltipPlacement } from "@/components/ui/Tooltip";
 import { useReactFlow } from "@xyflow/react";
 import { useShallow } from "zustand/shallow";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { memo, useMemo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useMemo, useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes } from "react";
 import JSZip from "jszip";
 import type {
   ImageInputNodeData,
@@ -19,7 +20,7 @@ import { getNodeSize } from "@/utils/nodeDimensions";
 import { arrangeNodes, STACK_GAP, type Arrangement } from "@/utils/arrangeNodes";
 import { cn } from "@/components/nodes/ui/cn";
 import { ModelSearchDialog } from "@/components/modals/ModelSearchDialog";
-import { GENERATE_NODE_LABEL, capabilityForGenerateNode, sharedGenerateType } from "@/store/utils/modelSelection";
+import { capabilityForGenerateNode, sharedGenerateType } from "@/store/utils/modelSelection";
 
 /** A zipped image's extension when its bytes don't prove one. */
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
@@ -40,6 +41,28 @@ const stopCanvasEvents = {
   onKeyDown: (event: React.KeyboardEvent) => event.stopPropagation(),
   onDoubleClick: (event: React.MouseEvent) => event.stopPropagation(),
 };
+
+/** A bar button with the chrome's hover label, which is also its accessible name. */
+function ToolbarButton({
+  label,
+  shortcut,
+  silent = false,
+  tooltipPlacement = "top",
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  shortcut?: string;
+  /** Suppress the hover label (while this button's own menu is up). */
+  silent?: boolean;
+  tooltipPlacement?: TooltipPlacement;
+}) {
+  return (
+    <div role="none" className="group relative flex">
+      <MenuIconButton aria-label={label} {...rest} />
+      {!silent && <Tooltip label={label} shortcut={shortcut} placement={tooltipPlacement} />}
+    </div>
+  );
+}
 
 // Memoised: rendered by the canvas, which re-renders on every drag frame
 export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
@@ -220,24 +243,24 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
       }}
     >
       {/* Run just the selection */}
-      <MenuIconButton
+      <ToolbarButton
         onClick={() => executeSelectedNodes(selectedNodes.map((node) => node.id))}
         disabled={isRunning}
-        title={isRunning ? "A run is in progress" : `Run ${selectedNodes.length} selected nodes`}
-        aria-label="Run selected nodes"
+        label="Run selected nodes"
+        shortcut="⌥↵"
       >
         <Play size={16} strokeWidth={0} fill="currentColor" />
-      </MenuIconButton>
+      </ToolbarButton>
 
       {/* Separator */}
       <MenuDivider variant="bar" className="mx-0.5" />
 
-      <MenuIconButton
+      <ToolbarButton
         onClick={() => setArrangeMenuOpen((open) => !open)}
-        aria-label="Arrange nodes"
+        label="Arrange nodes"
+        silent={popoverOpen}
         aria-haspopup="menu"
         aria-expanded={arrangeMenuOpen}
-        title="Arrange nodes"
         className={cn(
           "flex items-center gap-0.5 pr-1",
           (arrangeMenuOpen || activeArrangement) && "bg-neutral-700 text-neutral-100"
@@ -249,26 +272,20 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
           strokeWidth={2.25}
           className={cn("transition-transform duration-[120ms]", arrangeMenuOpen && "rotate-180")}
         />
-      </MenuIconButton>
+      </ToolbarButton>
 
       {/* Separator */}
       <MenuDivider variant="bar" className="mx-0.5" />
 
       {/* Group/Ungroup buttons */}
       {someInGroup ? (
-        <MenuIconButton
-          onClick={handleUngroup}
-            title="Remove from group"
-        >
-          <Shrink size={16} strokeWidth={1.5} />
-        </MenuIconButton>
+        <ToolbarButton onClick={handleUngroup} label="Remove from group">
+          <SquareArrowRightExit size={16} strokeWidth={1.5} />
+        </ToolbarButton>
       ) : (
-        <MenuIconButton
-          onClick={handleCreateGroup}
-            title="Create group"
-        >
-          <Group size={16} strokeWidth={1.5} />
-        </MenuIconButton>
+        <ToolbarButton onClick={handleCreateGroup} label="Create group">
+          <SquareDashed size={16} strokeWidth={1.5} />
+        </ToolbarButton>
       )}
 
       {/* Separator */}
@@ -276,24 +293,17 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
 
       {generateType && (
         <>
-          <MenuIconButton
-            onClick={() => setModelDialogOpen(true)}
-            title={`Change model for ${selectedNodes.length} ${GENERATE_NODE_LABEL[generateType]} nodes`}
-            aria-label="Change model for selected nodes"
-          >
-            <Cpu size={16} strokeWidth={1.5} />
-          </MenuIconButton>
+          <ToolbarButton onClick={() => setModelDialogOpen(true)} label="Change model for selected nodes">
+            <Replace size={16} strokeWidth={1.5} />
+          </ToolbarButton>
           <MenuDivider variant="bar" className="mx-0.5" />
         </>
       )}
 
       {/* Download images button */}
-      <MenuIconButton
-        onClick={handleDownloadImages}
-        title="Download images as ZIP"
-      >
+      <ToolbarButton onClick={handleDownloadImages} label="Download images as ZIP">
         <Download size={16} strokeWidth={1.5} />
-      </MenuIconButton>
+      </ToolbarButton>
 
       {/* The slider sits directly under the bar, and a reopened menu opens beneath it so the slider never moves */}
       {popoverOpen && (
@@ -337,17 +347,19 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
             {...stopCanvasEvents}
           >
             {ARRANGEMENTS.map(({ mode, label, shortcut, Icon }) => (
-              <MenuIconButton
+              // Labels hang below the menu, clear of the bar and the slider above it
+              <ToolbarButton
                 key={mode}
                 role="menuitemradio"
                 aria-checked={activeArrangement?.mode === mode}
-                aria-label={label}
-                title={shortcut ? `${label} (${shortcut})` : label}
+                label={label}
+                shortcut={shortcut}
+                tooltipPlacement="bottom"
                 onClick={() => chooseArrangement(mode)}
                 className={cn(activeArrangement?.mode === mode && "bg-neutral-700 text-neutral-100")}
               >
                 <Icon size={16} strokeWidth={1.5} />
-              </MenuIconButton>
+              </ToolbarButton>
             ))}
           </MenuSurface>
         )}

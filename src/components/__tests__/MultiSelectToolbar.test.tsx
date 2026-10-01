@@ -74,6 +74,16 @@ const createDefaultState = (overrides = {}) => ({
   ...overrides,
 });
 
+// The chrome hover label drawn beside a button: its text and its key caps
+const tooltipOf = (button: HTMLElement) => {
+  const tooltip = button.parentElement?.querySelector<HTMLElement>(":scope > [aria-hidden='true']") ?? null;
+  return tooltip && {
+    element: tooltip,
+    text: tooltip.firstChild?.textContent,
+    keys: [...tooltip.querySelectorAll("kbd")].map((kbd) => kbd.textContent),
+  };
+};
+
 // Opens the arrange menu and picks a mode by its label
 const arrange = (label: string) => {
   fireEvent.click(screen.getByRole("button", { name: "Arrange nodes" }));
@@ -132,7 +142,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Arrange nodes")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Arrange nodes" })).toBeInTheDocument();
     });
 
     it("should not render when nodes are selected but less than 2", () => {
@@ -170,7 +180,6 @@ describe("MultiSelectToolbar", () => {
     it("runs the selected nodes from the bar", () => {
       render(<TestWrapper><MultiSelectToolbar /></TestWrapper>);
       const runButton = screen.getByRole("button", { name: "Run selected nodes" });
-      expect(runButton).toHaveAttribute("title", "Run 2 selected nodes");
       fireEvent.click(runButton);
       expect(mockExecuteSelectedNodes).toHaveBeenCalledWith(["node-1", "node-2"]);
     });
@@ -195,7 +204,7 @@ describe("MultiSelectToolbar", () => {
       const button = screen.getByRole("button", { name: "Arrange nodes" });
       expect(button).toHaveAttribute("aria-haspopup", "menu");
       expect(button).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByTitle("Stack horizontally")).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitemradio", { name: "Stack horizontally" })).not.toBeInTheDocument();
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
       fireEvent.click(button);
@@ -203,10 +212,10 @@ describe("MultiSelectToolbar", () => {
       expect(button).toHaveAttribute("aria-expanded", "true");
       const items = screen.getAllByRole("menuitemradio");
       // Icons only: the names live in the labels and tooltips
-      expect(items.map((item) => [item.getAttribute("aria-label"), item.title, item.textContent])).toEqual([
-        ["Stack horizontally", "Stack horizontally", ""],
-        ["Stack vertically", "Stack vertically (V)", ""],
-        ["Arrange as grid", "Arrange as grid (G)", ""],
+      expect(items.map((item) => [item.getAttribute("aria-label"), item.textContent])).toEqual([
+        ["Stack horizontally", ""],
+        ["Stack vertically", ""],
+        ["Arrange as grid", ""],
       ]);
       expect(mockOnNodesChange).not.toHaveBeenCalled();
     });
@@ -218,7 +227,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Create group")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Create group" })).toBeInTheDocument();
     });
 
     it("should render download images button", () => {
@@ -228,7 +237,83 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Download images as ZIP")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Download images as ZIP" })).toBeInTheDocument();
+    });
+  });
+
+  describe("Tooltips", () => {
+    const render2 = (overrides = {}) => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({
+          nodes: [createMockNode("v1", { type: "generateVideo" }), createMockNode("v2", { type: "generateVideo", position: { x: 300, y: 100 } })],
+          ...overrides,
+        })));
+      render(<TestWrapper><MultiSelectToolbar /></TestWrapper>);
+    };
+
+    it("labels every bar button with its name and shortcut, above the bar, with no native title", () => {
+      render2();
+      const expected: [string, string[]][] = [
+        ["Run selected nodes", ["⌥", "↵"]],
+        ["Arrange nodes", []],
+        ["Create group", []],
+        ["Change model for selected nodes", []],
+        ["Download images as ZIP", []],
+      ];
+      for (const [name, keys] of expected) {
+        const button = screen.getByRole("button", { name });
+        expect(button).not.toHaveAttribute("title");
+        const tooltip = tooltipOf(button);
+        expect(tooltip).toMatchObject({ text: name, keys });
+        expect(tooltip!.element).toHaveClass("bottom-full");
+      }
+    });
+
+    it("shows on hover and on keyboard focus, and never takes the pointer", () => {
+      render2();
+      const button = screen.getByRole("button", { name: "Create group" });
+      const { element } = tooltipOf(button)!;
+      expect(button.parentElement).toHaveClass("group");
+      expect(element).toHaveClass("group-hover:opacity-100", "group-has-focus-visible:opacity-100", "pointer-events-none");
+    });
+
+    it("labels remove from group when the selection is grouped", () => {
+      render2({ nodes: [createMockNode("n1", { groupId: "g" }), createMockNode("n2", { position: { x: 300, y: 100 } })] });
+      const button = screen.getByRole("button", { name: "Remove from group" });
+      expect(tooltipOf(button)).toMatchObject({ text: "Remove from group" });
+      expect(button.querySelector("svg")).toHaveClass("lucide-square-arrow-right-exit");
+    });
+
+    it("labels the arrange modes below the menu with their shortcuts", () => {
+      render2();
+      fireEvent.click(screen.getByRole("button", { name: "Arrange nodes" }));
+      const tooltips = screen.getAllByRole("menuitemradio").map((item) => {
+        expect(item).not.toHaveAttribute("title");
+        const tooltip = tooltipOf(item)!;
+        expect(tooltip.element).toHaveClass("top-full");
+        return [tooltip.text, tooltip.keys];
+      });
+      expect(tooltips).toEqual([
+        ["Stack horizontally", []],
+        ["Stack vertically", ["V"]],
+        ["Arrange as grid", ["G"]],
+      ]);
+    });
+
+    it("hides the arrange button's label while its menu or slider is open", () => {
+      render2();
+      const button = screen.getByRole("button", { name: "Arrange nodes" });
+      fireEvent.click(button);
+      expect(tooltipOf(button)).toBeNull();
+      fireEvent.click(screen.getByRole("menuitemradio", { name: "Stack vertically" }));
+      expect(screen.getByRole("slider", { name: "Node spacing" })).toBeInTheDocument();
+      expect(tooltipOf(button)).toBeNull();
+    });
+
+    it("draws change model as a swap and grouping as a dashed frame", () => {
+      render2();
+      expect(screen.getByRole("button", { name: "Change model for selected nodes" }).querySelector("svg")).toHaveClass("lucide-replace");
+      expect(screen.getByRole("button", { name: "Create group" }).querySelector("svg")).toHaveClass("lucide-square-dashed");
     });
   });
 
@@ -503,7 +588,7 @@ describe("MultiSelectToolbar", () => {
       arrange("Stack horizontally");
 
       fireEvent.pointerDown(screen.getByRole("slider"));
-      fireEvent.pointerDown(screen.getByTitle("Download images as ZIP"));
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Download images as ZIP" }));
 
       expect(screen.getByRole("slider")).toBeInTheDocument();
     });
@@ -569,7 +654,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      const createGroupButton = screen.getByTitle("Create group");
+      const createGroupButton = screen.getByRole("button", { name: "Create group" });
       fireEvent.click(createGroupButton);
 
       expect(mockCreateGroup).toHaveBeenCalledWith(["node-1", "node-2"]);
@@ -591,8 +676,8 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Remove from group")).toBeInTheDocument();
-      expect(screen.queryByTitle("Create group")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove from group" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Create group" })).not.toBeInTheDocument();
     });
 
     it("should call removeNodesFromGroup when ungroup button is clicked", () => {
@@ -611,7 +696,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      const ungroupButton = screen.getByTitle("Remove from group");
+      const ungroupButton = screen.getByRole("button", { name: "Remove from group" });
       fireEvent.click(ungroupButton);
 
       expect(mockRemoveNodesFromGroup).toHaveBeenCalledWith(["node-1", "node-2"]);
@@ -633,7 +718,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Remove from group")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove from group" })).toBeInTheDocument();
     });
   });
 
@@ -654,7 +739,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Download images as ZIP")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Download images as ZIP" })).toBeInTheDocument();
     });
 
     it("should not download when no images are available", async () => {
@@ -679,7 +764,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      const downloadButton = screen.getByTitle("Download images as ZIP");
+      const downloadButton = screen.getByRole("button", { name: "Download images as ZIP" });
       fireEvent.click(downloadButton);
 
       // Should not create object URL when no images
@@ -714,7 +799,7 @@ describe("MultiSelectToolbar", () => {
           <MultiSelectToolbar />
         </TestWrapper>
       );
-      fireEvent.click(screen.getByTitle("Download images as ZIP"));
+      fireEvent.click(screen.getByRole("button", { name: "Download images as ZIP" }));
 
       await vi.waitFor(() => expect(zipFile).toHaveBeenCalledTimes(2));
       expect(zipFile.mock.calls.map(([name, bytes]) => [name, [...(bytes as Uint8Array)]])).toEqual([
@@ -779,8 +864,7 @@ describe("MultiSelectToolbar", () => {
       mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ nodes: videoNodes() })));
       render(<TestWrapper><MultiSelectToolbar /></TestWrapper>);
 
-      const button = screen.getByRole("button", { name: "Change model for selected nodes" });
-      expect(button).toHaveAttribute("title", "Change model for 3 Generate Video nodes");
+      expect(screen.getByRole("button", { name: "Change model for selected nodes" })).toBeInTheDocument();
     });
 
     it("hides it for a mixed selection or one without generators", () => {
