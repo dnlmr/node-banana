@@ -1,6 +1,7 @@
 "use client";
 
 import type { ButtonHTMLAttributes, ComponentPropsWithRef, HTMLAttributes, ReactNode } from "react";
+import { Minus, Plus } from "lucide-react";
 
 import { cn } from "@/components/nodes/ui/cn";
 import { KbdGroup } from "@/components/ui/Kbd";
@@ -188,6 +189,42 @@ export function MenuBarLabel({ className, children, ...rest }: HTMLAttributes<HT
       )}
     >
       {children}
+    </span>
+  );
+}
+
+export interface MenuStepperProps {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+  /** Names the control and its buttons ("Runs" → "Fewer runs", "More runs"). */
+  label: string;
+  className?: string;
+}
+
+/** − value + in a well, at the right edge of a row. The row itself stays a label, not a button. */
+export function MenuStepper({ value, min, max, onChange, label, className }: MenuStepperProps) {
+  const noun = label.toLowerCase();
+  const button =
+    "flex h-[22px] w-[22px] items-center justify-center rounded-[6px] text-neutral-400 transition-colors " +
+    "hover:bg-white/8 hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection " +
+    "disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-neutral-400";
+  return (
+    <span
+      role="group"
+      aria-label={label}
+      className={cn("ml-auto inline-flex h-[22px] items-center rounded-[6px] bg-well shadow-well", className)}
+    >
+      <button type="button" className={button} aria-label={`Fewer ${noun}`} disabled={value <= min} onClick={() => onChange(value - 1)}>
+        <Minus size={12} strokeWidth={2} />
+      </button>
+      <output aria-live="polite" className="min-w-7 text-center font-mono text-[11px] tabular-nums text-neutral-100">
+        {value}
+      </output>
+      <button type="button" className={button} aria-label={`More ${noun}`} disabled={value >= max} onClick={() => onChange(value + 1)}>
+        <Plus size={12} strokeWidth={2} />
+      </button>
     </span>
   );
 }

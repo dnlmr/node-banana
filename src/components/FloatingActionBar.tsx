@@ -1,6 +1,7 @@
 "use client";
 
-import { MenuItem, MenuSectionLabel, MenuSurface } from "@/components/ui/Menu";
+import { MenuDivider, MenuItem, MenuSectionLabel, MenuStepper, MenuSurface } from "@/components/ui/Menu";
+import { MAX_RUN_COUNT } from "@/store/utils/runBatch";
 import { useRef, useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
 import { ChromeIconButton, type ChromeIconButtonProps } from "./ChromeIconButton";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -28,6 +29,7 @@ import {
   LoaderCircle,
   MessageSquareText,
   Play,
+  Repeat,
   Shapes,
   Sparkles,
   SquareArrowOutUpRight,
@@ -333,9 +335,11 @@ export function FloatingActionBar() {
     runningNodeName,
     isRunning,
     currentNodeIds,
-    executeWorkflow,
-    executeSelectedNodes,
-    stopWorkflow,
+    runBatch,
+    requestStop,
+    runCount,
+    setRunCount,
+    batch,
     mockTutorialExecution,
     edgeStyle,
     setEdgeStyle,
@@ -352,9 +356,11 @@ export function FloatingActionBar() {
     })(),
     isRunning: state.isRunning,
     currentNodeIds: state.currentNodeIds,
-    executeWorkflow: state.executeWorkflow,
-    executeSelectedNodes: state.executeSelectedNodes,
-    stopWorkflow: state.stopWorkflow,
+    runBatch: state.runBatch,
+    requestStop: state.requestStop,
+    runCount: state.runCount,
+    setRunCount: state.setRunCount,
+    batch: state.batch,
     mockTutorialExecution: state.mockTutorialExecution,
     edgeStyle: state.edgeStyle,
     setEdgeStyle: state.setEdgeStyle,
@@ -459,27 +465,28 @@ export function FloatingActionBar() {
     const currentStep = ftuxState.tutorialSteps[ftuxState.currentTutorialStep];
 
     if (isRunning) {
-      stopWorkflow();
+      requestStop();
     } else if (ftuxState.tutorialActive && currentStep?.id === "run-workflow") {
       // Use mock execution for tutorial
       mockTutorialExecution();
     } else {
-      // Normal execution. Resume-from-pause (pause edges) is handled inside
-      // executeWorkflow when no explicit start node is given.
-      executeWorkflow();
+      // Normal execution, as many runs as the menu's count. Resume-from-pause
+      // (pause edges) is handled inside executeWorkflow when no explicit start
+      // node is given.
+      runBatch({ kind: "all" });
     }
-  }, [isRunning, stopWorkflow, executeWorkflow, mockTutorialExecution]);
+  }, [isRunning, requestStop, runBatch, mockTutorialExecution]);
 
   const handleRunFromSelected = () => {
     if (selectedNodeId) {
-      executeWorkflow(selectedNodeId);
+      runBatch({ kind: "from", nodeId: selectedNodeId });
       setRunMenuOpen(false);
     }
   };
 
   const handleRunSelectedNodes = () => {
     if (selectedNodeIds.length > 0) {
-      executeSelectedNodes(selectedNodeIds);
+      runBatch({ kind: "nodes", nodeIds: selectedNodeIds });
       setRunMenuOpen(false);
     }
   };
@@ -489,7 +496,19 @@ export function FloatingActionBar() {
     : "Hide all connections";
   const edgeStyleLabel = `Switch to ${NEXT_EDGE_STYLE[edgeStyle]} connectors`;
   const desktopConnected = useWorkflowStore(state => state.desktopConnected);
-  const runTitle = !desktopConnected ? "Local server disconnected" : !valid ? errors.join("\n") : isRunning ? getRunningLabel() : "Run";
+  const runTitle = !desktopConnected
+    ? "Local server disconnected"
+    : !valid
+      ? errors.join("\n")
+      : batch && isRunning
+        ? batch.stopping
+          ? `Stopping after run ${batch.index}. Click again to stop now`
+          : `Run ${batch.index} of ${batch.count}. Stop finishes this run first`
+        : isRunning
+          ? getRunningLabel()
+          : runCount > 1
+            ? `Run ${runCount} times`
+            : "Run";
 
   return (
     <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2">
@@ -531,7 +550,7 @@ export function FloatingActionBar() {
 
         <div className="relative ml-0.5 flex items-center" ref={runMenuRef}>
           <div
-            className={`flex h-9 items-stretch overflow-hidden rounded-lg squircle transition-[background-color,box-shadow,transform] duration-[120ms] ease-out ${
+            className={`relative flex h-9 items-stretch overflow-hidden rounded-lg squircle transition-[background-color,box-shadow,transform] duration-[120ms] ease-out ${
               !valid && !isRunning
                 ? "bg-white/8 text-neutral-500"
                 : "bg-neutral-50 text-neutral-900 hover:bg-white hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35),0_1px_2px_rgba(0,0,0,0.3)] active:scale-[0.97] active:bg-neutral-200"
@@ -545,7 +564,15 @@ export function FloatingActionBar() {
               data-tutorial="floating-run-button"
               className="flex items-center gap-1.5 whitespace-nowrap pl-3 pr-3.5 text-[13px] font-semibold focus-visible:outline-none disabled:cursor-not-allowed"
             >
-              {isRunning ? (
+              {isRunning && batch ? (
+                <>
+                  <SpinnerIcon />
+                  <span>{batch.stopping ? "Stopping" : "Stop"}</span>
+                  <span className="font-mono text-[11px] font-medium tabular-nums text-neutral-500">
+                    {batch.index} / {batch.count}
+                  </span>
+                </>
+              ) : isRunning ? (
                 <>
                   <SpinnerIcon />
                   <span className="max-w-[150px] truncate">
@@ -556,6 +583,7 @@ export function FloatingActionBar() {
                 <>
                   <PlayIcon />
                   <span>Run</span>
+                  {runCount > 1 && <span className="-ml-0.5 tabular-nums text-neutral-500">{runCount}×</span>}
                 </>
               )}
             </button>
@@ -573,6 +601,16 @@ export function FloatingActionBar() {
                 <ChevronDown size={12} strokeWidth={2.5} className={`transition-transform duration-[120ms] ${runMenuOpen ? "rotate-180" : ""}`} />
               </button>
             )}
+
+            {/* Batch progress: runs finished so far, along the button's bottom edge */}
+            {isRunning && batch && (
+              <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-black/8">
+                <span
+                  className="block h-full bg-neutral-900 transition-[width] duration-300 ease-out"
+                  style={{ width: `${((batch.index - 1) / batch.count) * 100}%` }}
+                />
+              </span>
+            )}
           </div>
 
           {/* Dropdown menu */}
@@ -581,7 +619,7 @@ export function FloatingActionBar() {
               <MenuItem
                 role="menuitem"
                 onClick={() => {
-                  executeWorkflow();
+                  runBatch({ kind: "all" });
                   setRunMenuOpen(false);
                 }}
               >
@@ -608,6 +646,13 @@ export function FloatingActionBar() {
                 {selectedNodeIds.length > 1 ? `Run ${selectedNodeIds.length} selected` : "Run selected"}
                 <KbdGroup keys={["⌥", "↵"]} className="ml-auto pl-3" />
               </MenuItem>
+              <MenuDivider className="my-1" />
+              {/* How many times each row above (and ⌘↵ / ⌥↵) runs; saved with the workflow */}
+              <div className="flex min-h-7 items-center gap-2 px-2.5 py-1 text-xs text-neutral-300">
+                <Repeat {...MENU_ICON} />
+                <span>Runs</span>
+                <MenuStepper label="Runs" value={runCount} min={1} max={MAX_RUN_COUNT} onChange={setRunCount} />
+              </div>
             </MenuSurface>
           )}
         </div>

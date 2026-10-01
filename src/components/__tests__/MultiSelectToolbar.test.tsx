@@ -15,7 +15,7 @@ vi.mock("jszip", () => ({
 const mockOnNodesChange = vi.fn();
 const mockCreateGroup = vi.fn();
 const mockRemoveNodesFromGroup = vi.fn();
-const mockExecuteSelectedNodes = vi.fn();
+const mockRunBatch = vi.fn();
 const mockApplyModelToNodes = vi.fn();
 const mockUseWorkflowStore = vi.fn();
 
@@ -64,7 +64,8 @@ const createDefaultState = (overrides = {}) => ({
   onNodesChange: mockOnNodesChange,
   createGroup: mockCreateGroup,
   removeNodesFromGroup: mockRemoveNodesFromGroup,
-  executeSelectedNodes: mockExecuteSelectedNodes,
+  runBatch: mockRunBatch,
+  runCount: 1,
   applyModelToNodes: mockApplyModelToNodes,
   // Read by the model browser the change-model button opens
   recentModels: [],
@@ -166,7 +167,7 @@ describe("MultiSelectToolbar", () => {
       const runButton = screen.getByRole("button", { name: "Run selected nodes" });
       expect(runButton).toHaveAttribute("title", "Run 2 selected nodes");
       fireEvent.click(runButton);
-      expect(mockExecuteSelectedNodes).toHaveBeenCalledWith(["node-1", "node-2"]);
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "nodes", nodeIds: ["node-1", "node-2"] });
     });
 
     it("holds the run button while a run is in progress", () => {

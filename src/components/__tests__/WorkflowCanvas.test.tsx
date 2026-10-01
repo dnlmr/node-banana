@@ -14,7 +14,7 @@ const mockLoadWorkflow = vi.fn();
 const mockGetNodeById = vi.fn();
 const mockAddToGlobalHistory = vi.fn();
 const mockSetNodeGroupId = vi.fn();
-const mockExecuteWorkflow = vi.fn();
+const mockRunBatch = vi.fn();
 const mockCopySelectedNodes = vi.fn();
 const mockPasteNodes = vi.fn();
 const mockClearClipboard = vi.fn();
@@ -138,7 +138,7 @@ const createDefaultState = (overrides = {}) => ({
   getNodeById: mockGetNodeById,
   addToGlobalHistory: mockAddToGlobalHistory,
   setNodeGroupId: mockSetNodeGroupId,
-  executeWorkflow: mockExecuteWorkflow,
+  runBatch: mockRunBatch,
   isModalOpen: false,
   showQuickstart: false,
   setShowQuickstart: mockSetShowQuickstart,
@@ -697,7 +697,7 @@ describe("WorkflowCanvas", () => {
   });
 
   describe("Keyboard Shortcuts", () => {
-    it("should call executeWorkflow on Ctrl+Enter", () => {
+    it("runs the workflow on Ctrl+Enter", () => {
       render(
         <TestWrapper>
           <WorkflowCanvas />
@@ -706,10 +706,10 @@ describe("WorkflowCanvas", () => {
 
       fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
 
-      expect(mockExecuteWorkflow).toHaveBeenCalled();
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "all" });
     });
 
-    it("should call executeWorkflow on Cmd+Enter", () => {
+    it("runs the workflow on Cmd+Enter", () => {
       render(
         <TestWrapper>
           <WorkflowCanvas />
@@ -718,7 +718,7 @@ describe("WorkflowCanvas", () => {
 
       fireEvent.keyDown(window, { key: "Enter", metaKey: true });
 
-      expect(mockExecuteWorkflow).toHaveBeenCalled();
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "all" });
     });
 
     it("should call copySelectedNodes on Ctrl+C", () => {

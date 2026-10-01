@@ -6,9 +6,9 @@ import { ProviderSettings } from "@/types";
 
 // Mock the workflow store
 const mockAddNode = vi.fn();
-const mockExecuteWorkflow = vi.fn();
-const mockExecuteSelectedNodes = vi.fn();
-const mockStopWorkflow = vi.fn();
+const mockRunBatch = vi.fn();
+const mockRequestStop = vi.fn();
+const mockSetRunCount = vi.fn();
 const mockValidateWorkflow = vi.fn();
 const mockSetEdgeStyle = vi.fn();
 const mockSetAllEdgesHidden = vi.fn();
@@ -83,9 +83,11 @@ const createDefaultState = (overrides = {}) => ({
   desktopConnected: true,
   isRunning: false,
   currentNodeIds: [],
-  executeWorkflow: mockExecuteWorkflow,
-  executeSelectedNodes: mockExecuteSelectedNodes,
-  stopWorkflow: mockStopWorkflow,
+  runBatch: mockRunBatch,
+  requestStop: mockRequestStop,
+  runCount: 1,
+  setRunCount: mockSetRunCount,
+  batch: null,
   validateWorkflow: mockValidateWorkflow,
   edgeStyle: "angular" as const,
   edgeAppearance: { thickness: "regular" as const, fadedOpacity: 0.25, gradient: true, loadingPulse: true },
@@ -572,7 +574,7 @@ describe("FloatingActionBar", () => {
   });
 
   describe("Run Button", () => {
-    it("should call executeWorkflow when Run button is clicked", async () => {
+    it("runs the whole graph when Run button is clicked", async () => {
       render(
         <TestWrapper>
           <FloatingActionBar />
@@ -586,7 +588,7 @@ describe("FloatingActionBar", () => {
       const runButton = screen.getByText("Run");
       fireEvent.click(runButton);
 
-      expect(mockExecuteWorkflow).toHaveBeenCalled();
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "all" });
     });
 
     it("should show Stop button when isRunning is true", async () => {
@@ -607,7 +609,7 @@ describe("FloatingActionBar", () => {
       });
     });
 
-    it("should call stopWorkflow when Stop button is clicked", async () => {
+    it("asks to stop when Stop button is clicked", async () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           isRunning: true,
@@ -627,7 +629,7 @@ describe("FloatingActionBar", () => {
       const stopButton = screen.getByText("Stop");
       fireEvent.click(stopButton);
 
-      expect(mockStopWorkflow).toHaveBeenCalled();
+      expect(mockRequestStop).toHaveBeenCalled();
     });
 
     it("keeps Run enabled when some nodes are missing connections", async () => {
@@ -790,7 +792,7 @@ describe("FloatingActionBar", () => {
       expect(screen.getByText("Run selected")).toBeInTheDocument();
     });
 
-    it("should call executeWorkflow when 'Run all' is clicked", async () => {
+    it("runs the whole graph when 'Run all' is clicked", async () => {
       render(
         <TestWrapper>
           <FloatingActionBar />
@@ -804,7 +806,7 @@ describe("FloatingActionBar", () => {
       fireEvent.click(screen.getByTitle("Run options"));
       fireEvent.click(screen.getByText("Run all"));
 
-      expect(mockExecuteWorkflow).toHaveBeenCalled();
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "all" });
     });
 
     it("should disable 'Run from selected' when no node is selected", async () => {
@@ -847,7 +849,7 @@ describe("FloatingActionBar", () => {
       expect(runFromSelectedButton).not.toHaveClass("cursor-not-allowed");
     });
 
-    it("should call executeWorkflow with node id when 'Run from selected' is clicked", async () => {
+    it("runs from the node when 'Run from selected' is clicked", async () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           nodes: [{ id: "node-1", selected: true, type: "prompt" }],
@@ -867,7 +869,7 @@ describe("FloatingActionBar", () => {
       fireEvent.click(screen.getByTitle("Run options"));
       fireEvent.click(screen.getByText("Run from selected"));
 
-      expect(mockExecuteWorkflow).toHaveBeenCalledWith("node-1");
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "from", nodeId: "node-1" });
     });
 
     it("runs the selection when 'Run selected' is clicked", async () => {
@@ -890,7 +892,77 @@ describe("FloatingActionBar", () => {
       fireEvent.click(screen.getByTitle("Run options"));
       fireEvent.click(screen.getByText("Run selected"));
 
-      expect(mockExecuteSelectedNodes).toHaveBeenCalledWith(["node-1"]);
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "nodes", nodeIds: ["node-1"] });
+    });
+  });
+
+  describe("Batch runs", () => {
+    it("sets the run count from the stepper in the Run menu", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ runCount: 3 })));
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      fireEvent.click(await screen.findByTitle("Run options"));
+
+      expect(screen.getByRole("group", { name: "Runs" })).toHaveTextContent("3");
+      fireEvent.click(screen.getByRole("button", { name: "More runs" }));
+      expect(mockSetRunCount).toHaveBeenCalledWith(4);
+      fireEvent.click(screen.getByRole("button", { name: "Fewer runs" }));
+      expect(mockSetRunCount).toHaveBeenCalledWith(2);
+      // Changing the count leaves the menu open
+      expect(screen.getByText("Run all")).toBeInTheDocument();
+    });
+
+    it("cannot go below one run", async () => {
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      fireEvent.click(await screen.findByTitle("Run options"));
+      expect(screen.getByRole("button", { name: "Fewer runs" })).toBeDisabled();
+    });
+
+    it("says on the button how many runs a press makes", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ runCount: 10 })));
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      expect(await screen.findByText("10×")).toBeInTheDocument();
+      expect(screen.getByTitle("Run 10 times")).toBeInTheDocument();
+    });
+
+    it("shows which run of the batch is going, and that Stop finishes it first", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ isRunning: true, runCount: 10, batch: { id: "b", index: 3, count: 10, stopping: false } }))
+      );
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      expect(await screen.findByText("3 / 10")).toBeInTheDocument();
+      expect(screen.getByText("Stop")).toBeInTheDocument();
+      expect(screen.getByTitle("Run 3 of 10. Stop finishes this run first")).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Stop"));
+      expect(mockRequestStop).toHaveBeenCalled();
+    });
+
+    it("says Stopping once Stop was pressed mid-batch", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ isRunning: true, runCount: 10, batch: { id: "b", index: 3, count: 10, stopping: true } }))
+      );
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      expect(await screen.findByText("Stopping")).toBeInTheDocument();
+      expect(screen.getByTitle("Stopping after run 3. Click again to stop now")).toBeInTheDocument();
     });
   });
 });
