@@ -1,6 +1,6 @@
 "use client";
 
-import { Eye, EyeOff, Minus, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Minus, Pause, Play, Plus, Target, Trash2 } from "lucide-react";
 import { MenuSurface } from "@/components/ui/Menu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EdgeLabelRenderer, useViewport } from "@xyflow/react";
@@ -24,6 +24,8 @@ interface EdgeToolbarProps {
   /** Anchor in flow coordinates, normally the path's label position. */
   x: number;
   y: number;
+  /** Shown on a hidden connection's downstream pill: brings its upstream end into view. */
+  onGoUpstream?: () => void;
 }
 
 /** True for the edge that should carry the toolbar: the first selected one. */
@@ -34,7 +36,7 @@ export function useIsToolbarEdge(edgeId: string): boolean {
 const iconButton =
   "p-1.5 rounded hover:bg-neutral-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed";
 
-export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
+export function EdgeToolbar({ edgeId, x, y, onGoUpstream }: EdgeToolbarProps) {
   const edges = useWorkflowStore((state) => state.edges);
   const clickAnchor = useWorkflowStore((state) => state.edgeMenuAnchor);
   const toggleEdgePause = useWorkflowStore((state) => state.toggleEdgePause);
@@ -178,6 +180,16 @@ export function EdgeToolbar({ edgeId, x, y }: EdgeToolbarProps) {
               title="Unbundle"
             >
               Unbundle
+            </button>
+          )}
+          {onGoUpstream && !grouped && (
+            <button
+              onClick={onGoUpstream}
+              className={`${iconButton} text-neutral-400 hover:text-neutral-100`}
+              title="Go to upstream connection"
+              aria-label="Go to upstream connection"
+            >
+              <Target size={16} strokeWidth={1.5} />
             </button>
           )}
           {isHiddenEdge ? (

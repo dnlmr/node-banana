@@ -155,6 +155,22 @@ describe("EdgeToolbar", () => {
     expect(mockSetEdgesHidden).toHaveBeenCalledWith(["e1"], false);
   });
 
+  it("offers a jump to the upstream end only when the edge asks for one", () => {
+    const onGoUpstream = vi.fn();
+    withEdges([edge("e1", { selected: true, data: { hidden: true } })]);
+    const { rerender } = render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
+    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
+    rerender(<EdgeToolbar edgeId="e1" x={0} y={0} onGoUpstream={onGoUpstream} />);
+    fireEvent.click(screen.getByRole("button", { name: "Go to upstream connection" }));
+    expect(onGoUpstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the upstream jump out when several edges are selected", () => {
+    withEdges([edge("e1", { selected: true, data: { hidden: true } }), edge("e2", { selected: true, data: { hidden: true } })]);
+    render(<EdgeToolbar edgeId="e1" x={0} y={0} onGoUpstream={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
+  });
+
   it("hides a single edge", () => {
     withEdges([edge("e1", { selected: true })]);
     render(<EdgeToolbar edgeId="e1" x={0} y={0} />);

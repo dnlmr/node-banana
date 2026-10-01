@@ -81,7 +81,7 @@ export function EditableEdge({
   source,
   target,
 }: EdgeProps) {
-  const { setEdges, screenToFlowPosition } = useReactFlow();
+  const { setEdges, screenToFlowPosition, setCenter, getZoom } = useReactFlow();
   const edgeStyle = useWorkflowStore((state) => state.edgeStyle);
   const appearance = useWorkflowStore((state) => state.edgeAppearance);
   const [isDragging, setIsDragging] = useState(false);
@@ -494,7 +494,20 @@ export function EditableEdge({
           )}
         </EdgeLabelRenderer>
         {selected && carriesToolbar && (
-          <EdgeToolbar edgeId={id} x={toolbarStub.x + toolbarDir * (toolbarWidth / 2)} y={toolbarStub.y - 10} />
+          <EdgeToolbar
+            edgeId={id}
+            x={toolbarStub.x + toolbarDir * (toolbarWidth / 2)}
+            y={toolbarStub.y - 10}
+            // From the downstream pill: centre the upstream pill and move the toolbar onto it
+            onGoUpstream={
+              toolbarSide === "target"
+                ? () => {
+                    setToolbarSide("source");
+                    void setCenter(sourceStub.x + sourceDir * (sourceWidth / 2), sourceStub.y, { zoom: getZoom(), duration: 300 });
+                  }
+                : undefined
+            }
+          />
         )}
       </>
     );

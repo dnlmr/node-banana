@@ -7,6 +7,7 @@ import { STUB_DOUBLE_CLICK_MS } from "@/components/edges/HiddenEdgeStub";
 
 // Mock the workflow store
 const mockSetEdges = vi.fn();
+const mockSetCenter = vi.fn();
 const mockSetEdgesHidden = vi.fn();
 const mockSetBundleClamp = vi.fn();
 const mockUseWorkflowStore = vi.fn();
@@ -36,6 +37,8 @@ vi.mock("@xyflow/react", async () => {
     useReactFlow: () => ({
       setEdges: mockSetEdges,
       screenToFlowPosition: (p: { x: number; y: number }) => p,
+      setCenter: mockSetCenter,
+      getZoom: () => 1.5,
     }),
     // The real one portals into HTML; foreignObject keeps the labels HTML inside the test's svg
     EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <foreignObject><div>{children}</div></foreignObject>,
@@ -874,6 +877,28 @@ describe("EditableEdge when hidden", () => {
     // Anchored at the source stub (x=112) and 10px above its centre line (y=50)
     expect(toolbar!.style.transform).toBe("translate(112px, 40px)");
     expect(container.querySelector('[data-testid="hidden-edge-ghost"]')).not.toBeNull();
+  });
+
+  it("takes the downstream pill's toolbar to the upstream end", () => {
+    mockUseWorkflowStore.mockImplementation((selector) =>
+      selector(createDefaultState({ edgeAppearance: baseAppearance, edges: [{ ...hiddenEdge, selected: true }] }))
+    );
+    const { container } = render(
+      <TestWrapper>
+        <EditableEdge {...createDefaultProps({ data: { hidden: true }, selected: true })} />
+      </TestWrapper>
+    );
+    // Opened from the upstream pill there is nowhere to go
+    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
+    fireEvent.click(screen.getByTestId("hidden-edge-stub-target").querySelector("button")!);
+    const toolbar = () => container.querySelector('[data-testid="edge-toolbar"]') as HTMLElement;
+    // Target stub anchored at x=288, extending left
+    expect(toolbar().style.transform).toBe("translate(288px, 40px)");
+    fireEvent.click(screen.getByRole("button", { name: "Go to upstream connection" }));
+    // Centres the upstream pill (x=112, unmeasured width) at the current zoom
+    expect(mockSetCenter).toHaveBeenCalledWith(112, 50, { zoom: 1.5, duration: 300 });
+    expect(toolbar().style.transform).toBe("translate(112px, 40px)");
+    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
   });
 });
 
