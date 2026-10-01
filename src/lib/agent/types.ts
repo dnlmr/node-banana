@@ -404,8 +404,8 @@ export type AgentDataParts = {
   /** Transient (onData only): canvas changes to apply now. */
   "graph-ops": AgentGraphOpBatch;
   /**
-   * Transient: a short progress line ("Planning edits…"). The turn's opening
-   * line carries the harness, so the panel can colour it; older parts have none.
+   * Transient: a short progress line ("Planning edits…"), with the harness so
+   * the panel can colour it; older parts have none and render plain.
    */
   "agent-status": { text: string; harness?: AgentHarnessId };
   /** Persisted: a problem the panel renders inline (sign-in needed, usage limit, ...). */

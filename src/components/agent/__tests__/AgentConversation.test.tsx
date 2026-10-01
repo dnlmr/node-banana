@@ -1,7 +1,7 @@
 /**
- * The progress line under a running turn: the opening "Fallooning…" in the
- * answering harness's colour, and plain lines (including text-only status
- * parts from older servers) in the usual ink.
+ * The progress line under a running turn: the server's lines ("Fallooning…",
+ * "Planning edits…") in italics and the answering harness's colour, and
+ * text-only status parts from older servers in the usual ink.
  */
 
 import { describe, it, expect } from "vitest";
@@ -41,6 +41,13 @@ describe("AgentConversation progress line", () => {
     const { status, background } = renderLine({ text: "Fallooning…", harness: "codex", renderedParts: 0 });
     expect(status.textContent).toBe("Fallooning…");
     expect(background).toContain("#3b82f6");
+  });
+
+  it("styles a tool-call line the same way", () => {
+    const { status, background, italic } = renderLine({ text: "Planning edits…", harness: "codex", renderedParts: 0 });
+    expect(status.textContent).toBe("Planning edits…");
+    expect(background).toContain("#3b82f6");
+    expect(italic).toBe(true);
   });
 
   it("renders a text-only status part in the usual ink", () => {

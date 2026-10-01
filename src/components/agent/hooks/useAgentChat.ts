@@ -21,7 +21,7 @@ type AgentDataPart = DataUIPart<AgentDataParts>;
 
 export interface AgentStatusLine {
   text: string;
-  /** The harness the line is coloured for (the turn's opening line only). */
+  /** The harness the line is coloured for; absent on parts from older servers. */
   harness?: AgentHarnessId;
   /** Rendered parts of the reply when the line arrived; it hides once more appear. */
   renderedParts: number;

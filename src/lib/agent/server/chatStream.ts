@@ -465,16 +465,14 @@ class TurnWriter {
     this.writer.write(kind === "text" ? { type: "text-end", id } : { type: "reasoning-end", id });
   }
 
-  /** A transient progress line for the panel; "" clears it. */
+  /** A transient progress line for the panel, drawn in the harness's colour; "" clears it. */
   status(text: string): void {
-    this.writer.write({ type: "data-agent-status", data: { text }, transient: true });
+    this.writer.write({
+      type: "data-agent-status",
+      data: text ? { text, harness: this.harnessId } : { text },
+      transient: true,
+    });
     this.statusShown = text !== "";
-  }
-
-  /** The turn's opening line, in the harness's colour while it spins up. */
-  starting(): void {
-    this.writer.write({ type: "data-agent-status", data: { text: AGENT_OPENING_STATUS, harness: this.harnessId }, transient: true });
-    this.statusShown = true;
   }
 
   private clearStatus(): void {
@@ -879,7 +877,7 @@ async function runClaimedTurn(
     historyLength: conversation.history.length,
     nodeCount: body.workflow.nodes.length,
   });
-  turn.starting();
+  turn.status(AGENT_OPENING_STATUS);
 
   const usage = { inputTokens: 0, outputTokens: 0 };
   let events: AsyncIterable<HarnessEvent>;

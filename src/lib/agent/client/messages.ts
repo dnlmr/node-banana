@@ -75,8 +75,7 @@ export function lastRenderedPart(messages: readonly AgentUIMessage[]): AgentMess
  * The shimmering progress line under a running turn, or null when the reply
  * itself shows progress (text or reasoning streaming in, a tool card running).
  * A status line from the server ("Planning edits…") shows until something new
- * renders after it, with the harness it names (the turn's opening line) so the
- * panel can colour it.
+ * renders after it, with the harness it names so the panel can colour it.
  */
 export function turnIndicator(
   messages: readonly AgentUIMessage[],

@@ -267,8 +267,10 @@ describe("createAgentChatStream: text and reasoning", () => {
     codex.harness.label = "Codex";
     const { chunks: codexChunks } = await run({ harness: codex.harness, body: requestBody({ harness: "codex" }) });
     expect(chunksOfType(codexChunks, "data-agent-status")[0].data).toEqual({ text: "Fallooning…", harness: "codex" });
-    // Later lines stay plain: only the opening one is coloured.
-    expect(chunksOfType(codexChunks, "data-agent-status").slice(1).every((chunk) => chunk.data.harness === undefined)).toBe(true);
+    // Clearing the line carries no harness.
+    expect(chunksOfType(codexChunks, "data-agent-status").slice(1)).toEqual([
+      expect.objectContaining({ data: { text: "" } }),
+    ]);
   });
 
   it("reports the model the panel picked, and passes it to the harness", async () => {
@@ -543,6 +545,8 @@ describe("createAgentChatStream: tool calls", () => {
     const toolChunks = types(chunks).filter((type) => type.startsWith("tool-") || type === "data-graph-ops");
     expect(toolChunks).toEqual(["tool-input-available", "data-graph-ops", "tool-output-available"]);
     expect(statusLines(chunks)).toEqual(["Fallooning…", "", "Planning edits…", ""]);
+    // Tool-call lines are coloured for the harness too.
+    expect(chunksOfType(chunks, "data-agent-status")[2].data).toEqual({ text: "Planning edits…", harness: "claude" });
   });
 
   it("marks a canvas replacement on the ops batch", async () => {
