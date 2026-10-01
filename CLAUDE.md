@@ -63,10 +63,19 @@ All application state lives in `workflowStore.ts` using Zustand. Key patterns:
 ### Execution Flow
 
 1. User clicks Run or presses `Cmd/Ctrl+Enter`
-2. `executeWorkflow()` performs topological sort on node graph
-3. Nodes execute in dependency order, calling APIs as needed
-4. `getConnectedInputs()` provides upstream images/text to each node
-5. Locked groups are skipped; pause edges halt execution
+2. `runBatch(scope)` runs it `runCount` times (the Run menu's "Runs" stepper, saved with the workflow, 1–50), one run after another
+3. `executeWorkflow()` performs topological sort on node graph
+4. Nodes execute in dependency order, calling APIs as needed
+5. `getConnectedInputs()` provides upstream images/text to each node
+6. Locked groups are skipped; pause edges halt execution
+
+**Batch runs** (`src/store/utils/runBatch.ts`): every Run entry point (the
+button and its menu, ⌘↵, ⌥↵, the multi-select toolbar, a group's "Run group")
+goes through `runBatch`. A batch stops early on a failed run, a pause edge or
+a replaced canvas. The button's Stop is `requestStop`: mid-batch the first
+press lets the current run finish, the second stops now (`stopWorkflow`).
+`batch` (`id`, `index`, `count`) rides on each run's outputs: carousel
+entries, recent generations and asset records.
 
 ## AI Models
 
@@ -146,7 +155,7 @@ Returns `{ images: string[], text: string | null }`.
 
 ## Keyboard Shortcuts
 
-- `Cmd/Ctrl + Enter` - Run workflow
+- `Cmd/Ctrl + Enter` - Run workflow (as many times as the Run menu's Runs count)
 - `Cmd/Ctrl + C/V` - Copy/paste nodes
 - `Shift + P` - Add prompt node at center
 - `Shift + I` - Add image input node
