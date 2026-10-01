@@ -87,8 +87,9 @@ describe("a preference stated earlier in the chat", () => {
     // to the saved defaults, so a model chosen in turn 1 was dropped in turn 3.
     expect(prompt).toMatch(/earlier in the conversation/);
     expect(prompt).toMatch(/hold for the rest of the conversation until they change them/);
-    // "Use Opus" in the chat cannot switch the agent's own model; it must say where to.
-    expect(prompt).toMatch(/model menu at the top of this chat/);
+    // A generator added next to ones the user set up by hand takes their model, and says so.
+    expect(prompt).toMatch(/the canvas already has nodes of that type: a new one takes their model/);
+    expect(prompt).toMatch(/your reply names the model you reused/);
   });
 
   it("is not overridden by Codex's guard against the user's AGENTS.md", () => {
