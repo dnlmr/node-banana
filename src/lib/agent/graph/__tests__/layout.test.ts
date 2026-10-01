@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  alignNewNodes,
   arrangeNodes,
+  boxesOverlap,
   arrangeWithGroups,
   COLUMN_GAP,
   fitGroupBox,
@@ -162,6 +164,89 @@ describe("placeNewNodes with the heights the node shell renders", () => {
     expect(placed.x).toBe(500 - COLUMN_GAP - 320);
     expect(overlap(placed, fixed[1])).toBe(false);
     expect(placed.y).toBeGreaterThanOrEqual(-200 + measured.prompt);
+  });
+});
+
+describe("alignNewNodes", () => {
+  // A neat cluster as arrangeNodes leaves it, with the heights the canvas
+  // measured: prompt → generate image → generate video, columns centred on
+  // the tallest.
+  const cluster = (): LayoutBox[] => [box("p", 0, 116, 320, 220), box("g", 420, 0, 300, 452), box("v", 820, 0, 300, 452)];
+  const chain = [{ source: "p", target: "g" }, { source: "g", target: "v" }];
+  // Where placeNewNodes put the new nodes: the alignment starts from anywhere.
+  const fresh = (id: string, width: number, height: number): LayoutBox => box(id, 5000, 5000, width, height);
+
+  /** The placed boxes, after checking no two boxes on the canvas overlap. */
+  function align(place: LayoutBox[], fixed: LayoutBox[], edges: Array<{ source: string; target: string }>, areas?: Array<{ box: LayoutBox; members: string[] }>) {
+    const positions = alignNewNodes({ place, fixed, edges, areas });
+    const placed = place.map((b) => ({ ...b, ...(positions.get(b.id) ?? {}) }));
+    const all = [...fixed, ...placed];
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) expect(boxesOverlap(all[i], all[j]), `${all[i].id} × ${all[j].id}`).toBe(false);
+    }
+    return { positions, byId: new Map(placed.map((b) => [b.id, b])) };
+  }
+
+  it("(a) centres a node added after the last column on the row it continues", () => {
+    const { positions } = align([fresh("o", 320, 320)], cluster(), [...chain, { source: "v", target: "o" }]);
+    // Column x: the video's column plus its width and the gap. Row: centred on the video (0 + 452 / 2 - 320 / 2).
+    expect(positions.get("o")).toEqual({ x: 820 + 300 + COLUMN_GAP, y: 66 });
+  });
+
+  it("(b) puts a node inserted between two fixed nodes in the next column, below what is there", () => {
+    // p → l → g: the fixed g cannot move right to open a column, so l shares g's column, a row gap below it.
+    const { positions } = align([fresh("l", 320, 360)], cluster(), [{ source: "p", target: "l" }, { source: "l", target: "g" }, { source: "g", target: "v" }]);
+    expect(positions.get("l")).toEqual({ x: 420, y: 452 + ROW_GAP });
+  });
+
+  it("(c) stacks two feeders on the column of the node beside their target, a row gap apart", () => {
+    const { positions } = align([fresh("i1", 300, 280), fresh("i2", 300, 280)], cluster(), [...chain, { source: "i1", target: "g" }, { source: "i2", target: "g" }]);
+    // Same x as the prompt (not right-aligned to its 320 width), each a row gap below the node above.
+    expect(positions.get("i1")).toEqual({ x: 0, y: 116 + 220 + ROW_GAP });
+    expect(positions.get("i2")).toEqual({ x: 0, y: 116 + 220 + ROW_GAP + 280 + ROW_GAP });
+  });
+
+  it("(d) lets a member into its group's box and keeps everything else out of it", () => {
+    // The group's box (with its title band) around the cluster and the space right of it.
+    const area = { box: box("group:g1", -30, -80, 1700, 590), members: ["p", "g", "v", "o"] };
+    const member = align([fresh("o", 320, 320)], cluster(), [...chain, { source: "v", target: "o" }], [area]);
+    expect(member.positions.get("o")).toEqual({ x: 1220, y: 66 });
+    const outsider = align([fresh("o", 320, 320)], cluster(), [...chain, { source: "v", target: "o" }], [{ ...area, members: ["p", "g", "v"] }]);
+    expect(outsider.positions.get("o")).toEqual({ x: 1220, y: -80 + 590 + ROW_GAP });
+  });
+
+  it("(e) lines a node fed by a user-placed straggler up with the cluster's column, between its feeders' rows", () => {
+    const fixed = [...cluster(), box("ii", 37, 913, 300, 280)];
+    const { positions } = align([fresh("n", 300, 460)], fixed, [...chain, { source: "ii", target: "n" }, { source: "p", target: "n" }]);
+    // x is g's column, not right of the straggler (37 + 300 + 100 = 437); centred between 226 and 1053, it slides below g.
+    expect(positions.get("n")).toEqual({ x: 420, y: 452 + ROW_GAP });
+  });
+
+  it("chains several new nodes onto the grid, each centred on what feeds it", () => {
+    const { positions } = align(
+      [fresh("p2", 320, 220), fresh("v2", 300, 460), fresh("o", 320, 320)],
+      cluster(),
+      [...chain, { source: "g", target: "v2" }, { source: "p2", target: "v2" }, { source: "v2", target: "o" }],
+    );
+    expect(positions.get("v2")).toEqual({ x: 820, y: 452 + ROW_GAP });
+    expect(positions.get("o")).toEqual({ x: 1220, y: 492 + 230 - 160 });
+    // The new prompt is a source, so column 0, centred on the video it feeds.
+    expect(positions.get("p2")).toEqual({ x: 0, y: 492 + 230 - 110 });
+  });
+
+  it("moves a new node right of an upstream node it would crowd", () => {
+    const fixed = [box("a", 0, 0), box("b", 400, 0), box("u", 900, 600)];
+    const { positions } = align([fresh("n", 300, 300)], fixed, [{ source: "a", target: "b" }, { source: "a", target: "n" }, { source: "u", target: "n" }]);
+    expect(positions.get("n")!.x).toBe(900 + 300 + COLUMN_GAP);
+  });
+
+  it("leaves new clusters without fixed nodes, and every fixed node, where they are", () => {
+    const fixed = cluster();
+    const before = JSON.stringify(fixed);
+    const loneCluster = [box("x", 3000, 0), box("y", 3400, 0)];
+    const { positions } = align([...loneCluster, fresh("o", 320, 320)], fixed, [...chain, { source: "x", target: "y" }, { source: "v", target: "o" }]);
+    expect([...positions.keys()]).toEqual(["o"]);
+    expect(JSON.stringify(fixed)).toBe(before);
   });
 });
 

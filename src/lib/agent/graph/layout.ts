@@ -6,7 +6,9 @@
  * connects to: right of its upstream nodes, left of its downstream nodes, or —
  * when it touches nothing — right of the existing canvas (or in the visible
  * area when the canvas is empty or being replaced). A cluster that would
- * overlap existing nodes slides down until it is clear.
+ * overlap existing nodes slides down until it is clear. New nodes that join
+ * existing ones are then lined up with that cluster's columns and rows
+ * (alignNewNodes); the existing nodes never move.
  *
  * Groups: the columns are made of *units*, a lone node or a whole group. A
  * group's members are first laid out as their own block (columns, separate
@@ -199,6 +201,137 @@ function placeUnits(
     }
   }
   return result;
+}
+
+export interface AlignRequest {
+  /** New nodes, where they were placed, in creation order. */
+  place: LayoutBox[];
+  /** Every other node (they do not move). */
+  fixed: LayoutBox[];
+  edges: LayoutEdge[];
+  /** Boxes a new node stays out of unless it is one of the members (a group's box and title band). */
+  areas?: Array<{ box: LayoutBox; members: string[] }>;
+}
+
+/**
+ * New nodes that joined a cluster of fixed nodes, re-placed on that
+ * cluster's grid. The fixed nodes are anchors and never move: the cluster's
+ * columns (depth = longest path, as in shapeCluster) take the x most of their
+ * fixed nodes share, and a column with none is spaced from its neighbour. A
+ * new node takes its column's x (or moves right of an upstream node it would
+ * crowd), is centred on the rows of the nodes it connects to, and slides down
+ * until it is clear. New nodes in a cluster without fixed nodes keep their
+ * place; only moved nodes are returned.
+ */
+export function alignNewNodes(request: AlignRequest): Map<string, { x: number; y: number }> {
+  const result = new Map<string, { x: number; y: number }>();
+  const fresh = new Map(request.place.map((b) => [b.id, b]));
+  const fixed = new Map(request.fixed.filter((b) => !fresh.has(b.id)).map((b) => [b.id, b]));
+  const known = (id: string) => fresh.has(id) || fixed.has(id);
+  const edges = request.edges.filter((e) => !e.isLoop && known(e.source) && known(e.target));
+  const clusters = components([...fixed.keys(), ...fresh.keys()], edges).filter(
+    (ids) => ids.some((id) => fresh.has(id)) && ids.some((id) => fixed.has(id)),
+  );
+  const moving = new Set(clusters.flat().filter((id) => fresh.has(id)));
+  const obstacles: LayoutBox[] = [...fixed.values(), ...request.place.filter((b) => !moving.has(b.id))];
+  const placed = new Map<string, LayoutBox>();
+  const at = (id: string) => fixed.get(id) ?? placed.get(id);
+
+  for (const ids of clusters) {
+    const { predecessors, successors, depth } = columnsOf(ids, edges);
+    const columnCount = Math.max(...ids.map((id) => depth.get(id)!)) + 1;
+    const columnX: Array<number | undefined> = Array.from({ length: columnCount }, (_, d) =>
+      commonX(ids.filter((id) => fixed.has(id) && depth.get(id) === d).map((id) => fixed.get(id)!.x)),
+    );
+    // A column is as wide as its widest node, not counting fixed nodes placed off it.
+    const columnWidth = Array.from({ length: columnCount }, () => 0);
+    for (const id of ids) {
+      const d = depth.get(id)!;
+      const box = fixed.get(id);
+      if (box && box.x !== columnX[d]) continue;
+      columnWidth[d] = Math.max(columnWidth[d], (box ?? fresh.get(id)!).width);
+    }
+    for (let d = 1; d < columnCount; d++) {
+      const left = columnX[d - 1];
+      if (columnX[d] === undefined && left !== undefined) columnX[d] = left + columnWidth[d - 1] + COLUMN_GAP;
+    }
+    for (let d = columnCount - 2; d >= 0; d--) {
+      const right = columnX[d + 1];
+      if (columnX[d] === undefined && right !== undefined) columnX[d] = right - COLUMN_GAP - columnWidth[d];
+    }
+
+    const order = ids.filter((id) => moving.has(id)).sort((a, b) => depth.get(a)! - depth.get(b)!);
+    const xOf = new Map<string, number>();
+    for (const id of order) {
+      let x = columnX[depth.get(id)!]!;
+      const ends = predecessors.get(id)!.map((p) => {
+        const box = fixed.get(p);
+        return box ? box.x + box.width : xOf.get(p)! + fresh.get(p)!.width;
+      });
+      const upstreamRight = ends.length > 0 ? Math.max(...ends) : undefined;
+      if (upstreamRight !== undefined && x < upstreamRight + COLUMN_GAP / 2) x = upstreamRight + COLUMN_GAP;
+      xOf.set(id, Math.round(x));
+    }
+
+    // Rows: left to right from what feeds a node (and fixed nodes it feeds);
+    // then right to left for nodes only reachable through what they feed.
+    const centreOf = (neighbours: string[]) => {
+      const boxes = neighbours.map(at).filter((b): b is LayoutBox => !!b);
+      return boxes.length > 0 ? boxes.reduce((sum, b) => sum + b.y + b.height / 2, 0) / boxes.length : undefined;
+    };
+    const put = (id: string, centre: number) => {
+      const { width, height } = fresh.get(id)!;
+      const box = slideDown(
+        { id, x: xOf.get(id)!, y: Math.round(centre - height / 2), width, height },
+        [...obstacles, ...(request.areas ?? []).filter((a) => !a.members.includes(id)).map((a) => a.box)],
+      );
+      placed.set(id, box);
+      obstacles.push(box);
+      result.set(id, { x: box.x, y: box.y });
+    };
+    let waiting = order;
+    for (const pass of ["feeds", "fed"] as const) {
+      const next: string[] = [];
+      for (const id of pass === "feeds" ? waiting : [...waiting].reverse()) {
+        const neighbours = pass === "feeds"
+          ? [...predecessors.get(id)!, ...successors.get(id)!.filter((s) => fixed.has(s))]
+          : [...successors.get(id)!, ...predecessors.get(id)!];
+        const centre = centreOf(neighbours);
+        if (centre === undefined) next.push(id);
+        else put(id, centre);
+      }
+      waiting = next;
+    }
+    // Every node connects to the cluster, so the passes reach it; this only guards the loop.
+    for (const id of waiting) put(id, centreOf(ids.filter((n) => fixed.has(n))) ?? 0);
+  }
+  return result;
+}
+
+/** The x most of a column's fixed nodes share (the leftmost on a tie). */
+function commonX(xs: number[]): number | undefined {
+  let best: number | undefined;
+  let bestCount = 0;
+  for (const x of [...xs].sort((a, b) => a - b)) {
+    const count = xs.filter((v) => v === x).length;
+    if (count > bestCount) {
+      best = x;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/** The box moved down until it overlaps nothing, keeping the row gap above and below its neighbours in a column. */
+function slideDown(box: LayoutBox, obstacles: LayoutBox[]): LayoutBox {
+  const inColumn = obstacles.filter((o) => o.x < box.x + box.width + COLLISION_MARGIN && o.x + o.width + COLLISION_MARGIN > box.x);
+  let y = box.y;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const blocking = inColumn.filter((o) => y < o.y + o.height + ROW_GAP && y + box.height + ROW_GAP > o.y);
+    if (blocking.length === 0) break;
+    y = Math.max(...blocking.map((o) => o.y + o.height + ROW_GAP));
+  }
+  return { ...box, y };
 }
 
 /**
@@ -433,28 +566,7 @@ function shapeCluster(
   sizes: Map<string, { width: number; height: number }>,
   edges: LayoutEdge[],
 ): ClusterShape {
-  const inSet = new Set(ids);
-  const internal = edges.filter((e) => inSet.has(e.source) && inSet.has(e.target) && e.source !== e.target);
-  const predecessors = new Map<string, string[]>(ids.map((id) => [id, []]));
-  const successors = new Map<string, string[]>(ids.map((id) => [id, []]));
-  for (const edge of internal) {
-    predecessors.get(edge.target)!.push(edge.source);
-    successors.get(edge.source)!.push(edge.target);
-  }
-
-  // Longest-path depth via Kahn's order; nodes stuck in a cycle stay at 0.
-  const depth = new Map<string, number>(ids.map((id) => [id, 0]));
-  const remaining = new Map<string, number>(ids.map((id) => [id, predecessors.get(id)!.length]));
-  const queue = ids.filter((id) => remaining.get(id) === 0);
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const next of successors.get(current)!) {
-      depth.set(next, Math.max(depth.get(next)!, depth.get(current)! + 1));
-      remaining.set(next, remaining.get(next)! - 1);
-      if (remaining.get(next) === 0) queue.push(next);
-    }
-  }
-
+  const { predecessors, successors, depth } = columnsOf(ids, edges);
   const columnCount = Math.max(...ids.map((id) => depth.get(id)!)) + 1;
   const columns: string[][] = Array.from({ length: columnCount }, () => []);
   for (const id of ids) columns[depth.get(id)!].push(id);
@@ -495,6 +607,30 @@ function shapeCluster(
   });
   const clusterSizes = new Map(ids.map((id) => [id, { width: sizes.get(id)!.width, height: sizes.get(id)!.height }]));
   return { ids, sizes: clusterSizes, offsets, width, height, depth, columnX, columnWidth };
+}
+
+/** Each node's neighbours within the set, and its column: longest-path depth via Kahn's order (nodes stuck in a cycle stay at 0). */
+function columnsOf(ids: string[], edges: LayoutEdge[]) {
+  const inSet = new Set(ids);
+  const internal = edges.filter((e) => inSet.has(e.source) && inSet.has(e.target) && e.source !== e.target);
+  const predecessors = new Map<string, string[]>(ids.map((id) => [id, []]));
+  const successors = new Map<string, string[]>(ids.map((id) => [id, []]));
+  for (const edge of internal) {
+    predecessors.get(edge.target)!.push(edge.source);
+    successors.get(edge.source)!.push(edge.target);
+  }
+  const depth = new Map<string, number>(ids.map((id) => [id, 0]));
+  const remaining = new Map<string, number>(ids.map((id) => [id, predecessors.get(id)!.length]));
+  const queue = ids.filter((id) => remaining.get(id) === 0);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const next of successors.get(current)!) {
+      depth.set(next, Math.max(depth.get(next)!, depth.get(current)! + 1));
+      remaining.set(next, remaining.get(next)! - 1);
+      if (remaining.get(next) === 0) queue.push(next);
+    }
+  }
+  return { predecessors, successors, depth };
 }
 
 function sortByBarycentre(column: string[], neighbours: Map<string, string[]>, rowOf: Map<string, number>): string[] {
