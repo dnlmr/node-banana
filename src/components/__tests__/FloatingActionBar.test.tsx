@@ -952,6 +952,47 @@ describe("FloatingActionBar", () => {
       expect(mockRequestStop).toHaveBeenCalled();
     });
 
+    it("offers to run the group when the selection is exactly one group", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({
+          nodes: [
+            { id: "a", type: "prompt", selected: true, groupId: "g", position: { x: 0, y: 0 }, data: {} },
+            { id: "b", type: "nanoBanana", selected: true, groupId: "g", position: { x: 0, y: 0 }, data: {} },
+          ],
+          groups: { g: { id: "g", name: "Hero shots", color: "blue", position: { x: 0, y: 0 }, size: { width: 1, height: 1 } } },
+        }))
+      );
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      fireEvent.click(await screen.findByTitle("Run options"));
+      expect(screen.getByText("Hero shots")).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Run group"));
+      expect(mockRunBatch).toHaveBeenCalledWith({ kind: "nodes", nodeIds: ["a", "b"] });
+    });
+
+    it("keeps 'Run selected' when the selection is only part of a group", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({
+          nodes: [
+            { id: "a", type: "prompt", selected: true, groupId: "g", position: { x: 0, y: 0 }, data: {} },
+            { id: "b", type: "nanoBanana", groupId: "g", position: { x: 0, y: 0 }, data: {} },
+          ],
+          groups: { g: { id: "g", name: "Hero shots", color: "blue", position: { x: 0, y: 0 }, size: { width: 1, height: 1 } } },
+        }))
+      );
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      fireEvent.click(await screen.findByTitle("Run options"));
+      expect(screen.getByText("Run selected")).toBeInTheDocument();
+      expect(screen.queryByText("Run group")).not.toBeInTheDocument();
+    });
+
     it("says Stopping once Stop was pressed mid-batch", async () => {
       mockUseWorkflowStore.mockImplementation((selector) =>
         selector(createDefaultState({ isRunning: true, runCount: 10, batch: { id: "b", index: 3, count: 10, stopping: true } }))

@@ -2,6 +2,7 @@
 
 import { MenuDivider, MenuItem, MenuSectionLabel, MenuStepper, MenuSurface } from "@/components/ui/Menu";
 import { MAX_RUN_COUNT } from "@/store/utils/runBatch";
+import { groupLabelColor } from "@/utils/groupColors";
 import { useRef, useState, useEffect, useMemo, useCallback, type ReactNode } from "react";
 import { ChromeIconButton, type ChromeIconButtonProps } from "./ChromeIconButton";
 import { useWorkflowStore } from "@/store/workflowStore";
@@ -25,6 +26,7 @@ import {
   Eye,
   EyeOff,
   FastForward,
+  Group,
   Image,
   LoaderCircle,
   MessageSquareText,
@@ -417,6 +419,15 @@ export function FloatingActionBar() {
 
   const selectedNodeIds = useWorkflowStore(useShallow((state) => state.nodes.filter((node) => node.selected).map((node) => node.id)));
   const selectedNodeId = selectedNodeIds.length === 1 ? selectedNodeIds[0] : null;
+  // The selection is exactly one unlocked group's nodes: "Run selected" reads as running that group
+  const selectedGroup = useWorkflowStore(useShallow((state) => {
+    const selected = state.nodes.filter((node) => node.selected);
+    const groupId = selected[0]?.groupId;
+    const group = groupId ? state.groups[groupId] : undefined;
+    if (!groupId || !group || group.locked || !selected.every((node) => node.groupId === groupId)) return null;
+    const members = state.nodes.filter((node) => node.groupId === groupId).length;
+    return members === selected.length ? { name: group.name, color: group.color } : null;
+  }));
 
   // Check if we're on the run options tutorial step
   const isRunOptionsTutorialStep = useMemo(() => {
@@ -642,8 +653,20 @@ export function FloatingActionBar() {
                 disabled={selectedNodeIds.length === 0}
                 title={selectedNodeIds.length === 0 ? "Select one or more nodes first" : `Run ${selectedNodeIds.length} selected node${selectedNodeIds.length > 1 ? 's' : ''}`}
               >
-                <FastForward {...MENU_ICON} />
-                {selectedNodeIds.length > 1 ? `Run ${selectedNodeIds.length} selected` : "Run selected"}
+                {selectedGroup ? (
+                  <>
+                    <Group {...MENU_ICON} />
+                    Run group
+                    <span className="max-w-[140px] truncate" style={{ color: groupLabelColor(selectedGroup.color) }}>
+                      {selectedGroup.name}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <FastForward {...MENU_ICON} />
+                    {selectedNodeIds.length > 1 ? `Run ${selectedNodeIds.length} selected` : "Run selected"}
+                  </>
+                )}
                 <KbdGroup keys={["⌥", "↵"]} className="ml-auto pl-3" />
               </MenuItem>
               <MenuDivider className="my-1" />

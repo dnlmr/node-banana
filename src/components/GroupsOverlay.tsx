@@ -1,6 +1,6 @@
 "use client";
 
-import { Ellipsis, Lock, LogOut, Pencil, Trash2 } from "lucide-react";
+import { Ellipsis, Lock, LogOut, Pencil, Play, Repeat, Trash2 } from "lucide-react";
 import { memo, useCallback, useState, useRef, useEffect } from "react";
 import { useStore, ViewportPortal, type ReactFlowState, useReactFlow } from "@xyflow/react";
 import { useShallow } from "zustand/shallow";
@@ -10,7 +10,8 @@ import { GroupColor } from "@/types";
 import { isOverviewZoom } from "@/utils/canvasPerformance";
 import { groupBaseColor, groupColorLabel, groupFill, groupLabelColor } from "@/utils/groupColors";
 import { cn } from "@/components/nodes/ui/cn";
-import { MenuDivider, MenuItem, MenuList, MenuSectionLabel, MenuShortcut, MenuSurface } from "@/components/ui/Menu";
+import { MenuDivider, MenuItem, MenuList, MenuSectionLabel, MenuShortcut, MenuStepper, MenuSurface } from "@/components/ui/Menu";
+import { MAX_RUN_COUNT } from "@/store/utils/runBatch";
 
 /** Inset of the label from the group's left edge, so it starts inside the corner radius. */
 const LABEL_INSET = 10;
@@ -71,7 +72,7 @@ const GroupControls = memo(function GroupControls({
   groupId,
   showInteractiveControls,
 }: GroupControlsProps) {
-  const { group, updateGroup, deleteGroup, moveGroupNodes, toggleGroupLock } =
+  const { group, updateGroup, deleteGroup, moveGroupNodes, toggleGroupLock, runCount, setRunCount, runBatch, isRunning } =
     useWorkflowStore(
       useShallow((state) => ({
         group: state.groups[groupId],
@@ -79,6 +80,10 @@ const GroupControls = memo(function GroupControls({
         deleteGroup: state.deleteGroup,
         moveGroupNodes: state.moveGroupNodes,
         toggleGroupLock: state.toggleGroupLock,
+        runCount: state.runCount,
+        setRunCount: state.setRunCount,
+        runBatch: state.runBatch,
+        isRunning: state.isRunning,
       }))
     );
 
@@ -168,7 +173,8 @@ const GroupControls = memo(function GroupControls({
     (e: React.MouseEvent) => {
       if (
         (e.target as HTMLElement).closest("button") ||
-        (e.target as HTMLElement).closest("input")
+        (e.target as HTMLElement).closest("input") ||
+        (e.target as HTMLElement).closest('[role="menu"]')
       ) {
         return;
       }
@@ -410,6 +416,29 @@ const GroupControls = memo(function GroupControls({
                       );
                     })}
                   </div>
+                  <MenuDivider />
+                  {/* Run the group's nodes, as many times as the Run menu's count (the same count) */}
+                  <MenuList>
+                    <MenuItem
+                      role="menuitem"
+                      disabled={locked || isRunning}
+                      title={locked ? "Unlock the group to run it" : isRunning ? "A run is in progress" : undefined}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nodeIds = useWorkflowStore.getState().nodes.filter((n) => n.groupId === groupId).map((n) => n.id);
+                        setShowMenu(false);
+                        if (nodeIds.length > 0) runBatch({ kind: "nodes", nodeIds });
+                      }}
+                    >
+                      <Play size={14} strokeWidth={0} fill="currentColor" />
+                      <span>{runCount > 1 ? `Run group ${runCount}×` : "Run group"}</span>
+                    </MenuItem>
+                    <div className="flex min-h-7 items-center gap-2 px-2.5 py-1 text-xs text-neutral-300" onClick={(e) => e.stopPropagation()}>
+                      <Repeat size={14} strokeWidth={2} />
+                      <span>Runs</span>
+                      <MenuStepper label="Runs" value={runCount} min={1} max={MAX_RUN_COUNT} onChange={setRunCount} />
+                    </div>
+                  </MenuList>
                   <MenuDivider />
                   <MenuList>
                     <MenuItem
