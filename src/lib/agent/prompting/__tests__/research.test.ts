@@ -96,6 +96,7 @@ describe("a research turn through the chat stream", () => {
         return (async function* (): AsyncGenerator<HarnessEvent> {
           yield { type: "session", sessionId: "research-session" };
           yield { type: "tool-pending", toolName: "web_search" };
+          yield { type: "tool-pending", toolName: SAVE_PROMPT_NOTES };
           await params.tools.execute(SAVE_PROMPT_NOTES, { notes: "- Lead with the subject.", sources: ["https://example.com/a"] });
           yield { type: "text-delta", id: "t1", delta: "Saved five tips." };
           yield { type: "text-end", id: "t1" };
@@ -141,6 +142,7 @@ describe("a research turn through the chat stream", () => {
     const { chunks } = await run(conversation);
     expect(chunks.some((c) => c.type === "data-agent-session")).toBe(false);
     expect(chunks).toContainEqual({ type: "data-agent-status", data: { text: "Searching the web…" }, transient: true });
+    expect(chunks).toContainEqual({ type: "data-agent-status", data: { text: "Saving the tips…" }, transient: true });
     expect(chunks).toContainEqual(expect.objectContaining({ type: "tool-input-available", toolName: SAVE_PROMPT_NOTES }));
   });
 });

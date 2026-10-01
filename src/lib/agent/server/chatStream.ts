@@ -34,6 +34,7 @@ import {
   buildResearchTurnPrompt,
   createResearchToolRuntime,
   researchTargetSchema,
+  SAVE_PROMPT_NOTES,
 } from "../prompting/research";
 import type {
   AgentChatRequestBody,
@@ -620,6 +621,7 @@ function pendingToolStatus(definitions: readonly AgentToolDefinition[], toolName
   const definition = findToolDefinition(definitions, toolName);
   if (!definition) return "Working…";
   if (definition.name === TOOL_NAMES.nameConversation) return "Working…";
+  if (definition.name === SAVE_PROMPT_NOTES) return "Saving the tips…";
   return definition.readOnly ? "Reading the canvas…" : "Planning edits…";
 }
 
