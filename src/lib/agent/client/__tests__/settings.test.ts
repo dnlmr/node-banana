@@ -38,6 +38,8 @@ describe("agent settings persistence", () => {
     expect(sanitizeAgentSettings({ harness: "codex", harnessChosen: true })).toEqual({ harness: "codex", harnessChosen: true, models: {}, efforts: {} });
     expect(sanitizeAgentSettings({ harness: "codex", harnessChosen: "yes" })).toEqual({ harness: "codex", models: {}, efforts: {} });
     expect(sanitizeAgentSettings({ harness: "codex" })).not.toHaveProperty("harnessChosen");
+    expect(sanitizeAgentSettings({ harness: "codex", opened: true })).toMatchObject({ opened: true });
+    expect(sanitizeAgentSettings({ harness: "codex", opened: 1 })).not.toHaveProperty("opened");
   });
 
   it("falls back to defaults for corrupt JSON", () => {
@@ -115,20 +117,22 @@ describe("useAgentSettings", () => {
 
     expect(result.current.settings).toEqual({
       harness: "codex",
+      harnessChosen: true,
       models: { codex: "gpt-5.6-luna", claude: "haiku" },
       efforts: { claude: "max" },
     });
     expect(loadAgentSettings()).toEqual(result.current.settings);
   });
 
-  it("records that a harness was chosen, once", () => {
+  it("records that the window was opened, once, without calling that a choice", () => {
     const { result } = renderHook(() => useAgentSettings());
+    expect(result.current.settings.opened).toBeUndefined();
+    act(() => result.current.markOpened());
+    expect(result.current.settings.opened).toBe(true);
     expect(result.current.settings.harnessChosen).toBeUndefined();
-    act(() => result.current.markHarnessChosen());
-    expect(result.current.settings.harnessChosen).toBe(true);
-    expect(loadAgentSettings().harnessChosen).toBe(true);
+    expect(loadAgentSettings().opened).toBe(true);
     const before = result.current.settings;
-    act(() => result.current.markHarnessChosen());
+    act(() => result.current.markOpened());
     expect(result.current.settings).toBe(before);
   });
 });

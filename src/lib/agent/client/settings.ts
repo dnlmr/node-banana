@@ -13,10 +13,18 @@ export const AGENT_SETTINGS_KEY = "node-banana-agent-settings";
 export interface AgentClientSettings {
   harness: AgentHarnessId;
   /**
-   * The user has opened the agent (so `harness` is theirs, not the default).
-   * Until then the agent button offers both harnesses.
+   * The person picked `harness` themselves (header menu or the first-open
+   * chooser), or has opened the agent on it. Until then the agent button
+   * offers both harnesses, and the panel may open on whichever harness has a
+   * paid subscription, showing the chooser when none does.
    */
   harnessChosen?: boolean;
+  /**
+   * The agent window has been opened at least once. Until then the agent
+   * button offers both harnesses; after, it shows the one that will answer,
+   * whether the person picked it or the panel opened on it by itself.
+   */
+  opened?: boolean;
   /** The model last picked per harness. Absent means the harness default. */
   models: Partial<Record<AgentHarnessId, string>>;
   /** The thinking effort last picked per harness; kept across models, used where the model offers it. */
@@ -40,6 +48,7 @@ export function sanitizeAgentSettings(raw: unknown): AgentClientSettings {
   return {
     harness: isAgentHarnessId(record.harness) ? record.harness : DEFAULT_AGENT_SETTINGS.harness,
     ...(record.harnessChosen === true ? { harnessChosen: true } : {}),
+    ...(record.opened === true ? { opened: true } : {}),
     models: perHarness(record.models),
     efforts: perHarness(record.efforts),
   };

@@ -151,6 +151,9 @@ describe("AgentPanel", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    // Most tests are about one harness's flow: pretend the person already picked it,
+    // so first-open detection (its own tests below) stays out of the way.
+    localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "claude", harnessChosen: true, models: {} }));
     statuses = { claude: harnessStatus("claude"), codex: harnessStatus("codex") };
     chatBodies = [];
     chatChunks = [];
@@ -181,15 +184,15 @@ describe("AgentPanel", () => {
     await waitForComposer();
   });
 
-  it("tells the button whose mark to show, marks the harness chosen on open, and flags a blocked login", async () => {
+  it("tells the button whose mark to show, records the open, and flags a blocked login", async () => {
     const onPresenceChange = vi.fn();
-    localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", models: {} }));
+    localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", harnessChosen: true, models: {} }));
     statuses.codex = harnessStatus("codex", { signedIn: false, billing: "none" });
     renderPanel({ onPresenceChange });
 
     await screen.findByRole("button", { name: "Sign in with ChatGPT" });
     expect(onPresenceChange).toHaveBeenLastCalledWith({ harness: "codex", harnessChosen: true, attention: true });
-    expect(JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY) ?? "{}").harnessChosen).toBe(true);
+    expect(JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY) ?? "{}").opened).toBe(true);
 
     // The user finishes signing in elsewhere; the next check clears the flag.
     statuses.codex = harnessStatus("codex");
@@ -214,7 +217,7 @@ describe("AgentPanel", () => {
   it("keeps the billing line in a fixed row, never inside the scrolling empty state (UX audit)", async () => {
     renderPanel();
     await waitForComposer();
-    const note = screen.getByText(/Runs on your Claude plan's usage limits[^]*never an API key/);
+    const note = screen.getByText(/Runs on your paid Claude subscription's usage limits/);
     // A direct row of the window, like the composer: it can't be scrolled out of view or cut off.
     expect(note.parentElement).toBe(screen.getByTestId("agent-panel"));
     expect(note.className).toContain("shrink-0");
@@ -229,22 +232,25 @@ describe("AgentPanel", () => {
     expect(screen.queryByRole("textbox", { name: "Message the agent" })).not.toBeInTheDocument();
 
     fireEvent.click(signIn);
-    expect(await screen.findByText("Finish signing in")).toBeInTheDocument();
+    expect(await screen.findByText("Finish in your browser")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/agent/sign-in", expect.objectContaining({ method: "POST" }));
     // Claude Code opens its page itself: no second tab, and no link to its manual
     // (paste-a-code) URL. The fallback is the terminal.
     expect(window.open).not.toHaveBeenCalled();
     expect(screen.queryByRole("link", { name: /open the sign-in page/i })).not.toBeInTheDocument();
-    expect(screen.getByText("No browser tab opened? Sign in from a terminal instead:")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "No tab opened?" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Cancel sign-in" })).toBeInTheDocument();
 
     // The user finishes in the browser; the next check sees the subscription login.
     statuses.claude = harnessStatus("claude");
-    fireEvent.click(screen.getByRole("button", { name: /check again/i }));
+    fireEvent.click(screen.getByRole("button", { name: /check now/i }));
     await waitForComposer();
+    // Once: who is in.
+    expect(await screen.findByTestId("agent-signed-in-banner")).toHaveTextContent("Signed in to Claude Code as me@example.com · max");
   });
 
   it("opens Codex's sign-in page and shows its device code", async () => {
-    localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", models: {} }));
+    localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", harnessChosen: true, models: {} }));
     statuses.codex = harnessStatus("codex", { signedIn: false, billing: "none" });
     signInResponse = { state: "pending", url: "https://auth.openai.com/codex/device", userCode: "ABCD-EFGH" };
     renderPanel();
@@ -260,7 +266,7 @@ describe("AgentPanel", () => {
       problem: "Claude Code is signed in with a Console API key.",
     });
     renderPanel();
-    expect(await screen.findByText("This login would use API credits")).toBeInTheDocument();
+    expect(await screen.findByText("This login would bill API credits")).toBeInTheDocument();
     expect(screen.getByText("Claude Code is signed in with a Console API key.")).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "Message the agent" })).not.toBeInTheDocument();
   });
@@ -268,7 +274,7 @@ describe("AgentPanel", () => {
   it("follows the sign-in that replaces an API login: device code, link, polling, then the composer", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", models: {} }));
+      localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", harnessChosen: true, models: {} }));
       statuses.codex = harnessStatus("codex", { billing: "api", problem: "Codex is signed in with an API key." });
       signInResponse = { state: "pending", url: "https://auth.openai.com/codex/device", userCode: "ABCD-EFGH" };
       onSignInStarted = () => {
@@ -276,7 +282,7 @@ describe("AgentPanel", () => {
       };
       renderPanel();
 
-      fireEvent.click(await screen.findByRole("button", { name: "Switch Codex to your ChatGPT account" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Switch to your ChatGPT account" }));
       expect(await screen.findByText("ABCD-EFGH")).toBeInTheDocument();
       // A blocked popup leaves this link as the way to the page.
       expect(screen.getByRole("link", { name: /open the sign-in page/i })).toHaveAttribute(
@@ -316,7 +322,7 @@ describe("AgentPanel", () => {
       problem: "Claude Code is signed in, but no Claude Pro or Max plan was found on the account.",
     });
     renderPanel();
-    expect(await screen.findByText("No Claude Pro or Max plan found on this login")).toBeInTheDocument();
+    expect(await screen.findByText("No paid Claude subscription on this login")).toBeInTheDocument();
     expect(screen.queryByText(/API credits/)).not.toBeInTheDocument();
 
     const menu = openHarnessMenu();
@@ -605,5 +611,48 @@ describe("AgentPanel", () => {
     const panel = screen.getByTestId("agent-panel");
     expect(panel.className).toContain("hidden");
     expect(panel.className).not.toMatch(/(^|\s)flex(\s|$)/);
+  });
+
+  describe("first open", () => {
+    beforeEach(() => {
+      // Nobody has picked a harness yet.
+      localStorage.clear();
+    });
+
+    it("opens on the harness with a paid subscription, without asking", async () => {
+      statuses.claude = harnessStatus("claude", { signedIn: false, billing: "none" });
+      renderPanel();
+      await waitForComposer();
+      expect(screen.getByRole("button", { name: /^Codex, GPT-5\.6 Luna/ })).toBeInTheDocument();
+      expect(screen.queryByTestId("agent-chooser")).not.toBeInTheDocument();
+      // Not a choice the person made: the saved settings say so.
+      expect(JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY) ?? "{}")).toMatchObject({ harness: "codex" });
+      expect(JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY) ?? "{}").harnessChosen).toBeFalsy();
+    });
+
+    it("keeps the saved harness when both have one", async () => {
+      localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify({ harness: "codex", models: {} }));
+      renderPanel();
+      await waitForComposer();
+      expect(screen.getByRole("button", { name: /^Codex/ })).toBeInTheDocument();
+    });
+
+    it("shows both as options when neither has one, and picking one starts its sign-in", async () => {
+      statuses.claude = harnessStatus("claude", { signedIn: false, billing: "none" });
+      statuses.codex = harnessStatus("codex", { installed: false, signedIn: false, billing: "none" });
+      renderPanel();
+      const chooser = await screen.findByTestId("agent-chooser");
+      // A neutral header while nothing is chosen.
+      expect(screen.getByRole("button", { name: /^Agent\. Change agent or model/ })).toBeInTheDocument();
+      const rows = within(chooser).getAllByTestId(/agent-chooser-(claude|codex)/);
+      expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual(["agent-chooser-claude", "agent-chooser-codex"]);
+      expect(within(chooser).getByRole("button", { name: "Install" })).toBeInTheDocument();
+
+      fireEvent.click(within(chooser).getByRole("button", { name: "Sign in" }));
+      expect(await screen.findByText("Finish in your browser")).toBeInTheDocument();
+      expect(signInBodies).toEqual([{ harness: "claude" }]);
+      expect(JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY) ?? "{}")).toMatchObject({ harness: "claude", harnessChosen: true });
+      expect(screen.getByRole("button", { name: /^Claude Code/ })).toBeInTheDocument();
+    });
   });
 });

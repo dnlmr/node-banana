@@ -6,9 +6,10 @@ import { loadAgentSettings, saveAgentSettings, type AgentClientSettings } from "
 
 export interface UseAgentSettingsResult {
   settings: AgentClientSettings;
-  setHarness: (harness: AgentHarnessId) => void;
-  /** Records that the user has opened the agent: the button stops offering both harnesses. */
-  markHarnessChosen: () => void;
+  /** `chosen` (default true): the person picked it; false when the panel opened on it by itself. */
+  setHarness: (harness: AgentHarnessId, options?: { chosen?: boolean }) => void;
+  /** Records that the agent window has been opened: the button stops offering both harnesses. */
+  markOpened: () => void;
   setModel: (harness: AgentHarnessId, model: string) => void;
   setEffort: (harness: AgentHarnessId, effort: string) => void;
 }
@@ -27,12 +28,17 @@ export function useAgentSettings(): UseAgentSettingsResult {
     saveAgentSettings(settings);
   }, [settings]);
 
-  const setHarness = useCallback((harness: AgentHarnessId) => {
-    setSettings((previous) => (previous.harness === harness ? previous : { ...previous, harness }));
+  const setHarness = useCallback((harness: AgentHarnessId, options: { chosen?: boolean } = {}) => {
+    const chosen = options.chosen ?? true;
+    setSettings((previous) =>
+      previous.harness === harness && Boolean(previous.harnessChosen) === (chosen || Boolean(previous.harnessChosen))
+        ? previous
+        : { ...previous, harness, harnessChosen: chosen || Boolean(previous.harnessChosen) },
+    );
   }, []);
 
-  const markHarnessChosen = useCallback(() => {
-    setSettings((previous) => (previous.harnessChosen ? previous : { ...previous, harnessChosen: true }));
+  const markOpened = useCallback(() => {
+    setSettings((previous) => (previous.opened ? previous : { ...previous, opened: true }));
   }, []);
 
   const setModel = useCallback((harness: AgentHarnessId, model: string) => {
@@ -51,5 +57,5 @@ export function useAgentSettings(): UseAgentSettingsResult {
     );
   }, []);
 
-  return { settings, setHarness, markHarnessChosen, setModel, setEffort };
+  return { settings, setHarness, markOpened, setModel, setEffort };
 }

@@ -367,7 +367,7 @@ export function WorkflowCanvas() {
   const [agentPresence, setAgentPresence] = useState<AgentPresence | null>(null);
   useEffect(() => {
     const stored = loadAgentSettings();
-    setAgentPresence((current) => current ?? { harness: stored.harness, harnessChosen: stored.harnessChosen === true, attention: false });
+    setAgentPresence((current) => current ?? { harness: stored.harness, harnessChosen: stored.harnessChosen === true || stored.opened === true, attention: false });
   }, []);
   const [agentButtonWidth, setAgentButtonWidth] = useState(AGENT_BUTTON_ESTIMATED_WIDTH);
   // The agent window is portaled above everything, so the Assets view cannot cover it

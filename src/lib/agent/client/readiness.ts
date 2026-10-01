@@ -144,30 +144,76 @@ export const HARNESS_LABELS: Record<AgentHarnessId, string> = {
 export const HARNESS_BILLING_COPY: Record<
   AgentHarnessId,
   {
+    /** "paid Claude subscription", "ChatGPT plan": the thing the agent runs on. */
     plan: string;
-    /** The sign-in card's line. */
+    /** The account, as the switch button names it: "Claude", "ChatGPT". */
+    account: string;
+    /** The sign-in card's one-line lead. */
     runsOn: string;
-    /** The shorter line under a fresh chat. */
+    /** The line under a fresh chat. */
     footer: string;
     /** Under the sign-in button: whose sign-in it opens. */
     signInNote: string;
   }
 > = {
   claude: {
-    plan: "Claude Pro or Max",
-    runsOn:
-      "Runs on your Claude subscription through Claude Code — never an API key. Turns count toward your plan's usage limits; when the included usage runs out, the agent stops instead of using extra usage.",
-    footer: "Runs on your Claude plan's usage limits through Claude Code — never an API key. Stops at the limit instead of using extra usage.",
-    signInNote: "Opens Claude Code's own sign-in in your browser. Node Banana never sees your password or tokens.",
+    plan: "paid Claude subscription",
+    account: "Claude",
+    runsOn: "Uses your paid Claude subscription.",
+    footer: "Runs on your paid Claude subscription's usage limits through Claude Code. Stops at the limit instead of using extra usage.",
+    signInNote: "Claude Code signs you in itself, in your browser. Node Banana never sees your password or tokens.",
   },
   codex: {
-    plan: "ChatGPT",
-    runsOn:
-      "Runs on your ChatGPT plan through Codex — never an API key. Turns count toward your plan's Codex limits; when the included usage runs out, the agent stops instead of spending credits.",
-    footer: "Runs on your ChatGPT plan's Codex limits through Codex — never an API key. Stops at the limit instead of spending credits.",
-    signInNote: "Opens OpenAI's sign-in for Codex in your browser. Node Banana never sees your password or tokens.",
+    plan: "ChatGPT plan",
+    account: "ChatGPT",
+    runsOn: "Uses your ChatGPT plan.",
+    footer: "Runs on your ChatGPT plan's Codex limits through Codex. Stops at the limit instead of spending credits.",
+    signInNote: "Codex signs you in with OpenAI, in your browser. Node Banana never sees your password or tokens.",
   },
 };
+
+/** How to get each CLI onto this computer, for the not-installed card. */
+export const HARNESS_INSTALL: Record<AgentHarnessId, { command: string; guideUrl: string }> = {
+  claude: { command: "npm install -g @anthropic-ai/claude-code", guideUrl: "https://docs.claude.com/en/docs/claude-code/setup" },
+  codex: { command: "npm install -g @openai/codex", guideUrl: "https://developers.openai.com/codex/cli" },
+};
+
+/** How long the vendor CLIs are given to finish a sign-in before the server gives up on the flow. */
+export const AGENT_SIGN_IN_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * What the panel opens on the first time, given every harness's readiness:
+ * a harness with a paid subscription wins (the preferred one when both have
+ * one); with none, the chooser. `checking` while any is still unknown.
+ */
+export type FirstOpenDecision = { kind: "checking" } | { kind: "open"; harness: AgentHarnessId } | { kind: "choose" };
+
+export function decideFirstOpen(readiness: Record<AgentHarnessId, AgentReadiness>, preferred: AgentHarnessId): FirstOpenDecision {
+  const ids = Object.keys(readiness) as AgentHarnessId[];
+  if (ids.some((id) => readiness[id].kind === "loading")) return { kind: "checking" };
+  if (readiness[preferred]?.kind === "ready") return { kind: "open", harness: preferred };
+  const ready = ids.find((id) => readiness[id].kind === "ready");
+  return ready ? { kind: "open", harness: ready } : { kind: "choose" };
+}
+
+/** The chooser lists the closest-to-working harness first. */
+const CHOOSER_RANK: Record<AgentReadinessKind, number> = {
+  ready: 0,
+  signed_out: 1,
+  sign_in_failed: 1,
+  signing_in: 1,
+  wrong_billing: 2,
+  unconfirmed_billing: 2,
+  not_installed: 3,
+  unavailable: 4,
+  loading: 5,
+};
+
+export function chooserOrder(readiness: Record<AgentHarnessId, AgentReadiness>): AgentHarnessId[] {
+  return (Object.keys(readiness) as AgentHarnessId[]).sort(
+    (a, b) => CHOOSER_RANK[readiness[a].kind] - CHOOSER_RANK[readiness[b].kind]
+  );
+}
 
 /**
  * Whether the vendor CLI opens its sign-in page itself. Claude Code does, and

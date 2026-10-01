@@ -181,9 +181,11 @@ describe("ClaudeSignIn", () => {
     const child = new FakeChild();
     const { signIn } = manager(child);
     await signIn.start("/bin/claude", {}, "/cwd");
-    signIn.cancel();
+    expect(signIn.cancel()).toBe(true);
     expect(child.kills).toEqual(["SIGTERM"]);
-    expect(signIn.state()).toMatchObject({ state: "failed" });
+    // The person asked for it: not an error to report, and the next start is fresh.
+    expect(signIn.state()).toEqual({ state: "idle" });
+    expect(signIn.cancel()).toBe(false);
   });
 });
 

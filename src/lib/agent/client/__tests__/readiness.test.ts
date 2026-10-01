@@ -6,8 +6,7 @@ import {
   isHarnessReady,
   readinessTone,
   shouldPollReadiness,
-  type AgentReadiness,
-} from "../readiness";
+  type AgentReadiness, decideFirstOpen, chooserOrder } from "../readiness";
 
 function status(overrides: Partial<AgentHarnessStatus> = {}): AgentHarnessStatus {
   return {
@@ -194,11 +193,12 @@ describe("billing copy", () => {
     const { runsOn, footer } = HARNESS_BILLING_COPY[harness];
     for (const line of [runsOn, footer]) {
       expect(line).not.toMatch(/no (api )?credits|free|no (extra )?cost|won't cost/i);
-      expect(line).toMatch(/limit/i);
-      expect(line).toMatch(/never an API key/);
-      expect(line).toMatch(/stops/i);
       expect(line).not.toMatch(/toward extra usage|extra usage, if|use credits if|credits, if any/i);
     }
+    // The footer is where the limits are explained; the card's lead is one line.
+    expect(footer).toMatch(/limit/i);
+    expect(footer).toMatch(/stops/i);
+    expect(runsOn).toMatch(/paid Claude subscription|ChatGPT plan/);
   });
 });
 
@@ -219,5 +219,46 @@ describe("readiness helpers", () => {
   it.each(cases)("%o → tone %s, poll %s", (readiness, tone, poll) => {
     expect(readinessTone(readiness)).toBe(tone);
     expect(shouldPollReadiness(readiness)).toBe(poll);
+  });
+});
+
+describe("first open", () => {
+  const st = (overrides: Partial<AgentHarnessStatus> = {}): AgentHarnessStatus => ({
+    id: "claude",
+    label: "Claude Code",
+    installed: true,
+    signedIn: false,
+    billing: "none",
+    models: [],
+    signIn: { state: "idle" },
+    signInCommand: "claude auth login",
+    ...overrides,
+  });
+  const ready: AgentReadiness = { kind: "ready", status: st({ signedIn: true, billing: "subscription" }) };
+  const signedOut: AgentReadiness = { kind: "signed_out", status: st() };
+  const notInstalled: AgentReadiness = { kind: "not_installed", status: st({ installed: false }) };
+  const wrong: AgentReadiness = { kind: "wrong_billing", status: st({ signedIn: true, billing: "api" }) };
+
+  it("waits while any harness is still unknown", () => {
+    expect(decideFirstOpen({ claude: { kind: "loading" }, codex: ready }, "claude")).toEqual({ kind: "checking" });
+  });
+
+  it("opens on the harness with a paid subscription", () => {
+    expect(decideFirstOpen({ claude: signedOut, codex: ready }, "claude")).toEqual({ kind: "open", harness: "codex" });
+  });
+
+  it("prefers the saved harness when both have one", () => {
+    expect(decideFirstOpen({ claude: ready, codex: ready }, "codex")).toEqual({ kind: "open", harness: "codex" });
+  });
+
+  it("asks when neither has one", () => {
+    expect(decideFirstOpen({ claude: signedOut, codex: notInstalled }, "claude")).toEqual({ kind: "choose" });
+    expect(decideFirstOpen({ claude: wrong, codex: signedOut }, "claude")).toEqual({ kind: "choose" });
+  });
+
+  it("lists the closest-to-working harness first in the chooser", () => {
+    expect(chooserOrder({ claude: notInstalled, codex: signedOut })).toEqual(["codex", "claude"]);
+    expect(chooserOrder({ claude: wrong, codex: notInstalled })).toEqual(["claude", "codex"]);
+    expect(chooserOrder({ claude: signedOut, codex: wrong })).toEqual(["claude", "codex"]);
   });
 });

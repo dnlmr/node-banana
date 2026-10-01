@@ -155,6 +155,8 @@ export interface AgentHarness {
   getStatus(): Promise<AgentHarnessStatus>;
   /** Start the vendor's own sign-in flow (the official CLI). Never touches tokens. */
   startSignIn(options?: AgentSignInOptions): Promise<AgentSignInStart>;
+  /** Stop a running sign-in: the CLI is killed (or its login cancelled) and the status reads idle again. */
+  cancelSignIn(): Promise<void>;
   runTurn(params: HarnessTurnParams): AsyncIterable<HarnessEvent>;
 }
 

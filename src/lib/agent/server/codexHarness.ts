@@ -396,6 +396,16 @@ export function createCodexHarness(overrides: Partial<CodexHarnessDeps> = {}): A
     state.status = null;
   }
 
+  /** Stop a running login: tell the app-server, forget it, and let the status read idle. */
+  async function cancelSignIn(): Promise<void> {
+    const login = state.login;
+    if (!login || login.state !== "pending") return;
+    finishLogin(login, "failed", "Sign-in was cancelled.");
+    state.login = null;
+    const server = login.server;
+    await server.requestIfRunning("account/login/cancel", { loginId: login.loginId }, 10_000, server.generation).catch(() => {});
+  }
+
   function signInState(): AgentSignInState {
     const login = state.login;
     if (!login || login.state === "succeeded") return { state: "idle" };
@@ -1061,6 +1071,7 @@ export function createCodexHarness(overrides: Partial<CodexHarnessDeps> = {}): A
     label: LABEL,
     getStatus: () => getStatus(),
     startSignIn: (options?: AgentSignInOptions) => startSignIn(options),
+    cancelSignIn,
     runTurn,
   };
 }
