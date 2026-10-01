@@ -470,6 +470,12 @@ class TurnWriter {
     this.statusShown = text !== "";
   }
 
+  /** The turn's opening line, in the harness's colour while it spins up. */
+  starting(): void {
+    this.writer.write({ type: "data-agent-status", data: { text: "Fallooning", harness: this.harnessId }, transient: true });
+    this.statusShown = true;
+  }
+
   private clearStatus(): void {
     if (this.statusShown) this.status("");
   }
@@ -872,7 +878,7 @@ async function runClaimedTurn(
     historyLength: conversation.history.length,
     nodeCount: body.workflow.nodes.length,
   });
-  turn.status(`Starting ${harness.label}…`);
+  turn.starting();
 
   const usage = { inputTokens: 0, outputTokens: 0 };
   let events: AsyncIterable<HarnessEvent>;

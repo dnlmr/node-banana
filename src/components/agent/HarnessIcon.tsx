@@ -2,6 +2,7 @@
 
 import type { AgentHarnessId } from "@/lib/agent/types";
 import { cn } from "@/components/agent/lib/utils";
+import { HARNESS_COLORS } from "@/lib/agent/client/readiness";
 
 /** Claude's mark, as Claude Code's own editor extension ships it. */
 const CLAUDE_MARK_PATH =
@@ -16,7 +17,7 @@ export function HarnessIcon({ harness, className }: { harness: AgentHarnessId; c
   if (harness === "claude") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" className={cn("size-4 shrink-0", className)}>
-        <path d={CLAUDE_MARK_PATH} fill="#D97757" fillRule="nonzero" />
+        <path d={CLAUDE_MARK_PATH} fill={HARNESS_COLORS.claude} fillRule="nonzero" />
       </svg>
     );
   }

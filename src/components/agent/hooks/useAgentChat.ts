@@ -20,6 +20,8 @@ type AgentDataPart = DataUIPart<AgentDataParts>;
 
 export interface AgentStatusLine {
   text: string;
+  /** The harness the line is coloured for (the turn's opening line only). */
+  harness?: AgentHarnessId;
   /** Rendered parts of the reply when the line arrived; it hides once more appear. */
   renderedParts: number;
 }
@@ -188,7 +190,13 @@ export function useAgentChat({
           break;
         case "data-agent-status":
           setStatusLine(
-            part.data.text ? { text: part.data.text, renderedParts: countRenderedParts(chat.messages) } : null,
+            part.data.text
+              ? {
+                  text: part.data.text,
+                  ...(part.data.harness ? { harness: part.data.harness } : {}),
+                  renderedParts: countRenderedParts(chat.messages),
+                }
+              : null,
           );
           break;
         case "data-agent-notice":

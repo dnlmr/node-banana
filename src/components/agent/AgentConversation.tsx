@@ -10,8 +10,8 @@ import {
 } from "@/components/ai-elements/conversation";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { cn } from "@/components/agent/lib/utils";
-import { findHarnessSwitches, turnIndicatorText } from "@/lib/agent/client/messages";
-import { HARNESS_BILLING_COPY, HARNESS_LABELS } from "@/lib/agent/client/readiness";
+import { findHarnessSwitches, turnIndicator } from "@/lib/agent/client/messages";
+import { HARNESS_BILLING_COPY, HARNESS_COLORS, HARNESS_LABELS } from "@/lib/agent/client/readiness";
 import type { AgentHarnessId, AgentUIMessage } from "@/lib/agent/types";
 import { AgentMessage } from "./AgentMessage";
 import { AgentAlert, AgentTextButton, type AgentNoticeSignIn } from "./AgentNotice";
@@ -40,7 +40,7 @@ export function AgentConversation({
   onSignIn,
 }: AgentConversationProps) {
   const switches = useMemo(() => findHarnessSwitches(messages), [messages]);
-  const indicator = turnIndicatorText(messages, busy, statusLine);
+  const indicator = turnIndicator(messages, busy, statusLine);
 
   return (
     <Conversation className="min-h-0 flex-1">
@@ -67,8 +67,12 @@ export function AgentConversation({
         })}
         {indicator && (
           <div role="status" aria-live="polite">
-            <Shimmer className="text-[13px] leading-5" duration={1.6}>
-              {indicator}
+            <Shimmer
+              className="text-[13px] leading-5"
+              duration={1.6}
+              color={indicator.harness ? HARNESS_COLORS[indicator.harness] : undefined}
+            >
+              {indicator.text}
             </Shimmer>
           </div>
         )}

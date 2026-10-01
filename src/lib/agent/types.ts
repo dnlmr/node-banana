@@ -400,8 +400,11 @@ export type AgentDataParts = {
   "agent-session": { harness: AgentHarnessId; sessionId: string };
   /** Transient (onData only): canvas changes to apply now. */
   "graph-ops": AgentGraphOpBatch;
-  /** Transient: a short progress line ("Planning edits…"). */
-  "agent-status": { text: string };
+  /**
+   * Transient: a short progress line ("Planning edits…"). The turn's opening
+   * line carries the harness, so the panel can colour it; older parts have none.
+   */
+  "agent-status": { text: string; harness?: AgentHarnessId };
   /** Persisted: a problem the panel renders inline (sign-in needed, usage limit, ...). */
   "agent-notice": { code: AgentErrorCode; message: string; harness: AgentHarnessId };
   /** Persisted: the conversation's short label in the chat history (the agent's name_conversation call). */
