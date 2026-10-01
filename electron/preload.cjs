@@ -15,6 +15,19 @@ contextBridge.exposeInMainWorld('nodeBananaDesktop', {
     },
   },
   openLogs: () => ipcRenderer.invoke('desktop:open-logs'),
+  updates: {
+    state: () => ipcRenderer.invoke('desktop:updates:state'),
+    check: () => ipcRenderer.invoke('desktop:updates:check'),
+    download: () => ipcRenderer.invoke('desktop:updates:download'),
+    install: () => ipcRenderer.invoke('desktop:updates:install'),
+    skip: () => ipcRenderer.invoke('desktop:updates:skip'),
+    dismiss: () => ipcRenderer.invoke('desktop:updates:dismiss'),
+    onChange: (callback) => {
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on('desktop:update-state', listener);
+      return () => ipcRenderer.removeListener('desktop:update-state', listener);
+    },
+  },
   recovery: {
     read: () => ipcRenderer.invoke('desktop:recovery:read'),
     write: (value) => ipcRenderer.invoke('desktop:recovery:write', value),

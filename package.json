@@ -41,6 +41,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "electron-updater": "6.8.9",
     "gifenc": "^1.0.3",
     "jszip": "^3.10.1",
     "konva": "^10.0.12",

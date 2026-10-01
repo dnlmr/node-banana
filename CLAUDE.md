@@ -395,6 +395,38 @@ in. `NB_CODEX_EFFORT` overrides Codex's reasoning effort (default `medium`).
 When the canvas rules in `WorkflowCanvas.tsx` or a node's sockets change,
 update `src/lib/agent/graph/catalog.ts` / `handles.ts` too (the server's copy).
 
+## Desktop releases and updates
+
+Pushing a tag `v<version>` runs `.github/workflows/release.yml`: tests, a
+draft release, then a signed and notarised Mac build on a macOS runner and an
+unsigned Windows build on a Windows runner, both uploaded into the draft
+(secrets: `MAC_CERTIFICATE_P12_BASE64`, `MAC_CERTIFICATE_PASSWORD`,
+`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`). A manual run
+builds without publishing unless asked.
+`npm run electron:package` is the same build by hand
+(`scripts/package-electron.cjs`); `--sign` signs and notarises the Mac build
+(Developer ID from the keychain, notarisation from `APPLE_API_KEY`,
+`APPLE_API_KEY_ID`, `APPLE_API_ISSUER` or the Apple ID trio; entitlements in
+`electron/entitlements.mac.plist`), `--publish` uploads the artifacts and the
+updater manifests to a **draft** GitHub release `v<version>` (`GH_TOKEN`).
+Windows builds are unsigned. Artifact names carry no spaces
+(`Node-Banana-<version>-<arch>.<ext>`): GitHub renames assets with spaces and
+the updater would miss them.
+
+The packaged app updates itself with electron-updater, loaded from the bundled
+runtime's `node_modules` (the app package has no dependencies of its own) and
+driven by `electron/lib/updates.cjs`: a check 15 s after launch and every six
+hours, download only on request, install on **Restart to update** or at the
+next quit, a skipped version remembered in `updates-v1.json` under user data.
+The renderer sees it through `window.nodeBananaDesktop.updates`
+(`src/types/desktop.d.ts`) and shows `DesktopUpdateNotice` in the notification
+stack. Squirrel.Mac installs signed builds only, so a Mac release for existing
+users must be built with `--sign`; an install failure falls back to a link to
+the release. Test profiles (`NODE_BANANA_ELECTRON_USER_DATA`) and `electron:dev`
+never check by themselves; `NODE_BANANA_ELECTRON_PREVIEW_UPDATES=1` (or `fail`)
+gives a dev run a pretend updater so the notice can be seen. The release steps
+are in `docs/desktop-preview.md`.
+
 ## Asset Library
 
 Every generated and edited asset is saved to disk as it is made, with or
