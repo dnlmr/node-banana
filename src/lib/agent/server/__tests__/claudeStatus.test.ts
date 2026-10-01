@@ -260,6 +260,27 @@ describe("claudeModelOptions", () => {
     ]);
   });
 
+  it("labels each row by the version it names, with the model id when there is no display name", () => {
+    const options = claudeModelOptions([
+      { value: "opus", displayName: "Opus 5.5", resolvedModel: "claude-opus-5-5" },
+      { value: "claude-fable-5-1", displayName: "Fable 5.1", resolvedModel: "claude-fable-5-1" },
+      { value: "sonnet", displayName: "Sonnet 5.5", resolvedModel: "claude-sonnet-5-5" },
+      { value: "claude-sonnet-4-6" },
+    ]);
+    expect(options.map((o) => [o.id, o.label, o.resolvedModel])).toEqual([
+      ["opus", "Opus 5.5", "claude-opus-5-5"],
+      ["claude-fable-5-1", "Fable 5.1", "claude-fable-5-1"],
+      ["sonnet", "Sonnet 5.5", "claude-sonnet-5-5"],
+      ["claude-sonnet-4-6", "claude-sonnet-4-6", undefined],
+    ]);
+    expect(options.filter((o) => o.isDefault).map((o) => o.id)).toEqual(["sonnet"]);
+  });
+
+  it("defaults to the first row when the list has no Sonnet", () => {
+    const options = claudeModelOptions([{ value: "opus", displayName: "Opus 5.5" }, { value: "haiku", displayName: "Haiku 4.5" }]);
+    expect(options.filter((o) => o.isDefault).map((o) => o.id)).toEqual(["opus"]);
+  });
+
   it("falls back to the static aliases when the CLI reports no list", () => {
     expect(claudeModelOptions(undefined)).toBe(CLAUDE_MODELS);
     expect(claudeModelOptions([])).toBe(CLAUDE_MODELS);

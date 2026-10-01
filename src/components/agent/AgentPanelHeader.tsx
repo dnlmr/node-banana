@@ -24,6 +24,8 @@ export interface AgentPanelHeaderProps {
   switchDisabled: boolean;
   onHarnessChange: (harness: AgentHarnessId) => void;
   models: AgentModelOption[];
+  /** `models` is the built-in list: the harness's own couldn't be read. */
+  modelsFallback?: boolean;
   model?: string;
   onModelChange: (model: string) => void;
   canStartNewChat: boolean;
@@ -88,6 +90,7 @@ export function AgentPanelHeader({
   switchDisabled,
   onHarnessChange,
   models,
+  modelsFallback = false,
   model,
   onModelChange,
   canStartNewChat,
@@ -160,6 +163,11 @@ export function AgentPanelHeader({
             <>
               <MenuDivider className="my-1 border-white/[0.08]" />
               <MenuSectionLabel className="px-2.5 pb-1 pt-1">Model</MenuSectionLabel>
+              {modelsFallback && (
+                <p className="px-2.5 pb-1 text-[11px] leading-4 text-ink-3">
+                  Couldn&apos;t read your models. Showing defaults.
+                </p>
+              )}
               <DropdownMenuRadioGroup value={model} onValueChange={onModelChange}>
                 {models.map((option) => (
                   <DropdownMenuRadioItem
