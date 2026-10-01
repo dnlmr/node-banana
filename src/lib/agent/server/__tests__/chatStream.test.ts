@@ -248,7 +248,7 @@ describe("createAgentChatStream: text and reasoning", () => {
       "text-end",
       "finish",
     ]);
-    expect(statusLines(chunks)).toEqual(["Fallooning", ""]);
+    expect(statusLines(chunks)).toEqual(["Fallooning…", ""]);
     expect(message.parts).toEqual([
       expect.objectContaining({ type: "reasoning", text: "The user wants a prompt node.", state: "done" }),
       expect.objectContaining({ type: "text", text: "Adding a prompt node.", state: "done" }),
@@ -260,13 +260,13 @@ describe("createAgentChatStream: text and reasoning", () => {
   it("opens the turn with Fallooning, naming the harness so the panel can colour it", async () => {
     const claude = fakeHarness(() => emit({ type: "text-delta", id: "t1", delta: "Hi." }, { type: "text-end", id: "t1" }));
     const { chunks: claudeChunks } = await run({ harness: claude.harness });
-    expect(chunksOfType(claudeChunks, "data-agent-status")[0].data).toEqual({ text: "Fallooning", harness: "claude" });
+    expect(chunksOfType(claudeChunks, "data-agent-status")[0].data).toEqual({ text: "Fallooning…", harness: "claude" });
 
     const codex = fakeHarness(() => emit({ type: "text-delta", id: "t1", delta: "Hi." }, { type: "text-end", id: "t1" }));
     codex.harness.id = "codex";
     codex.harness.label = "Codex";
     const { chunks: codexChunks } = await run({ harness: codex.harness, body: requestBody({ harness: "codex" }) });
-    expect(chunksOfType(codexChunks, "data-agent-status")[0].data).toEqual({ text: "Fallooning", harness: "codex" });
+    expect(chunksOfType(codexChunks, "data-agent-status")[0].data).toEqual({ text: "Fallooning…", harness: "codex" });
     // Later lines stay plain: only the opening one is coloured.
     expect(chunksOfType(codexChunks, "data-agent-status").slice(1).every((chunk) => chunk.data.harness === undefined)).toBe(true);
   });
@@ -542,7 +542,7 @@ describe("createAgentChatStream: tool calls", () => {
 
     const toolChunks = types(chunks).filter((type) => type.startsWith("tool-") || type === "data-graph-ops");
     expect(toolChunks).toEqual(["tool-input-available", "data-graph-ops", "tool-output-available"]);
-    expect(statusLines(chunks)).toEqual(["Fallooning", "", "Planning edits…", ""]);
+    expect(statusLines(chunks)).toEqual(["Fallooning…", "", "Planning edits…", ""]);
   });
 
   it("marks a canvas replacement on the ops batch", async () => {

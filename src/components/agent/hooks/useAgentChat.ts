@@ -8,6 +8,7 @@ import { useToast } from "@/components/Toast";
 import { AGENT_CHAT_API } from "@/lib/agent/client/api";
 import { countRenderedParts } from "@/lib/agent/client/messages";
 import { agentProviderHeaders, buildAgentChatRequestBody, whenProviderKeysReady } from "@/lib/agent/client/request";
+import { AGENT_OPENING_STATUS } from "@/lib/agent/types";
 import type {
   AgentDataParts,
   AgentGraphOpBatch,
@@ -234,22 +235,30 @@ export function useAgentChat({
     useToast.getState().show("Stopped the agent: a different workflow was opened", "warning");
   }, [busy, canvasGeneration, chat]);
 
+  // The server sends the opening line only once its checks pass; show it from
+  // the moment the turn is sent so the panel doesn't say "Thinking…" first.
+  const showOpeningLine = useCallback(() => {
+    setStatusLine({ text: AGENT_OPENING_STATUS, harness: requestRef.current.harness, renderedParts: 0 });
+  }, []);
+
   const send = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || busy) return false;
       beginTurn();
+      showOpeningLine();
       void sendMessage({ text: trimmed });
       return true;
     },
-    [busy, beginTurn, sendMessage],
+    [busy, beginTurn, showOpeningLine, sendMessage],
   );
 
   const retry = useCallback(() => {
     if (busy) return;
     beginTurn();
+    showOpeningLine();
     void regenerate();
-  }, [busy, beginTurn, regenerate]);
+  }, [busy, beginTurn, showOpeningLine, regenerate]);
 
   const newChat = useCallback(() => {
     if (busy) void chat.stop();

@@ -68,7 +68,7 @@ export function AgentConversation({
         {indicator && (
           <div role="status" aria-live="polite">
             <Shimmer
-              className="text-[13px] leading-5"
+              className={cn("text-[13px] leading-5", indicator.harness && "italic")}
               duration={1.6}
               color={indicator.harness ? HARNESS_COLORS[indicator.harness] : undefined}
             >

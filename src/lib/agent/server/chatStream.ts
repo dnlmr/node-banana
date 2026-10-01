@@ -46,6 +46,7 @@ import type {
   HarnessEvent,
   HarnessTurnParams,
 } from "../types";
+import { AGENT_OPENING_STATUS } from "../types";
 
 export type AgentUIMessageChunk = InferUIMessageChunk<AgentUIMessage>;
 
@@ -472,7 +473,7 @@ class TurnWriter {
 
   /** The turn's opening line, in the harness's colour while it spins up. */
   starting(): void {
-    this.writer.write({ type: "data-agent-status", data: { text: "Fallooning", harness: this.harnessId }, transient: true });
+    this.writer.write({ type: "data-agent-status", data: { text: AGENT_OPENING_STATUS, harness: this.harnessId }, transient: true });
     this.statusShown = true;
   }
 
