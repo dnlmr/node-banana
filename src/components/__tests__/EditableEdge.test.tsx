@@ -845,7 +845,7 @@ describe("EditableEdge labels", () => {
 
     it("names the item the connection carries", () => {
       renderArray({ arrayItemIndex: 4 });
-      expect(screen.getByTestId("edge-label")).toHaveTextContent("Item 2");
+      expect(screen.getByTestId("edge-label")).toHaveTextContent("Array 2");
     });
 
     it("puts the item name at the target end of the noodle", () => {

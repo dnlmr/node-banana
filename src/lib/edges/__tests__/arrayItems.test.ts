@@ -65,7 +65,7 @@ describe("arrayItemWireCounts", () => {
 
 describe("arrayEdgeLabel", () => {
   it("names the item a connection carries", () => {
-    expect(arrayEdgeLabel(edge("a", { arrayItemIndex: 6 }), { outputItems: items, selectedOutputIndex: null, batchMode: false })).toBe("Item 3");
+    expect(arrayEdgeLabel(edge("a", { arrayItemIndex: 6 }), { outputItems: items, selectedOutputIndex: null, batchMode: false })).toBe("Array 3");
   });
 
   it("says All n in batch mode", () => {

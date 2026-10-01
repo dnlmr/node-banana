@@ -178,7 +178,7 @@ export function EditableEdge({
         targetReach: bundleReach(state.nodes, target, "target", targetHandleId),
         isConnectedToSelection: selectedIds.has(source) || selectedIds.has(target),
         isTargetLoading: targetNode?.type === "nanoBanana" && (targetNode.data as NanoBananaNodeData).status === "loading",
-        // Which item an Array connection carries ("Item 2", "All 7")
+        // Which item an Array connection carries ("Array 2", "All 7")
         arrayLabel:
           sourceNode?.type === "array"
             ? arrayEdgeLabel({ id, source, target, sourceHandle: sourceHandleId, data: data as EdgeData | undefined }, sourceNode.data as ArrayNodeData)

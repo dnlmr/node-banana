@@ -59,13 +59,13 @@ export function arrayItemWireCounts(nodeId: string, itemCount: number, edges: Wo
   return counts;
 }
 
-/** The label a connection from an Array node wears: "Item 2", or "All 7" in batch mode. */
+/** The label a connection from an Array node wears: "Array 2", or "All 7" in batch mode. */
 export function arrayEdgeLabel(edge: WorkflowEdge, data: ArraySource): string | null {
   const count = data.outputItems?.length ?? 0;
   if (count === 0) return null;
   if (data.batchMode) return `All ${count}`;
   const index = arrayEdgeItemIndex(edge, count);
-  return index === null ? null : `Item ${index + 1}`;
+  return index === null ? null : `Array ${index + 1}`;
 }
 
 /**
