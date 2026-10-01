@@ -35,3 +35,44 @@ describe("setEdgeLabel", () => {
     expect(useWorkflowStore.getState().edges[0].data?.label).toBeUndefined();
   });
 });
+
+describe("setEdgesLabel", () => {
+  beforeEach(() => {
+    useWorkflowStore.setState({
+      ...initial,
+      nodes: [],
+      edges: [edge("b", { hidden: true }), edge("c", { hidden: true, label: "old" }), edge("d", { hidden: true })],
+      groups: {},
+    });
+  });
+
+  const labels = () => useWorkflowStore.getState().edges.map((e) => e.data?.label);
+
+  it("labels every given connection with the trimmed text", () => {
+    useWorkflowStore.getState().setEdgesLabel(["b", "c"], "  Model ");
+    expect(labels()).toEqual(["Model", "Model", undefined]);
+    expect(useWorkflowStore.getState().edges[0].data).toEqual({ hidden: true, label: "Model" });
+  });
+
+  it("clears the label from each when given blank text", () => {
+    useWorkflowStore.getState().setEdgesLabel(["b", "c"], "Model");
+    useWorkflowStore.getState().setEdgesLabel(["b", "c"], "  ");
+    expect(useWorkflowStore.getState().edges[1].data).toEqual({ hidden: true });
+    expect(labels()).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("is a no-op when nothing would change", () => {
+    useWorkflowStore.getState().setEdgesLabel(["b"], "Model");
+    const before = useWorkflowStore.getState().edges;
+    useWorkflowStore.getState().setEdgesLabel(["b"], " Model");
+    useWorkflowStore.getState().setEdgesLabel(["nope"], "x");
+    useWorkflowStore.getState().setEdgesLabel([], "x");
+    expect(useWorkflowStore.getState().edges).toBe(before);
+  });
+
+  it("is undone in one step", () => {
+    useWorkflowStore.getState().setEdgesLabel(["b", "c", "d"], "Model");
+    useWorkflowStore.getState().undo();
+    expect(labels()).toEqual([undefined, "old", undefined]);
+  });
+});

@@ -341,6 +341,8 @@ export interface WorkflowStore {
   setAllEdgesHidden: (hidden: boolean) => void;
   /** Set an edge's own label; blank clears it so the automatic label shows. */
   setEdgeLabel: (edgeId: string, label: string) => void;
+  /** Gives several connections one label (or clears it) in one undo step. */
+  setEdgesLabel: (edgeIds: string[], label: string) => void;
   /** Bundle edges that share an output handle or an input handle. Returns false otherwise. */
   bundleEdges: (edgeIds: string[], end?: BundleEnd) => boolean;
   hookEdges: (edgeIds: string[], position: { x: number; y: number }) => void;
@@ -1519,13 +1521,17 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   setEdgeLabel: (edgeId: string, label: string) => {
+    get().setEdgesLabel([edgeId], label);
+  },
+
+  setEdgesLabel: (edgeIds: string[], label: string) => {
     const trimmed = label.trim();
-    const edge = get().edges.find((e) => e.id === edgeId);
-    if (!edge || (edge.data?.label ?? "") === trimmed) return;
+    const ids = new Set(edgeIds);
+    if (!get().edges.some((e) => ids.has(e.id) && (e.data?.label ?? "") !== trimmed)) return;
     pushUndoCheckpoint(get, set);
     set((state) => ({
       edges: state.edges.map((e) => {
-        if (e.id !== edgeId) return e;
+        if (!ids.has(e.id)) return e;
         const { label: _old, ...rest } = e.data ?? {};
         void _old;
         return { ...e, data: trimmed ? { ...rest, label: trimmed } : rest };

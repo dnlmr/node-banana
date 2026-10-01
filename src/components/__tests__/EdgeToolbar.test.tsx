@@ -155,6 +155,22 @@ describe("EdgeToolbar", () => {
     expect(mockSetEdgesHidden).toHaveBeenCalledWith(["e1"], false);
   });
 
+  it("offers a jump to the upstream end only when the edge asks for one", () => {
+    const onGoUpstream = vi.fn();
+    withEdges([edge("e1", { selected: true, data: { hidden: true } })]);
+    const { rerender } = render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
+    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
+    rerender(<EdgeToolbar edgeId="e1" x={0} y={0} onGoUpstream={onGoUpstream} />);
+    fireEvent.click(screen.getByRole("button", { name: "Go to upstream connection" }));
+    expect(onGoUpstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the upstream jump out when several edges are selected", () => {
+    withEdges([edge("e1", { selected: true, data: { hidden: true } }), edge("e2", { selected: true, data: { hidden: true } })]);
+    render(<EdgeToolbar edgeId="e1" x={0} y={0} onGoUpstream={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Go to upstream connection" })).toBeNull();
+  });
+
   it("hides a single edge", () => {
     withEdges([edge("e1", { selected: true })]);
     render(<EdgeToolbar edgeId="e1" x={0} y={0} />);
@@ -169,13 +185,14 @@ describe("EdgeToolbar", () => {
     expect(mockRemoveEdges).toHaveBeenCalledWith(["e1"]);
   });
 
-  it("shows the image order among connections into the same handle", () => {
+  it("puts the image order in the empty label field instead of a separate chip", () => {
     withEdges([
       edge("e1", { data: { createdAt: 1 } }),
-      edge("e2", { selected: true, source: "c", data: { createdAt: 2 } }),
+      edge("e2", { selected: true, source: "c", data: { createdAt: 2, label: "model" } }),
     ]);
     render(<EdgeToolbar edgeId="e2" x={0} y={0} />);
-    expect(screen.getByText("Image 2")).toBeInTheDocument();
+    expect(screen.queryByText("Image 2")).toBeNull();
+    expect(screen.getByLabelText("Connection label")).toHaveAttribute("placeholder", "Image 2");
   });
 
   it("offers loop controls instead of pause on a loop edge", () => {
