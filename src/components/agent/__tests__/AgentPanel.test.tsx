@@ -562,6 +562,19 @@ describe("AgentPanel", () => {
     expect(textarea.value).toBe("also\nsecond");
   });
 
+  it("doesn't label a finished reply with its model", async () => {
+    const [start, ...rest] = replyChunks({ text: "All set." });
+    chatChunks.push([{ ...start, messageMetadata: { harness: "claude", modelLabel: "Sonnet 4.5" } }, ...rest]);
+    renderPanel();
+    const textarea = await waitForComposer();
+    fireEvent.change(textarea, { target: { value: "hi" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await screen.findByText("All set.");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument());
+    expect(screen.queryByText("Sonnet 4.5")).not.toBeInTheDocument();
+  });
+
   it("keeps typing away from canvas shortcuts on window", async () => {
     const windowKeys = vi.fn();
     window.addEventListener("keydown", windowKeys);
