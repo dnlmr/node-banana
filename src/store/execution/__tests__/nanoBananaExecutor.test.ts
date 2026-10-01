@@ -416,6 +416,16 @@ describe("OpenAI generation usage and history", () => {
     expect(ctx.updateNodeData).toHaveBeenCalledWith(node.id, expect.objectContaining({ imageHistory: [expect.objectContaining({ model: "GPT Image 2.5 Flare", generation })] }));
   });
 
+  it("tags the carousel entry with its run when the run is one of a batch", async () => {
+    const node = makeNode({ selectedModel: { provider: "openai", modelId: "gpt-image-2.5-flare", displayName: "GPT Image 2.5 Flare", pricing: { amount: 0.05 } } });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, image: "data:image/webp;base64,result" }) });
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+    const batch = { id: "batch-1", index: 2, count: 5 };
+    const ctx = makeCtx(node, { generationsPath: "/proj/generations", batch });
+    await executeNanoBanana(ctx);
+    expect(ctx.updateNodeData).toHaveBeenCalledWith(node.id, expect.objectContaining({ imageHistory: [expect.objectContaining({ batch })] }));
+  });
+
   it("does not substitute a flat or Gemini cost when 2.5 usage is missing", async () => {
     const node = makeNode({ selectedModel: { provider: "openai", modelId: "gpt-image-2.5-sunburst", displayName: "GPT Image 2.5 Sunburst", pricing: { amount: 0.05 } } });
     mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, image: "data:image/png;base64,result" }) });

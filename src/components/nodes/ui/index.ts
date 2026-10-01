@@ -23,6 +23,7 @@ export { ControlsCard, SummaryValues, ControlsSizingContext, autoControlsWidth }
 export type { ControlsCardProps, SummaryRowProps, ControlsSizing } from "./ControlsCard";
 export { WidthGrip } from "./WidthGrip";
 export { CarouselControls, dotWindow } from "./CarouselControls";
+export { RunBatchChip } from "./RunBatchChip";
 export { ScrubRow, formatTime } from "./ScrubRow";
 export { Spinner, LoadingOverlay } from "./Spinner";
 export { EmptyState } from "./EmptyState";

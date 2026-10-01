@@ -21,6 +21,7 @@ import { useGenerationCarousel } from "@/hooks/useGenerationCarousel";
 import { useErrorToast } from "@/hooks/useErrorToast";
 import {
   CarouselControls,
+  RunBatchChip,
   ControlsCard,
   EmptyState,
   ErrorMessage,
@@ -309,6 +310,10 @@ export function GenerateVideoNode({ id, data, selected }: NodeProps<GenerateVide
           {nodeData.status === "loading" && <LoadingOverlay />}
           {nodeData.status === "error" && <ErrorOverlay />}
           {isLoadingCarouselVideo && <LoadingOverlay size={16} dim="light" />}
+          <RunBatchChip
+            batch={nodeData.videoHistory?.[nodeData.selectedVideoHistoryIndex || 0]?.batch}
+            timestamp={nodeData.videoHistory?.[nodeData.selectedVideoHistoryIndex || 0]?.timestamp}
+          />
           <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             <button
               onClick={() => downloadMedia(nodeData.outputVideo!, "video").catch(() => {})}
