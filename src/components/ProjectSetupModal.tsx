@@ -108,12 +108,13 @@ const SETTINGS_PAGES: { id: SettingsTab; label: string; title: string; descripti
 const PROVIDER_ROWS: { id: ProviderType; name: string; placeholder: string; description?: string }[] = [
   { id: "gemini", name: "Google Gemini", placeholder: "AIza..." },
   { id: "openai", name: "OpenAI", placeholder: "sk-..." },
+  // The one Comfy key: Comfy Cloud runs, Comfy-hosted models and partner nodes.
+  { id: "comfy", name: "ComfyUI", placeholder: "comfyui-..." },
   { id: "anthropic", name: "Anthropic", placeholder: "sk-ant-..." },
   { id: "replicate", name: "Replicate", placeholder: "r8_..." },
   { id: "fal", name: "fal.ai", placeholder: "..." },
   { id: "kie", name: "Kie.ai", placeholder: "..." },
   { id: "wavespeed", name: "WaveSpeed", placeholder: "..." },
-  { id: "comfy", name: "ComfyUI", placeholder: "comfyui-...", description: "One key for Comfy Cloud, Comfy-hosted models and partner nodes." },
 ];
 
 const PAN_MODES: SegmentedOption<PanMode>[] = [
@@ -806,12 +807,17 @@ export function ProjectSetupModal({
                           aria-label={`${provider.name} API key`}
                           className="w-[220px] h-8"
                         />
-                        <DialogTextButton
-                          className="justify-self-start"
-                          onClick={() => setShowApiKey((prev) => ({ ...prev, [provider.id]: !prev[provider.id] }))}
-                        >
-                          {showApiKey[provider.id] ? "Hide" : "Show"}
-                        </DialogTextButton>
+                        {/* Nothing to reveal in an empty field */}
+                        {localProviders.providers[provider.id]?.apiKey ? (
+                          <DialogTextButton
+                            className="justify-self-start"
+                            onClick={() => setShowApiKey((prev) => ({ ...prev, [provider.id]: !prev[provider.id] }))}
+                          >
+                            {showApiKey[provider.id] ? "Hide" : "Show"}
+                          </DialogTextButton>
+                        ) : (
+                          <span aria-hidden="true" />
+                        )}
                         {fromEnv ? (
                           <DialogTextButton
                             className="justify-self-start text-neutral-500"

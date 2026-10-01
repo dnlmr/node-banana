@@ -1282,11 +1282,9 @@ describe("ProjectSetupModal", () => {
         expect(screen.getByText("Replicate")).toBeInTheDocument();
         expect(screen.getByText("fal.ai")).toBeInTheDocument();
         // "ComfyUI" is also the settings tab label, so the provider row is
-        // identified by its description as well.
+        // identified by its key input as well.
         expect(screen.getAllByText("ComfyUI").length).toBeGreaterThanOrEqual(2);
-        expect(
-          screen.getByText("One key for Comfy Cloud, Comfy-hosted models and partner nodes.")
-        ).toBeInTheDocument();
+        expect(screen.getByLabelText("ComfyUI API key")).toBeInTheDocument();
       });
     });
 
@@ -1406,14 +1404,18 @@ describe("ProjectSetupModal", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
+      // Nothing to reveal while every field is empty
       await waitFor(() => {
-        const showButtons = screen.getAllByText("Show");
-        expect(showButtons.length).toBeGreaterThan(0);
+        expect(screen.getByLabelText("OpenAI API key")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Show")).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-test" } });
+      await waitFor(() => {
+        expect(screen.getAllByText("Show")).toHaveLength(1);
       });
 
-      // Click Show for first provider
-      fireEvent.click(screen.getAllByText("Show")[0]);
-
+      fireEvent.click(screen.getByText("Show"));
       await waitFor(() => {
         expect(screen.getByText("Hide")).toBeInTheDocument();
       });
