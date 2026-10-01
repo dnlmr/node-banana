@@ -294,13 +294,17 @@ export function pickTurnEffort(
  * Tells the model which model it is. Our system prompt replaces the CLI's own,
  * which is where Claude Code normally says so; without it a model asked
  * "which model are you?" guesses, and often names the wrong one.
+ *
+ * It leads the turn's prompt, not the system prompt: the model can change
+ * between turns, and a changed system prompt moves a Codex conversation to a
+ * new thread that is seeded with text only.
  */
 export function modelIdentity(option: AgentModelOption | undefined, harnessLabel: string): string {
   if (!option) return "";
   const exact = option.resolvedModel ?? option.id;
   const name = option.id === "default" ? exact : option.label;
   const exactNote = name === exact ? "" : ` (${exact})`;
-  return `\n\nYou are running on ${name}${exactNote}, through the user's ${harnessLabel}. Say so if asked which model you are.`;
+  return `<model>You are running on ${name}${exactNote}, through the user's ${harnessLabel}. Say so if asked which model you are.</model>\n\n`;
 }
 
 export function pickTurnModel(requested: string | undefined, options: readonly AgentModelOption[]): string | undefined {
@@ -845,12 +849,13 @@ async function runClaimedTurn(
     });
     params = {
       history: conversation.history,
-      prompt: (options.buildTurnPrompt ?? buildTurnPrompt)({
-        userText: conversation.userText,
-        snapshot: body.workflow,
-      }),
-      systemPrompt:
-        (options.buildSystemPrompt ?? buildAgentSystemPrompt)({ harness: harness.id }) + modelIdentity(modelOption, status.label),
+      prompt:
+        modelIdentity(modelOption, status.label) +
+        (options.buildTurnPrompt ?? buildTurnPrompt)({
+          userText: conversation.userText,
+          snapshot: body.workflow,
+        }),
+      systemPrompt: (options.buildSystemPrompt ?? buildAgentSystemPrompt)({ harness: harness.id }),
       tools: wrapToolRuntime(runtime, turn, { chatId: body.id }),
       signal,
       ...(body.sessionId ? { sessionId: body.sessionId } : {}),

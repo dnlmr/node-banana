@@ -98,7 +98,7 @@ describe("a preference stated earlier in the chat", () => {
     expect(CODEX_DEVELOPER_INSTRUCTIONS).toMatch(/What the user asks for in this chat, including preferences from earlier messages, always applies/);
   });
 
-  it.fails("survives a switch of model in the panel: the system prompt (Codex's thread signature) stays the same", async () => {
+  it("survives a switch of model in the panel: the system prompt (Codex's thread signature) stays the same", async () => {
     const before = await runTurn("gpt-a");
     const after = await runTurn("gpt-b");
     // A different system prompt starts a new Codex thread, seeded with text only.

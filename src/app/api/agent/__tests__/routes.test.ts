@@ -218,9 +218,9 @@ describe("POST /api/agent/chat", () => {
       "finish",
     ]);
     expect(getHarness).toHaveBeenCalledWith("claude");
-    expect(turns[0]).toMatchObject({ prompt: "<user>add a prompt node</user>", history: [] });
-    // The prompt builder's text, then which model the turn runs on.
-    expect(turns[0].systemPrompt).toMatch(/^SYSTEM\n\nYou are running on .+\. Say so if asked which model you are\.$/);
+    expect(turns[0]).toMatchObject({ systemPrompt: "SYSTEM", history: [] });
+    // Which model the turn runs on, then the prompt builder's text.
+    expect(turns[0].prompt).toMatch(/^<model>You are running on .+\. Say so if asked which model you are\.<\/model>\n\n<user>add a prompt node<\/user>$/);
   });
 
   it("hands the request's abort signal to the harness", async () => {
