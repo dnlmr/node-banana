@@ -24,6 +24,7 @@ import { EdgeToolbar, useIsToolbarEdge } from "@/components/EdgeToolbar";
 import { HiddenEdgeStub } from "./HiddenEdgeStub";
 import {
   edgeDisplayLabelById,
+  hiddenStubGroup,
   hiddenStubOffset,
   hiddenStubRole,
   parallelEdgePosition,
@@ -178,8 +179,10 @@ export function EditableEdge({
       };
     })
   );
-  const { setBundleClamp, setExpandedStubGroup, setHoveredHandle, setStubGroupWidth } = useWorkflowStore(
+  const { setBundleClamp, setExpandedStubGroup, setHoveredHandle, setStubGroupWidth, setEdgeLabel, setEdgesLabel } = useWorkflowStore(
     useShallow((state) => ({
+      setEdgeLabel: state.setEdgeLabel,
+      setEdgesLabel: state.setEdgesLabel,
       setBundleClamp: state.setBundleClamp,
       setExpandedStubGroup: state.setExpandedStubGroup,
       setHoveredHandle: state.setHoveredHandle,
@@ -425,8 +428,25 @@ export function EditableEdge({
         title: "Hidden connections, click to expand",
         onHoverChange: (hovering: boolean) => setHoveredHandle(hovering ? { nodeId, handleId, type: side } : null),
         onSelect: () => setExpandedStubGroup(side === "source" ? sourceGroupKey : targetGroupKey),
+        // Renaming the pill names every connection in the stack
+        rename: {
+          value: ownLabel,
+          ariaLabel: "Rename stack",
+          onCommit: (label: string) => {
+            const group = hiddenStubGroup(id, useWorkflowStore.getState().edges, side);
+            setEdgesLabel(group?.members ?? [id], label);
+          },
+        },
+        waitForDoubleClick: true,
       };
     };
+    const ownStub = (side: "source" | "target") => ({
+      label: stubLabel,
+      selected: Boolean(selected),
+      onHoverChange: setStubHovered,
+      onSelect: () => selectThisEdge(side),
+      rename: { value: ownLabel, ariaLabel: "Rename connection", onCommit: (label: string) => setEdgeLabel(id, label) },
+    });
     return (
       <>
         {revealed && (
@@ -455,7 +475,7 @@ export function EditableEdge({
               onMeasure={sourceCollapsed ? measureSourceGroup : measureSource}
               {...(sourceCollapsed
                 ? { ...groupStub("source"), selected: false }
-                : { label: stubLabel, selected: Boolean(selected), onHoverChange: setStubHovered, onSelect: () => selectThisEdge("source") })}
+                : ownStub("source"))}
             />
           )}
           {targetRole !== "collapsed-member" && (
@@ -469,7 +489,7 @@ export function EditableEdge({
               onMeasure={targetCollapsed ? measureTargetGroup : measureTarget}
               {...(targetCollapsed
                 ? { ...groupStub("target"), selected: false }
-                : { label: stubLabel, selected: Boolean(selected), onHoverChange: setStubHovered, onSelect: () => selectThisEdge("target") })}
+                : ownStub("target"))}
             />
           )}
         </EdgeLabelRenderer>

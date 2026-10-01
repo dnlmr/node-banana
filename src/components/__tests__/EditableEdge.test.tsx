@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { EditableEdge } from "@/components/edges/EditableEdge";
 import { ReactFlowProvider, Position } from "@xyflow/react";
 import { EDGE_COLORS } from "@/lib/edges/colors";
+import { STUB_DOUBLE_CLICK_MS } from "@/components/edges/HiddenEdgeStub";
 
 // Mock the workflow store
 const mockSetEdges = vi.fn();
@@ -11,15 +12,20 @@ const mockSetBundleClamp = vi.fn();
 const mockUseWorkflowStore = vi.fn();
 const mockSetExpandedStubGroup = vi.fn();
 const mockSetHoveredHandle = vi.fn();
+const mockSetEdgeLabel = vi.fn();
+const mockSetEdgesLabel = vi.fn();
 let connectionInProgress = false;
 
 vi.mock("@/store/workflowStore", () => ({
-  useWorkflowStore: (selector?: (state: unknown) => unknown) => {
-    if (selector) {
-      return mockUseWorkflowStore(selector);
-    }
-    return mockUseWorkflowStore((s: unknown) => s);
-  },
+  useWorkflowStore: Object.assign(
+    (selector?: (state: unknown) => unknown) => {
+      if (selector) {
+        return mockUseWorkflowStore(selector);
+      }
+      return mockUseWorkflowStore((s: unknown) => s);
+    },
+    { getState: () => mockUseWorkflowStore((s: unknown) => s) }
+  ),
 }));
 
 // Mock useReactFlow
@@ -31,7 +37,8 @@ vi.mock("@xyflow/react", async () => {
       setEdges: mockSetEdges,
       screenToFlowPosition: (p: { x: number; y: number }) => p,
     }),
-    EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    // The real one portals into HTML; foreignObject keeps the labels HTML inside the test's svg
+    EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <foreignObject><div>{children}</div></foreignObject>,
     useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
     useConnection: (selector?: (c: { inProgress: boolean }) => unknown) => {
       const connection = { inProgress: connectionInProgress };
@@ -657,9 +664,86 @@ describe("EditableEdge when hidden", () => {
     expect(pill.style.transform).toContain("50px");
     fireEvent.mouseEnter(pill.querySelector("button")!);
     expect(mockSetHoveredHandle).toHaveBeenCalledWith({ nodeId: "node-2", handleId: "image", type: "target" });
-    fireEvent.click(pill.querySelector("button")!);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(pill.querySelector("button")!, { detail: 1 });
+      // The click waits to rule out a double-click (a rename)
+      expect(mockSetExpandedStubGroup).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(STUB_DOUBLE_CLICK_MS));
+    } finally {
+      vi.useRealTimers();
+    }
     expect(mockSetExpandedStubGroup).toHaveBeenCalledWith("node-2:target:image");
     expect(mockSetEdges).not.toHaveBeenCalled();
+  });
+
+  const named = (label: string) => siblings.map((e) => ({ ...e, data: { ...e.data, label } }));
+  const renderStack = (edges: unknown[], props: Record<string, unknown>, state: Record<string, unknown> = {}) => {
+    mockUseWorkflowStore.mockImplementation((selector) =>
+      selector(
+        createDefaultState({
+          edges,
+          setExpandedStubGroup: mockSetExpandedStubGroup,
+          setHoveredHandle: mockSetHoveredHandle,
+          setEdgeLabel: mockSetEdgeLabel,
+          setEdgesLabel: mockSetEdgesLabel,
+          ...state,
+        })
+      )
+    );
+    return render(
+      <TestWrapper>
+        <EditableEdge {...createDefaultProps(props)} />
+      </TestWrapper>
+    );
+  };
+
+  it("names a collapsed stack's pill after its label, on the downstream side too", () => {
+    vi.useFakeTimers();
+    try {
+      renderStack(named("Model"), { id: "edge-0", source: "x", data: { hidden: true, label: "Model" } });
+      const pill = screen.getByTestId("hidden-edge-stub-target").querySelector("button")!;
+      expect(pill).toHaveTextContent("Model");
+      fireEvent.click(pill, { detail: 1 });
+      act(() => vi.advanceTimersByTime(STUB_DOUBLE_CLICK_MS));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mockSetExpandedStubGroup).toHaveBeenCalledWith("node-2:target:image#Model");
+  });
+
+  it("renames every connection in a collapsed stack from its pill", () => {
+    renderStack(siblings, { id: "edge-0", source: "x", data: { hidden: true } });
+    const pill = screen.getByTestId("hidden-edge-stub-target").querySelector("button")!;
+    fireEvent.doubleClick(pill);
+    const input = screen.getByRole("textbox", { name: "Rename stack" });
+    fireEvent.change(input, { target: { value: "Model" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mockSetEdgesLabel).toHaveBeenCalledWith(["edge-0", "edge-1"], "Model");
+    expect(mockSetEdgeLabel).not.toHaveBeenCalled();
+  });
+
+  it("renames a single connection from its pill in an expanded stack", () => {
+    renderStack(named("Model"), { data: { hidden: true, label: "Model" } }, { expandedStubGroup: "node-2:target:image#Model" });
+    const pill = screen.getByTestId("hidden-edge-stub-target").querySelector("button")!;
+    expect(pill).toHaveTextContent("Model");
+    fireEvent.doubleClick(pill);
+    const input = screen.getByRole("textbox", { name: "Rename connection" }) as HTMLInputElement;
+    expect(input.value).toBe("Model");
+    fireEvent.change(input, { target: { value: "Base" } });
+    fireEvent.blur(input);
+    expect(mockSetEdgeLabel).toHaveBeenCalledWith("edge-1", "Base");
+    expect(mockSetEdgesLabel).not.toHaveBeenCalled();
+  });
+
+  it("leaves the labels alone when a rename is cancelled", () => {
+    renderStack(siblings, { id: "edge-0", source: "x", data: { hidden: true } });
+    fireEvent.doubleClick(screen.getByTestId("hidden-edge-stub-target").querySelector("button")!);
+    const input = screen.getByRole("textbox", { name: "Rename stack" });
+    fireEvent.change(input, { target: { value: "Model" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(mockSetEdgesLabel).not.toHaveBeenCalled();
+    expect(screen.getByTestId("hidden-edge-stub-target")).toHaveTextContent("Images");
   });
 
   it("lets go of the handle hover when the collapsed pill expands under the pointer", () => {
