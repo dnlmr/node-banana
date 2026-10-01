@@ -91,3 +91,32 @@ export async function cancelAgentSignIn(harness: AgentHarnessId): Promise<boolea
     return false;
   }
 }
+
+export const AGENT_PROMPT_NOTES_API = "/api/agent/prompt-notes";
+
+function promptNotesUrl(provider: string, modelId: string): string {
+  return `${AGENT_PROMPT_NOTES_API}?provider=${encodeURIComponent(provider)}&modelId=${encodeURIComponent(modelId)}`;
+}
+
+/** The prompting tips saved for a model: when they were saved, or null when there are none (or the route failed). */
+export async function fetchPromptNotes(provider: string, modelId: string, signal?: AbortSignal): Promise<{ savedAt: string } | null> {
+  try {
+    const response = await fetch(promptNotesUrl(provider, modelId), { signal, cache: "no-store" });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { notes?: { savedAt?: unknown } | null };
+    return typeof body.notes?.savedAt === "string" ? { savedAt: body.notes.savedAt } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Forget the prompting tips saved for a model. Resolves true when there were some. */
+export async function deletePromptNotes(provider: string, modelId: string): Promise<boolean> {
+  try {
+    const response = await fetch(promptNotesUrl(provider, modelId), { method: "DELETE" });
+    const body = (await response.json().catch(() => null)) as { removed?: boolean } | null;
+    return Boolean(body?.removed);
+  } catch {
+    return false;
+  }
+}

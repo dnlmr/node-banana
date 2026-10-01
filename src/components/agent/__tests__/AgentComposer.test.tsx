@@ -98,6 +98,31 @@ describe("AgentComposer", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("runs an action chip from its button, disabled while a turn runs", () => {
+    const onClick = vi.fn();
+    const forget = vi.fn();
+    const note = {
+      key: "research",
+      kind: "action" as const,
+      text: "Refresh prompting tips for Kling I2V",
+      title: "Tips saved 2 Oct.",
+      onClick,
+      onDismiss: forget,
+      dismissLabel: "Forget the saved prompting tips for Kling I2V",
+    };
+    const { rerender } = renderComposer({ notes: [note] });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh prompting tips for Kling I2V" }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Forget the saved prompting tips for Kling I2V" }));
+    expect(forget).toHaveBeenCalledTimes(1);
+    rerender(
+      <TooltipProvider>
+        <AgentComposer status="streaming" busy onSend={vi.fn(() => true)} onStop={vi.fn()} notes={[note]} />
+      </TooltipProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Refresh prompting tips for Kling I2V" })).toBeDisabled();
+  });
+
   // Safari ends the composition before the keydown of the Enter that commits it
   // (keyCode 229, isComposing false): that Enter used to send the half-typed message.
   it("never sends on the Enter that commits an IME conversion (Safari order)", async () => {

@@ -28,6 +28,8 @@ import {
   type AgentReadiness,
 } from "@/lib/agent/client/readiness";
 import { findLatestAgentSession } from "@/lib/agent/client/session";
+import { deletePromptNotes, fetchPromptNotes } from "@/lib/agent/client/api";
+import { researchMessage, researchTargetForSelection } from "@/lib/agent/client/research";
 import { resolveAgentEffort, resolveAgentModel } from "@/lib/agent/client/settings";
 import { decideFirstOpen } from "@/lib/agent/client/readiness";
 import { useAgentSettings } from "@/lib/agent/client/useAgentSettings";
@@ -40,6 +42,7 @@ import {
   type AgentGraphOpBatch,
   type AgentErrorCode,
   type AgentHarnessId,
+  type AgentResearchTarget,
 } from "@/lib/agent/types";
 import { AgentComposer, type AgentComposerProps } from "./AgentComposer";
 import { AgentHistory } from "./AgentHistory";
@@ -288,6 +291,25 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
     onNodesChange(nodes.filter((node) => node.selected).map((node) => ({ type: "select", id: node.id, selected: false })));
   }, []);
 
+  // One selected generator with a model: offer to look up how to prompt it.
+  const researchKey = useWorkflowStore((state) => {
+    const target = researchTargetForSelection(state.nodes);
+    return target ? JSON.stringify(target) : "";
+  });
+  const researchTarget = useMemo<AgentResearchTarget | null>(() => (researchKey ? JSON.parse(researchKey) : null), [researchKey]);
+  const [savedTips, setSavedTips] = useState<{ key: string; savedAt: string } | null>(null);
+  // Re-read after every turn too: a research turn is what saves them.
+  useEffect(() => {
+    if (!researchTarget || busy) return;
+    const controller = new AbortController();
+    void fetchPromptNotes(researchTarget.provider, researchTarget.modelId, controller.signal).then((found) => {
+      if (!controller.signal.aborted) setSavedTips(found ? { key: researchKey, savedAt: found.savedAt } : null);
+    });
+    return () => controller.abort();
+  }, [researchKey, researchTarget, busy]);
+  const tipsSavedAt = savedTips?.key === researchKey ? savedTips.savedAt : undefined;
+  const { send } = chat;
+
   const notes = useMemo(() => {
     const list: NonNullable<AgentComposerProps["notes"]> = [];
     const selected = selectionLabel(selectionCount);
@@ -309,8 +331,31 @@ export function AgentPanel({ open, onClose, buttonRight, buttonBottom, onBusyCha
         text: `${HARNESS_LABELS[harness]} picks up from here with the conversation so far`,
       });
     }
+    if (researchTarget) {
+      const name = researchTarget.name ?? researchTarget.modelId;
+      const saved = tipsSavedAt
+        ? new Date(tipsSavedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })
+        : undefined;
+      list.push({
+        key: "research",
+        kind: "action",
+        text: saved ? `Refresh prompting tips for ${name}` : `Look up prompting tips for ${name}`,
+        title: saved
+          ? `Tips saved ${saved}. Searches the web again and replaces them.`
+          : "Searches the web for this model's prompting advice and saves it for every chat.",
+        onClick: () => send(researchMessage(researchTarget), { research: researchTarget }),
+        ...(saved
+          ? {
+              onDismiss: () => {
+                void deletePromptNotes(researchTarget.provider, researchTarget.modelId).then(() => setSavedTips(null));
+              },
+              dismissLabel: `Forget the saved prompting tips for ${name}`,
+            }
+          : {}),
+      });
+    }
     return list;
-  }, [selectionCount, messages, harness, clearSelection]);
+  }, [selectionCount, messages, harness, clearSelection, researchTarget, tipsSavedAt, send]);
 
   // --- Focus and keyboard ----------------------------------------------------
   const panelRef = useRef<HTMLElement>(null);

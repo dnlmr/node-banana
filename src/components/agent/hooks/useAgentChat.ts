@@ -12,6 +12,7 @@ import type {
   AgentDataParts,
   AgentGraphOpBatch,
   AgentHarnessId,
+  AgentMessageMetadata,
   AgentUIMessage,
   AgentWorkflowSnapshot,
 } from "@/lib/agent/types";
@@ -45,7 +46,8 @@ export interface UseAgentChatResult {
   statusLine: AgentStatusLine | null;
   /** Messages after which the user pressed stop. */
   stoppedMessageIds: ReadonlySet<string>;
-  send: (text: string) => boolean;
+  /** `metadata` rides on the user's message (a research turn's target). */
+  send: (text: string, metadata?: AgentMessageMetadata) => boolean;
   stop: () => void;
   retry: () => void;
   clearError: () => void;
@@ -227,11 +229,11 @@ export function useAgentChat({
   }, [busy, canvasGeneration, chat]);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, metadata?: AgentMessageMetadata) => {
       const trimmed = text.trim();
       if (!trimmed || busy) return false;
       beginTurn();
-      void sendMessage({ text: trimmed });
+      void sendMessage(metadata ? { text: trimmed, metadata } : { text: trimmed });
       return true;
     },
     [busy, beginTurn, sendMessage],

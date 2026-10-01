@@ -2,7 +2,7 @@
 
 import { useCallback, useState, type KeyboardEvent, type Ref } from "react";
 import type { ChatStatus } from "ai";
-import { ArrowLeftRightIcon, CheckIcon, ChevronDownIcon, SquareDashedMousePointerIcon, XIcon } from "lucide-react";
+import { ArrowLeftRightIcon, CheckIcon, ChevronDownIcon, GlobeIcon, SquareDashedMousePointerIcon, XIcon } from "lucide-react";
 import {
   PromptInput,
   PromptInputBody,
@@ -24,8 +24,12 @@ import { AGENT_POPOVER_LAYER } from "./AgentChrome";
 
 export interface AgentComposerNote {
   key: string;
-  kind: "selection" | "switch";
+  kind: "selection" | "switch" | "action";
   text: string;
+  /** Tooltip; the text itself when absent. */
+  title?: string;
+  /** An "action" chip is a button that does this (disabled while a turn runs). */
+  onClick?: () => void;
   onDismiss?: () => void;
   dismissLabel?: string;
 }
@@ -212,15 +216,28 @@ export function AgentComposer({
               <span
                 key={note.key}
                 data-note={note.kind}
-                title={note.text}
-                className="inline-flex h-[22px] min-w-0 max-w-full items-center gap-1.5 rounded-md squircle bg-white/[0.07] pl-[7px] pr-2 text-[11px] leading-4 text-neutral-300 has-[button]:pr-1"
+                title={note.title ?? note.text}
+                className="inline-flex h-[22px] min-w-0 max-w-full items-center gap-1.5 rounded-md squircle bg-white/[0.07] pl-[7px] pr-2 text-[11px] leading-4 text-neutral-300 has-[button[aria-label]]:pr-1"
               >
                 {note.kind === "selection" ? (
                   <SquareDashedMousePointerIcon className="size-3 shrink-0 text-neutral-400" aria-hidden="true" strokeWidth={1.75} />
+                ) : note.kind === "action" ? (
+                  <GlobeIcon className="size-3 shrink-0 text-neutral-400" aria-hidden="true" strokeWidth={1.75} />
                 ) : (
                   <ArrowLeftRightIcon className="size-3 shrink-0 text-neutral-400" aria-hidden="true" strokeWidth={1.75} />
                 )}
-                <span className="truncate">{note.text}</span>
+                {note.onClick ? (
+                  <button
+                    type="button"
+                    onClick={note.onClick}
+                    disabled={busy}
+                    className="truncate rounded-sm text-left transition-colors hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection disabled:text-neutral-500"
+                  >
+                    {note.text}
+                  </button>
+                ) : (
+                  <span className="truncate">{note.text}</span>
+                )}
                 {note.onDismiss && (
                   <button
                     type="button"

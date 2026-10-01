@@ -37,6 +37,8 @@ vi.mock("@/utils/logger", () => ({
 const { POST: chatPOST } = await import("../chat/route");
 const { GET: statusGET } = await import("../status/route");
 const { POST: signInPOST, DELETE: signInDELETE } = await import("../sign-in/route");
+const { GET: notesGET, DELETE: notesDELETE } = await import("../prompt-notes/route");
+const { filePromptNotesStore } = await import("@/lib/agent/prompting/notesStore");
 const { AGENT_CHAT_MAX_BODY_BYTES, AGENT_SIGN_IN_MAX_BODY_BYTES } = await import("../shared");
 
 const LABELS: Record<AgentHarnessId, string> = { claude: "Claude Code", codex: "Codex" };
@@ -602,5 +604,47 @@ describe("DELETE /api/agent/sign-in", () => {
     expect((await signInDELETE(del("/api/agent/sign-in", { harness: "gemini" }))).status).toBe(400);
     expect((await signInDELETE(del("/api/agent/sign-in", { harness: "claude" }, { ...SAME_ORIGIN, origin: "https://evil.example" }))).status).toBe(403);
     expect(harness.cancelSignIn).not.toHaveBeenCalled();
+  });
+});
+
+describe("/api/agent/prompt-notes", () => {
+  let dir: string;
+  const previous = process.env.NODE_BANANA_PROMPT_NOTES_DIR;
+  const url = "/api/agent/prompt-notes?provider=fal&modelId=fal-ai%2Fseedream";
+  const remove = (path: string, headers: Record<string, string> = SAME_ORIGIN) =>
+    new NextRequest(`http://localhost:3000${path}`, { method: "DELETE", headers });
+
+  beforeEach(async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    dir = await mkdtemp(path.join(os.tmpdir(), "nb-notes-route-"));
+    process.env.NODE_BANANA_PROMPT_NOTES_DIR = dir;
+  });
+  afterEach(async () => {
+    const { rm } = await import("node:fs/promises");
+    await rm(dir, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.NODE_BANANA_PROMPT_NOTES_DIR;
+    else process.env.NODE_BANANA_PROMPT_NOTES_DIR = previous;
+  });
+
+  it("reads the saved notes for a model, or null, and forgets them", async () => {
+    expect(await (await notesGET(get(url))).json()).toEqual({ notes: null });
+    const entry = { provider: "fal", modelId: "fal-ai/seedream", notes: "- Tip", sources: [], savedAt: "2026-10-02T00:00:00.000Z" };
+    await filePromptNotesStore(dir).write(entry);
+    const read = await notesGET(get(url));
+    expect(read.headers.get("cache-control")).toBe("no-store");
+    expect(await read.json()).toEqual({ notes: entry });
+    expect(await (await notesDELETE(remove(url))).json()).toEqual({ removed: true });
+    expect(await (await notesGET(get(url))).json()).toEqual({ notes: null });
+  });
+
+  it("needs a provider and a model id", async () => {
+    expect((await notesGET(get("/api/agent/prompt-notes?provider=fal"))).status).toBe(400);
+  });
+
+  it("refuses requests the server did not vouch for", async () => {
+    expect((await notesGET(get(url, CROSS_SITE))).status).toBe(403);
+    expect((await notesDELETE(remove(url, LAN_FORGED))).status).toBe(403);
   });
 });
