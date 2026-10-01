@@ -147,10 +147,10 @@ const GroupControls = memo(function GroupControls({
     [handleNameSubmit, group?.name]
   );
 
+  // The menu stays open: the swatches are for trying colours against the canvas.
   const handleColorChange = useCallback(
     (color: GroupColor) => {
       updateGroup(groupId, { color });
-      setShowMenu(false);
     },
     [groupId, updateGroup]
   );

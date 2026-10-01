@@ -446,6 +446,8 @@ describe("GroupControlsOverlay", () => {
       fireEvent.click(screen.getByTitle("Olive"));
 
       expect(mockUpdateGroup).toHaveBeenCalledWith("group-1", { color: "green" });
+      // The menu stays open so colours can be tried against the canvas
+      expect(screen.getByRole("menu")).toBeInTheDocument();
     });
   });
 
