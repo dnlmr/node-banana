@@ -74,6 +74,12 @@ const createDefaultState = (overrides = {}) => ({
   ...overrides,
 });
 
+// Opens the arrange menu and picks a mode by its label
+const arrange = (label: string) => {
+  fireEvent.click(screen.getByRole("button", { name: "Arrange nodes" }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name: new RegExp(`^${label}`) }));
+};
+
 describe("MultiSelectToolbar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -126,7 +132,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Stack horizontally")).toBeInTheDocument();
+      expect(screen.getByTitle("Arrange nodes")).toBeInTheDocument();
     });
 
     it("should not render when nodes are selected but less than 2", () => {
@@ -179,34 +185,29 @@ describe("MultiSelectToolbar", () => {
       expect(screen.getByRole("button", { name: "Run selected nodes" })).toBeDisabled();
     });
 
-    it("should render stack horizontally button", () => {
+    it("should render one arrange button that opens a menu of the three modes", () => {
       render(
         <TestWrapper>
           <MultiSelectToolbar />
         </TestWrapper>
       );
 
-      expect(screen.getByTitle("Stack horizontally")).toBeInTheDocument();
-    });
+      const button = screen.getByRole("button", { name: "Arrange nodes" });
+      expect(button).toHaveAttribute("aria-haspopup", "menu");
+      expect(button).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByTitle("Stack horizontally")).not.toBeInTheDocument();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
-    it("should render stack vertically button", () => {
-      render(
-        <TestWrapper>
-          <MultiSelectToolbar />
-        </TestWrapper>
-      );
+      fireEvent.click(button);
 
-      expect(screen.getByTitle("Stack vertically (V)")).toBeInTheDocument();
-    });
-
-    it("should render arrange as grid button", () => {
-      render(
-        <TestWrapper>
-          <MultiSelectToolbar />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTitle("Arrange as grid (G)")).toBeInTheDocument();
+      expect(button).toHaveAttribute("aria-expanded", "true");
+      const items = screen.getAllByRole("menuitemradio");
+      expect(items.map((item) => item.textContent)).toEqual([
+        "Stack horizontally",
+        "Stack verticallyV",
+        "Arrange as gridG",
+      ]);
+      expect(mockOnNodesChange).not.toHaveBeenCalled();
     });
 
     it("should render create group button when nodes are not in a group", () => {
@@ -247,8 +248,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      const stackHorizontalButton = screen.getByTitle("Stack horizontally");
-      fireEvent.click(stackHorizontalButton);
+      arrange("Stack horizontally");
 
       // Should be called for each node
       expect(mockOnNodesChange).toHaveBeenCalled();
@@ -270,7 +270,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      fireEvent.click(screen.getByTitle("Stack horizontally"));
+      arrange("Stack horizontally");
 
       // A single batched call positions all nodes; node-2 (x=100) comes first
       expect(mockOnNodesChange).toHaveBeenCalledWith([
@@ -305,8 +305,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      const stackVerticalButton = screen.getByTitle("Stack vertically (V)");
-      fireEvent.click(stackVerticalButton);
+      arrange("Stack vertically");
 
       expect(mockOnNodesChange).toHaveBeenCalled();
     });
@@ -327,7 +326,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      fireEvent.click(screen.getByTitle("Stack vertically (V)"));
+      arrange("Stack vertically");
 
       // A single batched call positions all nodes; node-2 (y=100) comes first
       expect(mockOnNodesChange).toHaveBeenCalledWith([
@@ -364,8 +363,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      const gridButton = screen.getByTitle("Arrange as grid (G)");
-      fireEvent.click(gridButton);
+      arrange("Arrange as grid");
 
       expect(mockOnNodesChange).toHaveBeenCalled();
     });
@@ -388,7 +386,7 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      fireEvent.click(screen.getByTitle("Arrange as grid (G)"));
+      arrange("Arrange as grid");
 
       // With 4 nodes, should create a 2x2 grid
       expect(mockOnNodesChange).toHaveBeenCalled();
@@ -398,9 +396,9 @@ describe("MultiSelectToolbar", () => {
   describe("Spacing control", () => {
     it.each([
       ["Stack horizontally", { x: 300, y: 0 }, { x: 600, y: 0 }],
-      ["Stack vertically (V)", { x: 0, y: 280 }, { x: 0, y: 560 }],
-      ["Arrange as grid (G)", { x: 300, y: 0 }, { x: 0, y: 280 }],
-    ])("adjusts spacing live for %s", (title, secondPosition, thirdPosition) => {
+      ["Stack vertically", { x: 0, y: 280 }, { x: 0, y: 560 }],
+      ["Arrange as grid", { x: 300, y: 0 }, { x: 0, y: 280 }],
+    ])("adjusts spacing live for %s", (label, secondPosition, thirdPosition) => {
       const nodes = [
         createMockNode("node-1", { position: { x: 0, y: 0 } }),
         createMockNode("node-2", { position: { x: 400, y: 400 } }),
@@ -410,7 +408,7 @@ describe("MultiSelectToolbar", () => {
       render(<TestWrapper><MultiSelectToolbar /></TestWrapper>);
 
       expect(screen.queryByRole("slider")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByTitle(title));
+      arrange(label);
       const slider = screen.getByRole("slider", { name: "Node spacing" });
       expect(slider).toHaveValue("20");
       fireEvent.change(slider, { target: { value: "80" } });
@@ -432,7 +430,7 @@ describe("MultiSelectToolbar", () => {
       ];
       mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ nodes })));
       const { container, rerender } = render(<TestWrapper><Toolbar /></TestWrapper>);
-      fireEvent.click(screen.getByTitle("Stack horizontally"));
+      arrange("Stack horizontally");
       const originalLeft = (container.firstChild as HTMLElement).style.left;
       nodes = nodes.map((node, index) => ({ ...node, position: { x: index * 240, y: 0 } }));
       rerender(<TestWrapper><Toolbar /></TestWrapper>);
@@ -442,6 +440,114 @@ describe("MultiSelectToolbar", () => {
       nodes = [nodes[0], createMockNode("node-3")];
       rerender(<TestWrapper><Toolbar /></TestWrapper>);
       expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Arrange menu and spacing popover", () => {
+    const threeNodes = () => [
+      createMockNode("node-1", { position: { x: 0, y: 0 } }),
+      createMockNode("node-2", { position: { x: 400, y: 400 } }),
+      createMockNode("node-3", { position: { x: 800, y: 800 } }),
+    ];
+    const renderToolbar = () => {
+      const nodes = threeNodes();
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ nodes })));
+      return render(<TestWrapper><MultiSelectToolbar /></TestWrapper>);
+    };
+
+    it("picking a mode arranges, closes the menu and shows the slider at 20", () => {
+      renderToolbar();
+      arrange("Stack horizontally");
+
+      expect(mockOnNodesChange).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "Node spacing" })).toHaveValue("20");
+      expect(screen.getByRole("button", { name: "Arrange nodes" })).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("closes the menu on Escape and on a press outside without arranging", () => {
+      renderToolbar();
+      const button = screen.getByRole("button", { name: "Arrange nodes" });
+
+      fireEvent.click(button);
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+      fireEvent.click(button);
+      fireEvent.pointerDown(document.body);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(mockOnNodesChange).not.toHaveBeenCalled();
+    });
+
+    it("hides the slider on a press outside the toolbar", () => {
+      renderToolbar();
+      arrange("Stack horizontally");
+
+      fireEvent.pointerDown(document.body);
+
+      expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+    });
+
+    it("hides the slider on Escape", () => {
+      renderToolbar();
+      arrange("Stack horizontally");
+
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+    });
+
+    it("keeps the slider on presses inside the toolbar and the slider", () => {
+      renderToolbar();
+      arrange("Stack horizontally");
+
+      fireEvent.pointerDown(screen.getByRole("slider"));
+      fireEvent.pointerDown(screen.getByTitle("Download images as ZIP"));
+
+      expect(screen.getByRole("slider")).toBeInTheDocument();
+    });
+
+    it("reopens the menu from the button while the slider stays, then Escape closes only the menu", () => {
+      renderToolbar();
+      arrange("Stack horizontally");
+
+      fireEvent.click(screen.getByRole("button", { name: "Arrange nodes" }));
+
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(screen.getByRole("slider")).toBeInTheDocument();
+      expect(screen.getByRole("menuitemradio", { name: /^Stack horizontally/ })).toHaveAttribute("aria-checked", "true");
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(screen.getByRole("slider")).toBeInTheDocument();
+    });
+
+    it("picking another mode re-arranges with the current gap and keeps the slider", () => {
+      renderToolbar();
+      arrange("Stack horizontally");
+      fireEvent.change(screen.getByRole("slider"), { target: { value: "80" } });
+
+      arrange("Stack vertically");
+
+      expect(mockOnNodesChange).toHaveBeenLastCalledWith([
+        { type: "position", id: "node-1", position: { x: 0, y: 0 } },
+        { type: "position", id: "node-2", position: { x: 0, y: 280 } },
+        { type: "position", id: "node-3", position: { x: 0, y: 560 } },
+      ]);
+      expect(screen.getByRole("slider")).toHaveValue("80");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("picking the active mode again only closes the menu", () => {
+      renderToolbar();
+      arrange("Stack horizontally");
+      mockOnNodesChange.mockClear();
+
+      arrange("Stack horizontally");
+
+      expect(mockOnNodesChange).not.toHaveBeenCalled();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(screen.getByRole("slider")).toBeInTheDocument();
     });
   });
 
