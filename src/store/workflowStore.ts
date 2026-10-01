@@ -2,7 +2,7 @@ import { desktopCredentialsReady } from "@/lib/desktop/credentials";
 import type { QuickstartView } from "@/types/quickstart";
 import { pushGenerationToast } from "@/components/GenerationToast";
 import { create, StateCreator } from "zustand";
-import { COMFY_SETTINGS_CHANGED_EVENT, getComfySettings } from "@/lib/comfy/settings";
+import { COMFY_SETTINGS_CHANGED_EVENT, getComfySettings, migrateLegacyComfyCloudKey } from "@/lib/comfy/settings";
 import { useShallow } from "zustand/shallow";
 import {
   Connection,
@@ -4133,6 +4133,11 @@ function prependGalleryEntry(
   };
 }
 
+// A Cloud key an older build kept on the ComfyUI tab moves into Providers
+// before the store first reads them (the desktop does this again once its
+// credentials have loaded, in DesktopSession).
+if (typeof window !== "undefined") migrateLegacyComfyCloudKey();
+
 export const useWorkflowStore = create<WorkflowStore>()(workflowStoreImpl);
 
 // A run ends wherever `isRunning` drops — it finished, Stop was pressed, an
@@ -4173,7 +4178,8 @@ export function useProviderApiKeys() {
       kieApiKey: state.providerSettings.providers.kie?.apiKey ?? null,
       wavespeedApiKey: state.providerSettings.providers.wavespeed?.apiKey ?? null,
       openaiApiKey: state.providerSettings.providers.openai?.apiKey ?? null,
-      // Router accepts the Comfy Cloud key, so it stands in when no provider key is set.
+      // The Providers entry is the Comfy key; the mirror only still matters for
+      // a Cloud key an older build stored on the ComfyUI tab.
       comfyApiKey: state.providerSettings.providers.comfy?.apiKey || state.comfyCloudApiKey || null,
       // Provider enabled states (for conditional UI)
       replicateEnabled: state.providerSettings.providers.replicate?.enabled ?? false,

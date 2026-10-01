@@ -230,7 +230,7 @@ If the model uses different endpoints than `/api/v1/jobs/createTask` and `/api/v
 
 ## Adding Comfy Router Models
 
-Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~220 partner models behind one Comfy key. Its catalog endpoint lists only ids and every model keeps its partner's native request and response shape, so the app curates its own list. Provider id is `comfy`, shown as "ComfyUI"; the key falls back to the Comfy Cloud key from the ComfyUI settings.
+Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~220 partner models behind one Comfy key. Its catalog endpoint lists only ids and every model keeps its partner's native request and response shape, so the app curates its own list. Provider id is `comfy`, shown as "ComfyUI". Its key on the Providers page is the one Comfy key: Comfy Cloud runs and partner nodes use it too (`comfyAccountKey()` in `src/lib/comfy/settings.ts`; a Cloud key an older build stored on the ComfyUI tab is moved there on start by `migrateLegacyComfyCloudKey`).
 
 - **Catalog:** `src/lib/providers/comfyRouter.ts` — one entry per model (`id` is the Router id with its slash, e.g. `bfl/flux-2-pro`), its `family`, capabilities, `parameters` and `inputs`. The registry and schema routes read straight from it.
 - **Wire format per family:** `src/app/api/generate/providers/comfy.ts` — `buildComfyRouterBody(family, input)` and `readComfyRouterResult(family, result)`. A new model of an existing family is a catalog entry only. A new family needs a case in both functions.
@@ -252,7 +252,7 @@ forwarded per request as `X-Comfy-*` headers (so no server config is needed):
 
 | Mode | Transport | Notes |
 |------|-----------|-------|
-| `cloud` (default) | `@comfyorg/sdk` (Comfy API v2) | Needs a `comfyui-…` key from platform.comfy.org |
+| `cloud` (default) | `@comfyorg/sdk` (Comfy API v2) | Uses the Comfy key from Settings → Providers (`comfyui-…`, from platform.comfy.org) |
 | `local` | legacy `/api/prompt` | A stock ComfyUI; no sidecar needed |
 | `remote` | legacy `/api/prompt` | Same, elsewhere on the network |
 
@@ -501,7 +501,7 @@ All routes in `src/app/api/`:
 ## localStorage Keys
 
 - `node-banana-workflow-configs` - Project metadata (paths)
-- `node-banana-provider-settings` - Provider API keys and enabled flags (the `comfy` entry falls back to `node-banana-comfy-settings`' cloud key)
+- `node-banana-provider-settings` - Provider API keys and enabled flags (the `comfy` entry is the one Comfy key; `node-banana-comfy-settings` no longer stores one)
 - `node-banana-workflow-costs` - Cost tracking per workflow
 - `node-banana-nanoBanana-defaults` - Sticky generation settings
 - `node-banana-comfy-settings` - ComfyUI backend (cloud/local/remote), keys, job timeout

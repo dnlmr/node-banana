@@ -1281,12 +1281,39 @@ describe("ProjectSetupModal", () => {
         expect(screen.getByText("OpenAI")).toBeInTheDocument();
         expect(screen.getByText("Replicate")).toBeInTheDocument();
         expect(screen.getByText("fal.ai")).toBeInTheDocument();
-        // "ComfyUI" is also the settings tab label, so the provider card is
-        // identified by its Comfy Cloud fallback hint as well.
+        // "ComfyUI" is also the settings tab label, so the provider row is
+        // identified by its key input as well.
         expect(screen.getAllByText("ComfyUI").length).toBeGreaterThanOrEqual(2);
-        expect(
-          screen.getByText("Uses your Comfy Cloud key from the ComfyUI tab when left empty.")
-        ).toBeInTheDocument();
+        expect(screen.getByLabelText("ComfyUI API key")).toBeInTheDocument();
+      });
+    });
+
+    it("the ComfyUI page reports the Comfy key from Providers and links there", async () => {
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          mode="settings"
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "ComfyUI" }));
+      await waitFor(() => {
+        expect(screen.getByText("No Comfy key yet")).toBeInTheDocument();
+        expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Add in Providers/ }));
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("comfyui-...")).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByLabelText("ComfyUI API key"), { target: { value: "comfyui-abc" } });
+
+      fireEvent.click(screen.getByRole("button", { name: "ComfyUI" }));
+      await waitFor(() => {
+        expect(screen.getByText("Using your Comfy key")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Change/ })).toBeInTheDocument();
       });
     });
 
@@ -1377,14 +1404,18 @@ describe("ProjectSetupModal", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
+      // Nothing to reveal while every field is empty
       await waitFor(() => {
-        const showButtons = screen.getAllByText("Show");
-        expect(showButtons.length).toBeGreaterThan(0);
+        expect(screen.getByLabelText("OpenAI API key")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Show")).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-test" } });
+      await waitFor(() => {
+        expect(screen.getAllByText("Show")).toHaveLength(1);
       });
 
-      // Click Show for first provider
-      fireEvent.click(screen.getAllByText("Show")[0]);
-
+      fireEvent.click(screen.getByText("Show"));
       await waitFor(() => {
         expect(screen.getByText("Hide")).toBeInTheDocument();
       });

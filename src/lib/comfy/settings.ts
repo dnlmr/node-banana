@@ -1,5 +1,6 @@
 import { isDesktop, desktopCredential, desktopCredentialsMigrated, saveDesktopCredentials, comfySecretFields } from "@/lib/desktop/credentials";
 import type { DesktopCredentials } from "@/types/desktop";
+import { getProviderSettings, saveProviderSettings } from "@/store/utils/localStorage";
 /**
  * ComfyUI backend settings.
  *
@@ -125,15 +126,62 @@ export function normalizeComfySettings(raw: unknown): ComfySettings {
   };
 }
 
+/**
+ * The one Comfy key: the `comfy` entry on the Providers page. Comfy Cloud
+ * runs, Comfy-hosted models (Router) and partner nodes all use it.
+ */
+export function comfyAccountKey(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return getProviderSettings().providers.comfy?.apiKey || null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the ComfyUI settings themselves hold, before the account key is laid over them. */
+function readStoredComfySettings(): ComfySettings {
+  const stored = localStorage.getItem(COMFY_SETTINGS_KEY);
+  const preferences = stored ? JSON.parse(stored) : {};
+  if (isDesktop()) for (const key of comfySecretFields) preferences[key] = desktopCredential(`comfy.${key}`) ?? null;
+  return normalizeComfySettings(preferences);
+}
+
+/**
+ * The settings as the app uses them. `cloudApiKey` is resolved here: the
+ * account key from Providers, or, until `migrateLegacyComfyCloudKey` has
+ * run, the key an older build stored on the ComfyUI tab.
+ */
 export function getComfySettings(): ComfySettings {
   if (typeof window === "undefined") return { ...defaultComfySettings };
   try {
-    const stored = localStorage.getItem(COMFY_SETTINGS_KEY);
-    const preferences = stored ? JSON.parse(stored) : {};
-    if (isDesktop()) for (const key of comfySecretFields) preferences[key] = desktopCredential(`comfy.${key}`) ?? null;
-    return normalizeComfySettings(preferences);
+    const settings = readStoredComfySettings();
+    return { ...settings, cloudApiKey: comfyAccountKey() || settings.cloudApiKey || null };
   } catch {
     return { ...defaultComfySettings };
+  }
+}
+
+/**
+ * Older builds kept the Comfy Cloud key on the ComfyUI tab. Move it to the
+ * Providers entry it now lives in (unless one is already set there) and
+ * retire the old slot. Safe to run on every start; a no-op once done. On
+ * the desktop it only finds the key after the credentials have loaded.
+ */
+export function migrateLegacyComfyCloudKey(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const legacy = readStoredComfySettings().cloudApiKey;
+    if (!legacy) return false;
+    const settings = getProviderSettings();
+    const comfy = settings.providers.comfy;
+    if (comfy && !comfy.apiKey) {
+      saveProviderSettings({ providers: { ...settings.providers, comfy: { ...comfy, apiKey: legacy } } });
+    }
+    saveComfySettings(getComfySettings());
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -142,7 +190,8 @@ export const COMFY_SETTINGS_CHANGED_EVENT = "node-banana:comfy-settings-changed"
 
 export function saveComfySettings(settings: ComfySettings): void {
   if (typeof window === "undefined") return;
-  const preferences = { ...normalizeComfySettings(settings) } as Partial<ComfySettings>;
+  // The account key is Providers' to keep; this slot stays empty from now on.
+  const preferences = { ...normalizeComfySettings(settings), cloudApiKey: null } as Partial<ComfySettings>;
   if (isDesktop()) {
     const secrets: DesktopCredentials = {};
     for (const key of comfySecretFields) { secrets[`comfy.${key}`] = preferences[key] ?? null; delete preferences[key]; }
@@ -194,7 +243,7 @@ export function resolveComfyConnection(settings: ComfySettings): ComfyConnection
 /** Why the current mode cannot run, in words the settings panel can show. */
 export function comfyConfigError(settings: ComfySettings): string | null {
   if (settings.mode === "cloud" && !settings.cloudApiKey) {
-    return "Add a Comfy Cloud API key to run workflows in the cloud.";
+    return "Add a Comfy key in Providers to run workflows in the cloud.";
   }
   if (settings.mode === "local" && !settings.localUrl) {
     return "Set the URL of your local ComfyUI (usually http://127.0.0.1:8188).";
