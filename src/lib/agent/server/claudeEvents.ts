@@ -23,7 +23,7 @@ import {
   type SDKMessage,
   type SDKRateLimitInfo,
 } from "@anthropic-ai/claude-agent-sdk/core";
-import type { AgentErrorCode, HarnessEvent } from "../types";
+import { WEB_TOOL_PENDING, type AgentErrorCode, type HarnessEvent } from "../types";
 
 /** The in-process MCP server's name; tools reach the model as `mcp__node_banana__<tool>`. */
 export const CLAUDE_MCP_SERVER_NAME = "node_banana";
@@ -231,6 +231,9 @@ export class ClaudeEventMapper {
         else if (block.type === "thinking") this.blocks.set(event.index, { kind: "reasoning", id, open: false });
         else if (block.type === "tool_use" && block.name?.startsWith(TOOL_PREFIX)) {
           return [{ type: "tool-pending", toolName: block.name.slice(TOOL_PREFIX.length) }];
+        } else if (block.type === "tool_use" && (block.name === "WebSearch" || block.name === "WebFetch")) {
+          // Claude Code runs its web tools itself (research turns): only the status line shows them.
+          return [{ type: "tool-pending", toolName: WEB_TOOL_PENDING }];
         }
         return [];
       }

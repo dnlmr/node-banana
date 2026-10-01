@@ -256,6 +256,16 @@ describe("Claude harness runTurn", () => {
     expect(options.env).toMatchObject({ HOME: "/Users/someone", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
   });
 
+  it("gives a research turn Claude Code's web tools, and only that turn", async () => {
+    const { query, made } = fakeQueries({ messages: recorded });
+    await collect(harness({ query }).runTurn(params({ webAccess: true })));
+    expect(made[0].options).toMatchObject({
+      tools: ["WebSearch", "WebFetch"],
+      allowedTools: ["mcp__node_banana__add_numbers", "WebSearch", "WebFetch"],
+      permissionMode: "dontAsk",
+    });
+  });
+
   it("defaults to Sonnet and lets 'default' pick the plan's model", async () => {
     const first = fakeQueries({ messages: recorded });
     await collect(harness({ query: first.query }).runTurn(params()));

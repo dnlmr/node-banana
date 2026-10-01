@@ -245,6 +245,15 @@ describe("Codex harness runTurn", () => {
     expect(turnText(child().requests("turn/start")[0])).toContain("<conversation_history>");
   });
 
+  it("turns Codex's web search back on for a research thread only", async () => {
+    const { harness, child } = setup();
+    await collect(harness.runTurn(params()));
+    await collect(harness.runTurn(params({ webAccess: true })));
+    const [plain, research] = child().requests("thread/start");
+    expect(plain.params).not.toHaveProperty("config.web_search");
+    expect((research.params as { config: Record<string, unknown> }).config).toMatchObject({ web_search: "live" });
+  });
+
   it("starts a new thread when the instructions change", async () => {
     const { harness, child } = setup();
     await collect(harness.runTurn(params()));

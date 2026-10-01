@@ -130,6 +130,9 @@ export type HarnessEvent =
   | { type: "usage"; inputTokens?: number; outputTokens?: number }
   | { type: "error"; code: AgentErrorCode; message: string };
 
+/** The tool name harnesses report as pending while their own web search runs (research turns). */
+export const WEB_TOOL_PENDING = "web_search";
+
 export interface HarnessTurnParams {
   /** Resume this Claude session / Codex thread when possible. */
   sessionId?: string;
@@ -146,6 +149,8 @@ export interface HarnessTurnParams {
   model?: string;
   /** Thinking effort, already checked against the model's own levels. */
   effort?: string;
+  /** Turn on the harness's own web search (research turns only, which have no canvas tools). */
+  webAccess?: boolean;
   signal: AbortSignal;
 }
 
@@ -383,11 +388,23 @@ export interface AgentWorkflowSnapshot {
 // Chat transport
 // ---------------------------------------------------------------------------
 
+/** The model a research turn looks up prompting tips for. */
+export interface AgentResearchTarget {
+  provider: string;
+  modelId: string;
+  /** The name the node shows. */
+  name?: string;
+  /** The node type it runs in. */
+  nodeType?: string;
+}
+
 export interface AgentMessageMetadata {
   harness?: AgentHarnessId;
   model?: string;
   /** The model's display name, shown under the reply ("Opus 5.5"). */
   modelLabel?: string;
+  /** On a user message: this turn looks up prompting tips for that model (web on, canvas tools off). */
+  research?: AgentResearchTarget;
 }
 
 export interface AgentToolUIOutput {

@@ -148,6 +148,18 @@ describe("ClaudeEventMapper", () => {
     expect(events).toEqual([]);
   });
 
+  it("reports Claude Code's own web search as a pending web_search", () => {
+    const { events } = mapAll([
+      streamEvent({ type: "message_start", message: { id: "m1" } }),
+      streamEvent({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "t", name: "WebSearch", input: {} } }),
+      streamEvent({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "u", name: "WebFetch", input: {} } }),
+    ]);
+    expect(events).toEqual([
+      { type: "tool-pending", toolName: "web_search" },
+      { type: "tool-pending", toolName: "web_search" },
+    ]);
+  });
+
   it("emits assistant text that never streamed", () => {
     const { events } = mapAll([
       {

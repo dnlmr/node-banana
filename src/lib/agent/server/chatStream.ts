@@ -28,6 +28,13 @@ import { buildAgentSystemPrompt, buildTurnPrompt } from "../prompt";
 import type { ProviderKeys } from "@/lib/providers/keys";
 import { TOOL_NAMES } from "../tools/definitions";
 import { createAgentToolRuntime, type AgentToolRuntimeOptions } from "../tools/runtime";
+import { filePromptNotesStore, type PromptNotesStore } from "../prompting/notesStore";
+import {
+  buildResearchSystemPrompt,
+  buildResearchTurnPrompt,
+  createResearchToolRuntime,
+  researchTargetSchema,
+} from "../prompting/research";
 import type {
   AgentChatRequestBody,
   AgentErrorCode,
@@ -37,6 +44,7 @@ import type {
   AgentHarnessStatus,
   AgentMessageMetadata,
   AgentModelOption,
+  AgentResearchTarget,
   AgentToolDefinition,
   AgentToolResult,
   AgentToolRuntime,
@@ -46,6 +54,7 @@ import type {
   HarnessEvent,
   HarnessTurnParams,
 } from "../types";
+import { WEB_TOOL_PENDING } from "../types";
 
 export type AgentUIMessageChunk = InferUIMessageChunk<AgentUIMessage>;
 
@@ -197,6 +206,8 @@ export interface AgentConversation {
   history: HarnessTurnParams["history"];
   /** This turn's words: the text of the last (user) message. */
   userText: string;
+  /** Set when the last message asks to look up prompting tips for a model. */
+  research?: AgentResearchTarget;
 }
 
 const LAST_MESSAGE_PROBLEM = "the last message must be the user's, with text in it.";
@@ -218,7 +229,8 @@ export function readConversation(messages: readonly AgentUIMessage[]): AgentConv
     const text = messageText(message);
     if (text) history.push({ role: message.role, text });
   }
-  return { history, userText };
+  const research = researchTargetSchema.safeParse(last.metadata?.research);
+  return { history, userText, ...(research.success ? { research: research.data } : {}) };
 }
 
 function messageText(message: AgentUIMessage): string {
@@ -415,6 +427,9 @@ class TurnWriter {
   noticeCount = 0;
   toolCallCount = 0;
 
+  /** False for a research turn: its session is not the chat's, and the next turn must not resume it. */
+  keepsSession = true;
+
   constructor(
     private readonly writer: Writer,
     private readonly harnessId: AgentHarnessId
@@ -479,7 +494,7 @@ class TurnWriter {
   }
 
   session(sessionId: string): void {
-    if (!sessionId || sessionId === this.sessionId) return;
+    if (!this.keepsSession || !sessionId || sessionId === this.sessionId) return;
     this.sessionId = sessionId;
     // Persisted with a fixed id, so a later session in the same turn (Claude
     // retrying without resume) replaces the part instead of adding one.
@@ -601,6 +616,7 @@ function findToolDefinition(definitions: readonly AgentToolDefinition[], name: s
 
 /** The panel's "working" line while the model is still writing a tool call. */
 function pendingToolStatus(definitions: readonly AgentToolDefinition[], toolName: string): string {
+  if (toolName === WEB_TOOL_PENDING) return "Searching the web…";
   const definition = findToolDefinition(definitions, toolName);
   if (!definition) return "Working…";
   if (definition.name === TOOL_NAMES.nameConversation) return "Working…";
@@ -744,6 +760,8 @@ export interface AgentChatStreamOptions {
   buildSystemPrompt?: (opts: { harness: AgentHarnessId }) => string;
   /** Defaults to the real turn prompt (canvas context + the user's words). */
   buildTurnPrompt?: (opts: { userText: string; snapshot: AgentWorkflowSnapshot }) => string;
+  /** Prompting notes per model; ~/.node-banana/prompt-notes by default. */
+  promptNotes?: PromptNotesStore;
   /** How long to wait for a stopped turn on the same chat to wind down. */
   abortedTurnGraceMs?: number;
   /** How many turns may run at once across all chats. Defaults to MAX_ACTIVE_TURNS. */
@@ -843,27 +861,47 @@ async function runClaimedTurn(
 
   let params: HarnessTurnParams;
   try {
-    const runtime = (options.createToolRuntime ?? createAgentToolRuntime)(body.workflow, {
-      providerKeys: options.providerKeys ?? {},
-      signal,
-    });
-    params = {
-      history: conversation.history,
-      prompt:
-        modelIdentity(modelOption, status.label) +
-        (options.buildTurnPrompt ?? buildTurnPrompt)({
-          userText: conversation.userText,
-          snapshot: body.workflow,
-        }),
-      systemPrompt: (options.buildSystemPrompt ?? buildAgentSystemPrompt)({ harness: harness.id }),
-      tools: wrapToolRuntime(runtime, turn, { chatId: body.id }),
-      signal,
-      ...(body.sessionId ? { sessionId: body.sessionId } : {}),
+    const promptNotes = options.promptNotes ?? filePromptNotesStore();
+    const modelChoice = {
       // Left out when the panel picked none, or one the harness does not offer,
       // so the harness uses its own default.
       ...(requestedModel ? { model: requestedModel } : {}),
       ...(effort ? { effort } : {}),
     };
+    const { research } = conversation;
+    if (research) {
+      // Its own fresh session, with web search and no canvas tools; the chat's session is left as it was.
+      turn.keepsSession = false;
+      params = {
+        history: [],
+        prompt: modelIdentity(modelOption, status.label) + buildResearchTurnPrompt(research),
+        systemPrompt: buildResearchSystemPrompt({ harness: harness.id }),
+        tools: wrapToolRuntime(createResearchToolRuntime(research, promptNotes), turn, { chatId: body.id }),
+        webAccess: true,
+        signal,
+        ...modelChoice,
+      };
+    } else {
+      const runtime = (options.createToolRuntime ?? createAgentToolRuntime)(body.workflow, {
+        providerKeys: options.providerKeys ?? {},
+        signal,
+        promptNotes,
+      });
+      params = {
+        history: conversation.history,
+        prompt:
+          modelIdentity(modelOption, status.label) +
+          (options.buildTurnPrompt ?? buildTurnPrompt)({
+            userText: conversation.userText,
+            snapshot: body.workflow,
+          }),
+        systemPrompt: (options.buildSystemPrompt ?? buildAgentSystemPrompt)({ harness: harness.id }),
+        tools: wrapToolRuntime(runtime, turn, { chatId: body.id }),
+        signal,
+        ...(body.sessionId ? { sessionId: body.sessionId } : {}),
+        ...modelChoice,
+      };
+    }
   } catch (error) {
     logger.error("api.error", "Agent turn setup failed", logContext, asError(error));
     turn.finishWithNotice("harness_error", `Could not prepare the agent's turn: ${errorMessage(error)}`);
@@ -873,7 +911,8 @@ async function runClaimedTurn(
   logger.info("api.llm", "Agent turn started", {
     ...logContext,
     model,
-    resumed: Boolean(body.sessionId),
+    resumed: Boolean(params.sessionId),
+    research: Boolean(conversation.research),
     historyLength: conversation.history.length,
     nodeCount: body.workflow.nodes.length,
   });

@@ -167,6 +167,15 @@ describe("CodexTurnMapper.awaitingModel", () => {
     expect(mapper.awaitingModel).toBe(false);
   });
 
+  it("reports Codex's own web search as a pending web_search", () => {
+    const mapper = new CodexTurnMapper(THREAD);
+    mapper.turnId = TURN;
+    expect(mapper.map(at("item/started", { item: { type: "webSearch", id: "ws1", query: "seedream prompting" } }))).toEqual([
+      { type: "tool-pending", toolName: "web_search" },
+    ]);
+    expect(mapper.awaitingModel).toBe(false);
+  });
+
   it("stays clear on the recorded turn once the reply streams", () => {
     expect(mapAll(recordedCodexTurn).mapper.awaitingModel).toBe(false);
   });

@@ -15,7 +15,7 @@
  * "Planning edits…" hint.
  */
 
-import type { AgentErrorCode, HarnessEvent } from "../types";
+import { WEB_TOOL_PENDING, type AgentErrorCode, type HarnessEvent } from "../types";
 
 /** Namespace our dynamic tools live under (`node_banana.<tool>`). */
 export const CODEX_TOOL_NAMESPACE = "node_banana";
@@ -135,6 +135,11 @@ export class CodexTurnMapper {
 
   private itemStarted(item: Params): HarnessEvent[] {
     if (item.type === "agentMessage") this.awaitingModel = false;
+    // Codex runs its web search itself (research turns): only the status line shows it.
+    if (item.type === "webSearch") {
+      this.awaitingModel = false;
+      return [{ type: "tool-pending", toolName: WEB_TOOL_PENDING }];
+    }
     if (item.type !== "dynamicToolCall") return [];
     this.awaitingModel = false;
     const namespace = str(item.namespace);
