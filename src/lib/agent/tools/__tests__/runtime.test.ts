@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkflowNode } from "@/types";
+import type { NodeType, WorkflowNode } from "@/types";
 import { getConnectedInputsPure, validateWorkflowPure } from "@/store/utils/connectedInputs";
 import { parseTextToArray } from "@/utils/arrayParser";
 import type { AgentGraphOp } from "../../types";
@@ -370,6 +370,64 @@ describe("placement against rendered nodes", () => {
     const store = applyResult(state, result);
     expect(store.nodes.find((n) => n.id === added.id)).toMatchObject({ width: 320, style: { width: 320 } });
     expect(store.nodes.find((n) => n.id === added.id)).not.toHaveProperty("measured");
+  });
+});
+
+describe("new nodes joining a cluster", () => {
+  // A neat cluster with the heights the canvas measured, and a separate one below it.
+  const measured = (id: string, type: NodeType, position: { x: number; y: number }, width: number, height: number, extra: Partial<WorkflowNode> = {}) =>
+    storeNode(id, type, position, {}, { measured: { width, height }, ...extra });
+  const canvas = (): StoreState => ({
+    nodes: [
+      measured("prompt-1", "prompt", { x: 0, y: 116 }, 320, 220),
+      measured("nanoBanana-2", "nanoBanana", { x: 420, y: 0 }, 300, 452),
+      measured("generateVideo-3", "generateVideo", { x: 820, y: 0 }, 300, 452),
+      measured("prompt-8", "prompt", { x: 37, y: 1400 }, 320, 220),
+      measured("nanoBanana-9", "nanoBanana", { x: 503, y: 1371 }, 300, 452),
+    ],
+    edges: [
+      storeEdge("prompt-1", "text", "nanoBanana-2", "text"),
+      storeEdge("nanoBanana-2", "image", "generateVideo-3", "image"),
+      storeEdge("prompt-8", "text", "nanoBanana-9", "text"),
+    ],
+  });
+
+  it("line up with its columns and rows, while every node already there and every explicit position stays exactly put", async () => {
+    const state = canvas();
+    const before = JSON.stringify(state.nodes.map((n) => [n.id, n.position]));
+    const result = await call(runtimeFor(state), "edit_workflow", {
+      operations: [
+        { op: "add_node", ref: "o", type: "output" },
+        { op: "add_node", ref: "pinned", type: "output", position: { x: 1250, y: 800 } },
+        { op: "connect", from: "generateVideo-3", to: "o" },
+        { op: "connect", from: "nanoBanana-2", to: "pinned" },
+      ],
+    });
+    expect(result.ok, result.text).toBe(true);
+    expect(result.ops.some((op) => op.op === "moveNode")).toBe(false);
+    const [o, pinned] = addNodeOps(result.ops);
+    // The video's column plus its width and the gap; centred on the video's row.
+    expect(o.position).toEqual({ x: 1220, y: 66 });
+    expect(pinned.position).toEqual({ x: 1250, y: 800 });
+    const store = applyResult(state, result);
+    expect(JSON.stringify(store.nodes.filter((n) => !n.id.includes("-ag")).map((n) => [n.id, n.position]))).toBe(before);
+  });
+
+  it("join a group's box, which is refit around them", async () => {
+    const state = canvas();
+    state.nodes = state.nodes.map((n) => (n.id.endsWith("-8") || n.id.endsWith("-9") ? n : { ...n, groupId: "group-1" }));
+    state.groups = { "group-1": { id: "group-1", name: "Stills", color: "blue", position: { x: -30, y: -30 }, size: { width: 1180, height: 512 } } };
+    const result = await call(runtimeFor(state), "edit_workflow", {
+      operations: [
+        { op: "add_node", ref: "o", type: "output" },
+        { op: "connect", from: "generateVideo-3", to: "o" },
+        { op: "add_to_group", node: "o", group: "group-1" },
+      ],
+    });
+    expect(result.ok, result.text).toBe(true);
+    expect(addNodeOps(result.ops)[0].position).toEqual({ x: 1220, y: 66 });
+    const store = applyResult(state, result);
+    expect(store.groups["group-1"]).toMatchObject({ position: { x: -30, y: -30 }, size: { width: 1220 + 320 + 30 + 30, height: 512 } });
   });
 });
 

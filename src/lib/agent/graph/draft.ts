@@ -46,6 +46,7 @@ import {
   type NodeHandle,
 } from "./handles";
 import {
+  alignNewNodes,
   arrangeWithGroups,
   boxesOverlap,
   fitGroupBox,
@@ -1361,6 +1362,21 @@ export class DraftTransaction {
       this.setGroupBox(id, box);
       this.settle.delete(id);
     }
+    // A loose node that joined nodes already on the canvas lines up with
+    // their columns and rows; those nodes stay put. Group blocks stay as laid out.
+    const inBlock = new Set(blocks.flatMap((g) => g.members));
+    const loose = new Set(toPlace.filter((id) => !inBlock.has(id)));
+    if (loose.size === 0) return;
+    const aligned = alignNewNodes({
+      place: [...loose].map((id) => nodeBox(this.nodes.get(id)!)),
+      fixed: [...this.nodes.values()].filter((n) => !loose.has(n.id)).map(nodeBox),
+      edges: this.edges.map(layoutEdge),
+      areas: this.groups
+        .map((g) => ({ box: groupBox(g), members: this.membersOf(g.id).map((n) => n.id) }))
+        .filter((a): a is { box: LayoutBox; members: string[] } => !!a.box)
+        .map((a) => ({ box: groupFootprint(a.box), members: a.members })),
+    });
+    for (const [id, position] of aligned) this.placeNode(id, position);
   }
 
   /**
