@@ -91,7 +91,7 @@ describe("a preference stated earlier in the chat", () => {
     expect(prompt).toMatch(/model menu at the top of this chat/);
   });
 
-  it.fails("is not overridden by Codex's guard against the user's AGENTS.md", () => {
+  it("is not overridden by Codex's guard against the user's AGENTS.md", () => {
     // The guard told Codex to ignore "dialect, language … preferences" and reply
     // in "neutral English", with nothing tying that to the files alone.
     expect(CODEX_DEVELOPER_INSTRUCTIONS).toMatch(/those files describe/);
