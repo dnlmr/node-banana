@@ -8,6 +8,7 @@ import {
   hiddenStubGroup,
   hiddenStubRole,
   pluralTypeLabel,
+  collapsedStubLabel,
   stubGroupKey,
 } from "../labels";
 import type { WorkflowEdge } from "@/types";
@@ -189,7 +190,12 @@ describe("hidden stub groups", () => {
       ...edges,
       edge("hero", { source: "h", data: { hidden: true, createdAt: 0, label: "Important" } }),
     ];
-    expect(hiddenStubGroup("hero", named, "target")).toEqual({ key: `${key}#hero`, members: ["hero"], named: true });
+    expect(hiddenStubGroup("hero", named, "target")).toEqual({
+      key: `${key}#Important`,
+      members: ["hero"],
+      label: "Important",
+      named: true,
+    });
     expect(hiddenStubGroup("a1", named, "target")?.members).toEqual(["a2", "a1"]);
     expect(hiddenStubRole("hero", named, "target", null)).toBe("single");
     expect(hiddenStubRole("a2", named, "target", null)).toBe("collapsed-leader");
@@ -199,6 +205,50 @@ describe("hidden stub groups", () => {
     expect(placed.get("hero")).toBe(122);
     // The text handle's stub follows, after the group gap
     expect(placed.get("t")).toBe(152);
+  });
+
+  it("stacks the connections at one handle that share a label", () => {
+    const model = [
+      ...edges,
+      edge("m1", { source: "m", data: { hidden: true, createdAt: 4, label: "Model" } }),
+      edge("m2", { source: "n", data: { hidden: true, createdAt: 5, label: " Model " } }),
+      edge("other", { source: "o", data: { hidden: true, createdAt: 6, label: "Style" } }),
+    ];
+    const modelKey = stubGroupKey("b", "target", "image", "Model");
+    expect(modelKey).toBe(`${key}#Model`);
+    expect(hiddenStubGroup("m2", model, "target")).toEqual({ key: modelKey, members: ["m1", "m2"], label: "Model", named: true });
+    // The unnamed ones keep their own stack, and another name is another stack
+    expect(hiddenStubGroup("a1", model, "target")?.members).toEqual(["a2", "a1"]);
+    expect(hiddenStubGroup("other", model, "target")?.members).toEqual(["other"]);
+    expect(hiddenStubRole("m1", model, "target", null)).toBe("collapsed-leader");
+    expect(hiddenStubRole("m2", model, "target", null)).toBe("collapsed-member");
+    expect(hiddenStubRole("m2", model, "target", modelKey)).toBe("expanded");
+    // Each source still has its own pill
+    expect(hiddenStubRole("m1", model, "source", null)).toBe("single");
+    // Unnamed stack, then the named ones by age, then the text handle
+    const placed = stackHiddenStubs(model, "b", "target", () => 100);
+    expect(placed.get("a2")).toBe(100);
+    expect(placed.get("m1")).toBe(122);
+    expect(placed.get("m2")).toBe(122);
+    expect(placed.get("other")).toBe(144);
+    expect(placed.get("t")).toBe(174);
+  });
+
+  it("moves a renamed member into the stack of its new name", () => {
+    const model = [
+      edge("m1", { source: "m", data: { hidden: true, createdAt: 1, label: "Model" } }),
+      edge("m2", { source: "n", data: { hidden: true, createdAt: 2, label: "Model" } }),
+      edge("m3", { source: "o", data: { hidden: true, createdAt: 3, label: "Model" } }),
+    ];
+    const renamed = model.map((e) => (e.id === "m2" ? { ...e, data: { ...e.data, label: "Base" } } : e));
+    expect(hiddenStubGroup("m1", renamed, "target")?.members).toEqual(["m1", "m3"]);
+    expect(hiddenStubGroup("m2", renamed, "target")).toMatchObject({ key: stubGroupKey("b", "target", "image", "Base"), members: ["m2"] });
+  });
+
+  it("labels a collapsed pill with its stack's name, else the plural type", () => {
+    expect(collapsedStubLabel("Model", "text")).toBe("Model");
+    expect(collapsedStubLabel("  ", "text")).toBe("Texts");
+    expect(collapsedStubLabel(undefined, "image")).toBe("Images");
   });
 
   it("pluralises the type label, except where the word has no plural", () => {

@@ -72,10 +72,15 @@ export function pluralTypeLabel(handleId: string | null | undefined): string {
   return label === "Audio" || label === "3D" ? label : `${label}s`;
 }
 
+/** The text on a collapsed pill: the label its members share, else the plural of their type. */
+export function collapsedStubLabel(label: string | null | undefined, handleId: string | null | undefined): string {
+  return label?.trim() || pluralTypeLabel(handleId);
+}
+
 /**
- * The hidden connections on each handle of a node's side. Unnamed ones share
- * a group per handle (collapsed into one plural pill); a connection the user
- * has named keeps its own pill, listed after its handle's group.
+ * The hidden connections on each handle of a node's side. Those sharing a
+ * label (or having none) form one group, collapsed into one pill; named
+ * groups are listed after their handle's unnamed one.
  */
 function hiddenStubGroups(edges: WorkflowEdge[], nodeId: string, side: BundleEnd): HiddenStubGroup[] {
   return edgeGraphIndex(edges).hiddenStubGroups.get(hiddenStubSideKey(nodeId, side)) ?? [];
@@ -86,7 +91,7 @@ export function hasHiddenStubs(edges: WorkflowEdge[] | undefined, nodeId: string
   return nodeId !== null && edgeGraphIndex(edges).hiddenStubGroups.has(hiddenStubSideKey(nodeId, side));
 }
 
-/** The group of hidden connections sharing this edge's handle on the given side. */
+/** The group of hidden connections sharing this edge's handle and label on the given side. */
 export function hiddenStubGroup(edgeId: string, edges: WorkflowEdge[], side: BundleEnd): HiddenStubGroup | null {
   const edge = edgeGraphIndex(edges).byId.get(edgeId);
   if (!edge || !edge.data?.hidden) return null;
@@ -133,7 +138,7 @@ export function stackHiddenStubs(
   const handleOf = (e: WorkflowEdge) => (side === "source" ? e.sourceHandle : e.targetHandle) ?? null;
   const { byId } = edgeGraphIndex(edges);
   // Rows are keyed by handle so stubs of one handle stay together; a named
-  // connection ranks after its handle's shared group
+  // group ranks after its handle's unnamed one
   const rows: { ids: string[]; key: string; y: number; rank: number; createdAt: number }[] = [];
   for (const group of hiddenStubGroups(edges, nodeId, side)) {
     const first = byId.get(group.members[0])!;

@@ -27,7 +27,7 @@ import {
   hiddenStubOffset,
   hiddenStubRole,
   parallelEdgePosition,
-  pluralTypeLabel,
+  collapsedStubLabel,
   stubGroupKey,
 } from "@/lib/edges/labels";
 import { EdgeLabel } from "./EdgeLabel";
@@ -115,12 +115,14 @@ export function EditableEdge({
     },
     [id, setEdges]
   );
-  const hasOwnLabel = Boolean((data as EdgeData | undefined)?.label?.trim());
+  const ownLabel = (data as EdgeData | undefined)?.label?.trim() ?? "";
+  const hasOwnLabel = Boolean(ownLabel);
   const [hovered, setHovered] = useState(false);
   // A collapsed pill is drawn by one member but every member's ghost must
-  // leave from its outer edge, so its measured width goes through the store
-  const sourceGroupKey = stubGroupKey(source, "source", sourceHandleId ?? null);
-  const targetGroupKey = stubGroupKey(target, "target", targetHandleId ?? null);
+  // leave from its outer edge, so its measured width goes through the store.
+  // Members share a label, so this edge's own label names its stack.
+  const sourceGroupKey = stubGroupKey(source, "source", sourceHandleId ?? null, ownLabel);
+  const targetGroupKey = stubGroupKey(target, "target", targetHandleId ?? null, ownLabel);
 
   // Everything this edge needs from the other edges, in one subscription.
   // The helpers read an index built once per edges array, so each is a
@@ -419,10 +421,10 @@ export function EditableEdge({
       const nodeId = side === "source" ? source : target;
       const handleId = (side === "source" ? sourceHandleId : targetHandleId) ?? null;
       return {
-        label: pluralTypeLabel(handleId),
+        label: collapsedStubLabel(ownLabel, handleId),
         title: "Hidden connections, click to expand",
         onHoverChange: (hovering: boolean) => setHoveredHandle(hovering ? { nodeId, handleId, type: side } : null),
-        onSelect: () => setExpandedStubGroup(stubGroupKey(nodeId, side, handleId)),
+        onSelect: () => setExpandedStubGroup(side === "source" ? sourceGroupKey : targetGroupKey),
       };
     };
     return (

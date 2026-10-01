@@ -33,7 +33,9 @@ export interface HiddenStubGroup {
   key: string;
   /** Member edge ids in stack order. */
   members: string[];
-  /** True for a connection the user has named, which stands outside its handle's group. */
+  /** The label every member carries; such a stack ranks after its handle's unnamed one. */
+  label?: string;
+  /** True when the members carry a label of their own. */
   named?: boolean;
 }
 
@@ -76,9 +78,20 @@ export function bundleIdAt(edge: WorkflowEdge, end: BundleEnd): string | undefin
 /** Hidden edges and reference links never bundle. */
 export const bundleable = (e: WorkflowEdge) => !e.data?.hidden && e.type !== "reference";
 
-/** Identifies the hidden connections on one handle, which collapse into a single pill. */
-export function stubGroupKey(nodeId: string, side: BundleEnd, handleId: string | null | undefined): string {
-  return `${nodeId}:${side}:${handleId ?? ""}`;
+/**
+ * Identifies the hidden connections on one handle that share a label (or
+ * have none), which collapse into a single pill. Everything after the first
+ * `#` is the label.
+ */
+export function stubGroupKey(
+  nodeId: string,
+  side: BundleEnd,
+  handleId: string | null | undefined,
+  label?: string | null,
+): string {
+  const base = `${nodeId}:${side}:${handleId ?? ""}`;
+  const own = label?.trim();
+  return own ? `${base}#${own}` : base;
 }
 
 /** Identifies one side of a node in `hiddenStubGroups`. */
@@ -88,7 +101,7 @@ export function hiddenStubSideKey(nodeId: string, side: BundleEnd): string {
 
 const nodeAt = (e: WorkflowEdge, end: BundleEnd) => (end === "source" ? e.source : e.target);
 const handleAt = (e: WorkflowEdge, end: BundleEnd) => (end === "source" ? e.sourceHandle : e.targetHandle) ?? null;
-const hasOwnLabel = (e: WorkflowEdge) => Boolean(e.data?.label?.trim());
+const ownLabel = (e: WorkflowEdge) => e.data?.label?.trim() || undefined;
 const isImageConnection = (e: WorkflowEdge) =>
   e.sourceHandle === "image" || Boolean(e.sourceHandle?.startsWith("image-")) ||
   e.targetHandle === "image" || Boolean(e.targetHandle?.startsWith("image-"));
@@ -148,30 +161,29 @@ function buildEdgeGraphIndex(edges: WorkflowEdge[]): EdgeGraphIndex {
     bundles.set(e.id, bundleable(e) ? { source: membership(e, "source"), target: membership(e, "target") } : NO_BUNDLES);
   }
 
-  // Hidden stubs: per node side, unnamed connections share a group per
-  // handle (collapsed into one plural pill); a connection the user has named
-  // keeps its own pill, listed after its handle's group.
-  const shared = new Map<string, Map<string, string[]>>();
-  const named = new Map<string, HiddenStubGroup[]>();
+  // Hidden stubs: per node side, the connections at one handle that share a
+  // label (or have none) form one group, collapsed into one pill. Unnamed
+  // groups come first, then the named ones in the order they were first made.
+  const unnamed = new Map<string, Map<string, HiddenStubGroup>>();
+  const named = new Map<string, Map<string, HiddenStubGroup>>();
   for (const e of sorted) {
     if (!e.data?.hidden) continue;
+    const label = ownLabel(e);
     for (const side of ENDS) {
       const nodeId = nodeAt(e, side);
       const sideKey = hiddenStubSideKey(nodeId, side);
-      const key = stubGroupKey(nodeId, side, handleAt(e, side));
-      if (hasOwnLabel(e)) {
-        push(named, sideKey, { key: `${key}#${e.id}`, members: [e.id], named: true });
-      } else {
-        let groups = shared.get(sideKey);
-        if (!groups) shared.set(sideKey, (groups = new Map()));
-        push(groups, key, e.id);
-      }
+      const key = stubGroupKey(nodeId, side, handleAt(e, side), label);
+      const bySide = label ? named : unnamed;
+      let groups = bySide.get(sideKey);
+      if (!groups) bySide.set(sideKey, (groups = new Map()));
+      const group = groups.get(key);
+      if (group) group.members.push(e.id);
+      else groups.set(key, label ? { key, members: [e.id], label, named: true } : { key, members: [e.id] });
     }
   }
   const hiddenStubGroups = new Map<string, HiddenStubGroup[]>();
-  for (const sideKey of new Set([...shared.keys(), ...named.keys()])) {
-    const groups = [...(shared.get(sideKey)?.entries() ?? [])].map(([key, members]) => ({ key, members }));
-    hiddenStubGroups.set(sideKey, [...groups, ...(named.get(sideKey) ?? [])]);
+  for (const sideKey of new Set([...unnamed.keys(), ...named.keys()])) {
+    hiddenStubGroups.set(sideKey, [...(unnamed.get(sideKey)?.values() ?? []), ...(named.get(sideKey)?.values() ?? [])]);
   }
 
   const selectedIds = new Set(edges.filter((e) => e.selected).map((e) => e.id));
