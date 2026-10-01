@@ -26,7 +26,8 @@ describe("buildAgentSystemPrompt", () => {
   it("teaches the LLM chain, the Array delimiter and where comments and API keys go (review C30, C31, C37)", () => {
     expect(prompt).toContain("that Prompt holds the LLM's whole instruction plus the user's idea");
     expect(prompt).toContain("Reply with only the prompt.");
-    expect(prompt).toContain("Exception: a Prompt that feeds LLM Generate is the LLM's instruction");
+    // How to write that instruction now comes from get_prompt_guide (the llmGenerate guide).
+    expect(prompt).toContain("call get_prompt_guide for the node it feeds");
     expect(prompt).toContain("node comments never reach any model");
     expect(prompt).toContain('Prompt "cat, dog, bird" → Array (delimiter ",")');
     expect(prompt).toContain("the Array's delimiter must match the list's separator");
