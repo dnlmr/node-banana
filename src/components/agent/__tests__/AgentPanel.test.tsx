@@ -545,21 +545,20 @@ describe("AgentPanel", () => {
       fireEvent.keyDown(textarea, { key: "Enter" });
       await waitFor(() => expect(textarea.value).toBe(""));
     }
-    const strip = screen.getByRole("region", { name: "Queued messages" });
-    expect(strip).toHaveTextContent("Queued · 2");
+    expect(screen.getByRole("region", { name: "Queued messages (2)" })).toBeInTheDocument();
 
     // Edit: the message leaves the queue and joins what is already typed.
     fireEvent.change(textarea, { target: { value: "also" } });
     fireEvent.click(screen.getByRole("button", { name: "Edit queued message: second" }));
     expect(textarea.value).toBe("also\nsecond");
-    expect(strip).toHaveTextContent("Queued · 1");
+    expect(screen.getByRole("region", { name: "Queued messages (1)" })).toHaveTextContent("third");
 
     // The running turn ends: the remaining message goes as the next turn.
     answer();
     expect(await screen.findByText("Third reply.")).toBeInTheDocument();
     expect(chatBodies).toHaveLength(2);
     expect(JSON.stringify(chatBodies[1])).toContain('"third"');
-    expect(screen.queryByRole("region", { name: "Queued messages" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Queued messages/ })).not.toBeInTheDocument();
     expect(textarea.value).toBe("also\nsecond");
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TooltipProvider } from "@/components/agent/ui/tooltip";
 import { AgentComposer, type AgentComposerProps } from "@/components/agent/AgentComposer";
 
@@ -99,8 +99,8 @@ describe("AgentComposer", () => {
       onRemoveQueued,
       onSendQueuedNow: vi.fn(),
     });
-    const strip = screen.getByRole("region", { name: "Queued messages" });
-    expect(strip).toHaveTextContent("Queued · 2");
+    const strip = screen.getByRole("region", { name: "Queued messages (2)" });
+    expect(within(strip).getAllByRole("listitem")).toHaveLength(2);
     expect(strip).toHaveTextContent("make it blue");
     // Only a held queue offers "Send now".
     expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
@@ -121,6 +121,7 @@ describe("AgentComposer", () => {
       queueHeld: true,
       onSendQueuedNow,
     });
+    expect(screen.getByRole("region", { name: "Queued messages (2)" })).toHaveTextContent("Paused · these wait for you");
     const sendNow = screen.getAllByRole("button", { name: "Send now" });
     expect(sendNow).toHaveLength(1);
     fireEvent.click(sendNow[0]);
@@ -129,7 +130,7 @@ describe("AgentComposer", () => {
 
   it("shows no queue strip when nothing is queued", () => {
     renderComposer({ busy: true, status: "streaming" });
-    expect(screen.queryByRole("region", { name: "Queued messages" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /Queued messages/ })).not.toBeInTheDocument();
   });
 
   it("shows context notes beside send", () => {

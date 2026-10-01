@@ -4,8 +4,10 @@ import { useCallback, useState, type KeyboardEvent, type Ref } from "react";
 import type { ChatStatus } from "ai";
 import {
   ArrowLeftRightIcon,
+  ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
+  ClockIcon,
   PencilIcon,
   SquareDashedMousePointerIcon,
   XIcon,
@@ -151,7 +153,11 @@ const queuedIconButtonClass =
   "flex size-6 shrink-0 items-center justify-center rounded-md squircle text-neutral-500 transition-colors duration-[120ms] " +
   "hover:bg-white/10 hover:text-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection";
 
-/** Messages typed while a turn ran: one line each, editable (back into the box) or removable until they go. */
+/**
+ * Messages typed while a turn ran, on a flap tucked behind the top of the well:
+ * one line each, editable (back into the box) or removable until they go.
+ * A clock marks each at rest; hover or focus swaps it for edit and remove.
+ */
 function QueuedMessages({
   queued,
   held,
@@ -166,43 +172,62 @@ function QueuedMessages({
   onSendNow?: () => void;
 }) {
   return (
-    <section aria-label="Queued messages" className="mb-1.5 rounded-[10px] squircle bg-white/[0.04] p-1 text-[12px] leading-4">
-      <p className="px-2 pb-0.5 pt-1 text-neutral-500">Queued · {queued.length}</p>
+    <section
+      aria-label={`Queued messages (${queued.length})`}
+      // The well overlaps the flap's last 10px, so its rounded top corners sit on the flap.
+      className="relative z-0 -mb-2.5 rounded-t-[10px] squircle border border-b-0 border-white/6 bg-black/15 pb-3.5 pt-1 text-[12px] leading-4"
+    >
+      {held && onSendNow && (
+        <div className="flex h-7 items-center gap-2 pl-3 pr-1.5 text-neutral-400">
+          <span className="flex-1">Paused · these wait for you</span>
+          <button
+            type="button"
+            onClick={onSendNow}
+            className="flex h-6 shrink-0 items-center gap-1 rounded-md squircle bg-white/[0.08] px-2 text-neutral-200 transition-colors duration-[120ms] hover:bg-white/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
+          >
+            <ArrowUpIcon className="size-3" strokeWidth={2} aria-hidden="true" />
+            Send now
+          </button>
+        </div>
+      )}
       <ul>
-        {queued.map((entry, index) => (
-          <li key={entry.id} className="flex h-7 items-center gap-0.5 rounded-md squircle pl-2 pr-0.5">
-            <span className="min-w-0 flex-1 truncate text-neutral-300" title={entry.text}>
+        {queued.map((entry) => (
+          <li
+            key={entry.id}
+            className="group/queued mx-1 flex h-7 items-center gap-1 rounded-md squircle pl-2 pr-0.5 text-neutral-400 transition-colors duration-[120ms] hover:bg-white/5 focus-within:bg-white/5"
+          >
+            <span className="min-w-0 flex-1 truncate" title={entry.text}>
               {entry.text}
             </span>
-            {held && index === 0 && onSendNow && (
-              <button
-                type="button"
-                onClick={onSendNow}
-                className="mr-0.5 h-6 shrink-0 rounded-md squircle bg-white/[0.08] px-2 text-neutral-200 transition-colors duration-[120ms] hover:bg-white/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
-              >
-                Send now
-              </button>
-            )}
-            {onEdit && (
-              <button
-                type="button"
-                aria-label={`Edit queued message: ${entry.text}`}
-                onClick={() => onEdit(entry.id)}
-                className={queuedIconButtonClass}
-              >
-                <PencilIcon className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-              </button>
-            )}
-            {onRemove && (
-              <button
-                type="button"
-                aria-label={`Remove queued message: ${entry.text}`}
-                onClick={() => onRemove(entry.id)}
-                className={queuedIconButtonClass}
-              >
-                <XIcon className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
-              </button>
-            )}
+            {/* At rest a clock; on hover or focus (and always on touch) the actions. */}
+            <span
+              aria-hidden="true"
+              className="flex w-6 shrink-0 justify-center text-neutral-600 group-hover/queued:hidden group-focus-within/queued:hidden pointer-coarse:hidden"
+            >
+              <ClockIcon className="size-3" strokeWidth={1.75} />
+            </span>
+            <span className="hidden shrink-0 group-hover/queued:flex group-focus-within/queued:flex pointer-coarse:flex">
+              {onEdit && (
+                <button
+                  type="button"
+                  aria-label={`Edit queued message: ${entry.text}`}
+                  onClick={() => onEdit(entry.id)}
+                  className={queuedIconButtonClass}
+                >
+                  <PencilIcon className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+                </button>
+              )}
+              {onRemove && (
+                <button
+                  type="button"
+                  aria-label={`Remove queued message: ${entry.text}`}
+                  onClick={() => onRemove(entry.id)}
+                  className={queuedIconButtonClass}
+                >
+                  <XIcon className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+                </button>
+              )}
+            </span>
           </li>
         ))}
       </ul>
@@ -279,8 +304,9 @@ export function AgentComposer({
         // Focus lifts the well's edge instead of drawing a ring: the box has focus whenever the window is open.
         // shadcn fades the whole group when anything in it is disabled (the empty-draft send
         // button): the well stays put and only that control dims.
+        // relative z-[1]: it sits over the queue's flap.
         groupClassName={
-          "rounded-[10px] squircle border-0 bg-well shadow-well dark:bg-well " +
+          "relative z-[1] rounded-[10px] squircle border-0 bg-well shadow-well dark:bg-well " +
           "has-disabled:bg-well has-disabled:opacity-100 dark:has-disabled:bg-well " +
           "has-[[data-slot=input-group-control]:focus-visible]:ring-1 has-[[data-slot=input-group-control]:focus-visible]:ring-white/15"
         }
