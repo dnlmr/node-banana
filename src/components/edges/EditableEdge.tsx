@@ -38,6 +38,9 @@ import { bundleClampStyle } from "./BundleClamp";
 import { HookBundleClamp } from "./HookBundleClamp";
 import { hookHandles, insertHookHandle } from "@/lib/edges/hook";
 
+/** Room between a target-end label and the handle, past the socket's swell. */
+const TARGET_LABEL_GAP = 14;
+
 interface EdgeData extends WorkflowEdgeData {
   offsetX?: number;
   offsetY?: number;
@@ -396,6 +399,9 @@ export function EditableEdge({
   // on the toolbar and the hidden-connection stubs
   const labelText = hasOwnLabel ? displayLabel : arrayLabel ?? "";
   const showLabel = Boolean(labelText) || Boolean(edgeData?.isLoop);
+  // An Array item name says what arrives, so it sits at the noodle's target end
+  const labelAtTarget = !hasOwnLabel && Boolean(arrayLabel) && !edgeData?.isLoop;
+  const targetDirection = targetPosition === "right" ? 1 : -1;
 
   if (isHidden) {
     if (isConnecting) return null;
@@ -592,8 +598,9 @@ export function EditableEdge({
 
       {showLabel && !hookBundle && (
         <EdgeLabel
-          x={labelX}
-          y={labelY + parallel * 18}
+          x={labelAtTarget ? targetX + targetDirection * TARGET_LABEL_GAP : labelX}
+          y={labelAtTarget ? targetY : labelY + parallel * 18}
+          anchor={labelAtTarget ? (targetDirection < 0 ? "end" : "start") : "center"}
           text={labelText}
           color={edgeColor}
           loopCount={edgeData?.isLoop ? edgeData.loopCount || 3 : undefined}

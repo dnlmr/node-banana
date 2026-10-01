@@ -3,8 +3,9 @@
 import { EdgeLabelRenderer } from "@xyflow/react";
 
 /**
- * The pill a connection wears at its midpoint: the user's own label or the
- * automatic one ("Image 2", "Text"), plus the loop count on loop edges.
+ * The pill a connection wears: the user's own label or the automatic one
+ * ("Image 2", "Text") at its midpoint, the item an Array connection carries
+ * at its target end, plus the loop count on loop edges.
  * Rendered through EdgeLabelRenderer so it stays crisp at any zoom and
  * never blocks clicks on the noodle beneath it.
  */
@@ -17,9 +18,13 @@ interface EdgeLabelProps {
   loopCount?: number;
   /** Faded when the edge is not attached to a selected node. */
   active: boolean;
+  /** Which side of the pill sits on (x, y): its centre, or its right or left edge. */
+  anchor?: "center" | "end" | "start";
 }
 
-export function EdgeLabel({ x, y, text, color, loopCount, active }: EdgeLabelProps) {
+const ANCHOR_SHIFT = { center: "-50%", end: "-100%", start: "0%" } as const;
+
+export function EdgeLabel({ x, y, text, color, loopCount, active, anchor = "center" }: EdgeLabelProps) {
   if (!text && loopCount === undefined) return null;
   return (
     <EdgeLabelRenderer>
@@ -28,7 +33,7 @@ export function EdgeLabel({ x, y, text, color, loopCount, active }: EdgeLabelPro
         className="inline-flex items-center gap-1.5 h-5 px-2 rounded-full bg-neutral-800/90 border text-[10px] font-medium text-neutral-100 whitespace-nowrap transition-opacity duration-150"
         style={{
           position: "absolute",
-          transform: `translate(${x}px, ${y}px) translate(-50%, -50%)`,
+          transform: `translate(${x}px, ${y}px) translate(${ANCHOR_SHIFT[anchor]}, -50%)`,
           pointerEvents: "none",
           borderColor: `${color}99`,
           opacity: active ? 1 : 0.7,
