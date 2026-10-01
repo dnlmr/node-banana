@@ -194,7 +194,6 @@ describe("hidden stub groups", () => {
       key: `${key}#Important`,
       members: ["hero"],
       label: "Important",
-      named: true,
     });
     expect(hiddenStubGroup("a1", named, "target")?.members).toEqual(["a2", "a1"]);
     expect(hiddenStubRole("hero", named, "target", null)).toBe("single");
@@ -216,7 +215,7 @@ describe("hidden stub groups", () => {
     ];
     const modelKey = stubGroupKey("b", "target", "image", "Model");
     expect(modelKey).toBe(`${key}#Model`);
-    expect(hiddenStubGroup("m2", model, "target")).toEqual({ key: modelKey, members: ["m1", "m2"], label: "Model", named: true });
+    expect(hiddenStubGroup("m2", model, "target")).toEqual({ key: modelKey, members: ["m1", "m2"], label: "Model" });
     // The unnamed ones keep their own stack, and another name is another stack
     expect(hiddenStubGroup("a1", model, "target")?.members).toEqual(["a2", "a1"]);
     expect(hiddenStubGroup("other", model, "target")?.members).toEqual(["other"]);

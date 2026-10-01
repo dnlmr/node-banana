@@ -35,8 +35,6 @@ export interface HiddenStubGroup {
   members: string[];
   /** The label every member carries; such a stack ranks after its handle's unnamed one. */
   label?: string;
-  /** True when the members carry a label of their own. */
-  named?: boolean;
 }
 
 export interface EdgeGraphIndex {
@@ -178,7 +176,7 @@ function buildEdgeGraphIndex(edges: WorkflowEdge[]): EdgeGraphIndex {
       if (!groups) bySide.set(sideKey, (groups = new Map()));
       const group = groups.get(key);
       if (group) group.members.push(e.id);
-      else groups.set(key, label ? { key, members: [e.id], label, named: true } : { key, members: [e.id] });
+      else groups.set(key, label ? { key, members: [e.id], label } : { key, members: [e.id] });
     }
   }
   const hiddenStubGroups = new Map<string, HiddenStubGroup[]>();

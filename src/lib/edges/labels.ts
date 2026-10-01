@@ -144,7 +144,7 @@ export function stackHiddenStubs(
     const first = byId.get(group.members[0])!;
     const y = handleY(handleOf(first)) ?? fallbackY;
     const key = group.key.split("#")[0];
-    const rank = group.named ? 1 : 0;
+    const rank = group.label ? 1 : 0;
     const collapsed = group.members.length > 1 && group.key !== expandedGroup;
     if (collapsed) {
       rows.push({ ids: group.members, key, y, rank, createdAt: first.data?.createdAt || 0 });

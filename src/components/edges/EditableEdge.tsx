@@ -23,12 +23,12 @@ import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
 import { EdgeToolbar, useIsToolbarEdge } from "@/components/EdgeToolbar";
 import { HiddenEdgeStub } from "./HiddenEdgeStub";
 import {
+  collapsedStubLabel,
   edgeDisplayLabelById,
   hiddenStubGroup,
   hiddenStubOffset,
   hiddenStubRole,
   parallelEdgePosition,
-  collapsedStubLabel,
   stubGroupKey,
 } from "@/lib/edges/labels";
 import { EdgeLabel } from "./EdgeLabel";
