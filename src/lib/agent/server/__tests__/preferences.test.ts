@@ -81,7 +81,7 @@ async function runTurn(model: string): Promise<HarnessTurnParams> {
 }
 
 describe("a preference stated earlier in the chat", () => {
-  it.fails("is covered by a rule that keeps it standing, ahead of the saved defaults", () => {
+  it("is covered by a rule that keeps it standing, ahead of the saved defaults", () => {
     const prompt = buildAgentSystemPrompt({ harness: "claude" });
     // Rule 6 used to apply only what "the user named" and leave everything else
     // to the saved defaults, so a model chosen in turn 1 was dropped in turn 3.
