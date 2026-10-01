@@ -25,6 +25,9 @@ export type AgentHarnessId = "claude" | "codex";
 
 export const AGENT_HARNESS_IDS: readonly AgentHarnessId[] = ["claude", "codex"];
 
+/** The turn's opening status line, from the moment it is sent until the reply starts. */
+export const AGENT_OPENING_STATUS = "Fallooning…";
+
 /** Who pays for a turn. Only "subscription" may run. */
 export type AgentBilling = "subscription" | "api" | "none" | "unknown";
 

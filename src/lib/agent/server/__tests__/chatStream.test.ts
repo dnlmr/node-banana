@@ -248,7 +248,7 @@ describe("createAgentChatStream: text and reasoning", () => {
       "text-end",
       "finish",
     ]);
-    expect(statusLines(chunks)).toEqual(["Starting Claude Code…", ""]);
+    expect(statusLines(chunks)).toEqual(["Fallooning…", ""]);
     expect(message.parts).toEqual([
       expect.objectContaining({ type: "reasoning", text: "The user wants a prompt node.", state: "done" }),
       expect.objectContaining({ type: "text", text: "Adding a prompt node.", state: "done" }),
@@ -529,7 +529,7 @@ describe("createAgentChatStream: tool calls", () => {
 
     const toolChunks = types(chunks).filter((type) => type.startsWith("tool-") || type === "data-graph-ops");
     expect(toolChunks).toEqual(["tool-input-available", "data-graph-ops", "tool-output-available"]);
-    expect(statusLines(chunks)).toEqual(["Starting Claude Code…", "", "Planning edits…", ""]);
+    expect(statusLines(chunks)).toEqual(["Fallooning…", "", "Planning edits…", ""]);
   });
 
   it("marks a canvas replacement on the ops batch", async () => {

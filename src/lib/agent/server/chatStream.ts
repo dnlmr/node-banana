@@ -55,7 +55,7 @@ import type {
   HarnessEvent,
   HarnessTurnParams,
 } from "../types";
-import { WEB_TOOL_PENDING } from "../types";
+import { AGENT_OPENING_STATUS, WEB_TOOL_PENDING } from "../types";
 
 export type AgentUIMessageChunk = InferUIMessageChunk<AgentUIMessage>;
 
@@ -918,7 +918,7 @@ async function runClaimedTurn(
     historyLength: conversation.history.length,
     nodeCount: body.workflow.nodes.length,
   });
-  turn.status(`Starting ${harness.label}…`);
+  turn.status(AGENT_OPENING_STATUS);
 
   const usage = { inputTokens: 0, outputTokens: 0 };
   let events: AsyncIterable<HarnessEvent>;

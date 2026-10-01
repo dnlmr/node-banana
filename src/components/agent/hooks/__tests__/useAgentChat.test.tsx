@@ -209,6 +209,26 @@ describe("useAgentChat: a turn only edits the canvas it was sent from", () => {
   });
 });
 
+describe("useAgentChat: status line", () => {
+  beforeEach(async () => {
+    useWorkflowStore.getState().clearWorkflow();
+    await act(() => useWorkflowStore.getState().loadWorkflow(workflow("wf-A", "A", "a cat")));
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the opening line as soon as the turn is sent, before the server says anything", async () => {
+    const { result, stream } = await startTurn();
+    expect(result.current.statusLine).toEqual({ text: "Fallooning…", renderedParts: 0 });
+
+    await act(async () => {
+      stream.push({ type: "finish" });
+      stream.end();
+      await sleep(20);
+    });
+  });
+});
+
 describe("useAgentChat: provider keys", () => {
   afterEach(() => vi.unstubAllGlobals());
 

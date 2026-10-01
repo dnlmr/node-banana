@@ -9,6 +9,7 @@ import { AGENT_CHAT_API } from "@/lib/agent/client/api";
 import { countRenderedParts } from "@/lib/agent/client/messages";
 import { HARNESS_LABELS } from "@/lib/agent/client/readiness";
 import { agentProviderHeaders, buildAgentChatRequestBody, whenProviderKeysReady } from "@/lib/agent/client/request";
+import { AGENT_OPENING_STATUS } from "@/lib/agent/types";
 import type {
   AgentDataParts,
   AgentGraphOpBatch,
@@ -297,12 +298,19 @@ export function useAgentChat({
       );
   }, [harness, clearQueue]);
 
+  // The server sends the opening line only once its checks pass; show it from
+  // the moment the turn is sent so the panel doesn't say "Thinking…" first.
+  const showOpeningLine = useCallback(() => {
+    setStatusLine({ text: AGENT_OPENING_STATUS, renderedParts: 0 });
+  }, []);
+
   const startTurn = useCallback(
     (text: string, metadata?: AgentMessageMetadata) => {
       beginTurn();
+      showOpeningLine();
       void sendMessage(metadata ? { text, metadata } : { text });
     },
-    [beginTurn, sendMessage],
+    [beginTurn, showOpeningLine, sendMessage],
   );
 
   const send = useCallback(
@@ -364,8 +372,9 @@ export function useAgentChat({
   const retry = useCallback(() => {
     if (busy) return;
     beginTurn();
+    showOpeningLine();
     void regenerate();
-  }, [busy, beginTurn, regenerate]);
+  }, [busy, beginTurn, showOpeningLine, regenerate]);
 
   const newChat = useCallback(() => {
     if (busy) void chat.stop();
