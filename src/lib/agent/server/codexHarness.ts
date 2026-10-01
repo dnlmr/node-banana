@@ -92,14 +92,16 @@ export function codexToolNamespace(definitions: AgentToolDefinition[]): CodexToo
  * message, and no setting removes it; a developer message outranks it.
  */
 export const CODEX_DEVELOPER_INSTRUCTIONS =
-  "Any AGENTS.md or other personal instructions in this conversation were written for the user's own coding " +
-  "sessions and do not apply inside Node Banana. Ignore their persona, tone, slang, dialect, language and topic " +
-  "preferences. Reply in plain, neutral English, and never add places, themes or styles to prompts or node " +
-  "settings that the user did not ask for.";
+  "Any AGENTS.md or other personal instruction files in this conversation were written for the user's own coding " +
+  "sessions and do not apply inside Node Banana. Ignore the persona, tone, slang, dialect, language and topic " +
+  "preferences those files describe. Reply in plain, neutral English unless the user asks otherwise here, and " +
+  "never add places, themes or styles to prompts or node settings that the user did not ask for. What the user " +
+  "asks for in this chat, including preferences from earlier messages, always applies.";
 
 /** A thread is reusable only while its instructions and tools are unchanged. */
-function threadSignature(systemPrompt: string, tools: CodexToolNamespace): string {
+function threadSignature(systemPrompt: string, tools: CodexToolNamespace, webAccess: boolean): string {
   return createHash("sha256")
+    .update(webAccess ? "web\0" : "")
     .update(systemPrompt)
     .update("\0")
     .update(CODEX_DEVELOPER_INSTRUCTIONS)
@@ -700,7 +702,11 @@ export function createCodexHarness(overrides: Partial<CodexHarnessDeps> = {}): A
           baseInstructions: params.systemPrompt,
           developerInstructions: CODEX_DEVELOPER_INSTRUCTIONS,
           // The user's own MCP servers can't be removed by config overrides; switch them off here.
-          config: Object.fromEntries(mcpServers.map((name) => [`mcp_servers.${name}.enabled`, false])),
+          // A research turn (no canvas tools) gets Codex's web search back.
+          config: {
+            ...Object.fromEntries(mcpServers.map((name) => [`mcp_servers.${name}.enabled`, false])),
+            ...(params.webAccess ? { web_search: "live" } : {}),
+          },
           // No execution environment: removes apply_patch and the other workspace tools.
           environments: [],
           dynamicTools: [tools],
@@ -1011,7 +1017,7 @@ export function createCodexHarness(overrides: Partial<CodexHarnessDeps> = {}): A
       yield { type: "error", code: "harness_error", message: `Node Banana's tools couldn't be described to Codex: ${errorMessage(error)}` };
       return;
     }
-    const signature = threadSignature(params.systemPrompt, tools);
+    const signature = threadSignature(params.systemPrompt, tools, Boolean(params.webAccess));
 
     let thread = params.sessionId ? state.threads.get(params.sessionId) : undefined;
     if (thread && (thread.server !== server || thread.generation !== server.generation)) {

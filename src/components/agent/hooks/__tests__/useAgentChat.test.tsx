@@ -459,3 +459,50 @@ describe("useAgentChat: messages sent while a turn runs are queued", () => {
     expect(toastShow).toHaveBeenCalledWith("Cleared the queued message: switched to Codex", "info");
   });
 });
+
+describe("useAgentChat: queued messages", () => {
+  beforeEach(async () => {
+    useWorkflowStore.getState().clearWorkflow();
+    await act(() => useWorkflowStore.getState().loadWorkflow(workflow("wf-A", "A", "a cat")));
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps a research turn's metadata when it waits in the queue", async () => {
+    const streams: Array<ReturnType<typeof controlledStream>> = [];
+    const bodies: Array<{ messages: Array<{ metadata?: unknown; parts: Array<{ text?: string }> }> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)));
+        const stream = controlledStream();
+        streams.push(stream);
+        return stream.response;
+      }),
+    );
+    const { result } = renderHook(() =>
+      useAgentChat({ harness: "claude", getViewport: () => ({ x: 0, y: 0, width: 800, height: 600, zoom: 1 }) }),
+    );
+    act(() => {
+      result.current.send("make a fox workflow");
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+    streams[0].push({ type: "start", messageId: "assistant-1" });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+
+    const research = { provider: "fal", modelId: "fal-ai/kling/i2v", name: "Kling I2V" };
+    act(() => {
+      result.current.send("Look up prompting tips for Kling I2V", { research });
+    });
+    expect(result.current.queued).toEqual([{ id: expect.any(String), text: "Look up prompting tips for Kling I2V", metadata: { research } }]);
+
+    await act(async () => {
+      streams[0].push({ type: "finish" });
+      streams[0].end();
+      await sleep(20);
+    });
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1].messages.at(-1)).toMatchObject({ parts: [{ text: "Look up prompting tips for Kling I2V" }], metadata: { research } });
+    streams[1].end();
+  });
+});

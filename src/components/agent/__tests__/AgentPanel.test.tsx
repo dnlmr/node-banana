@@ -67,6 +67,8 @@ let signInResponse: Record<string, unknown>;
 let signInBodies: Array<Record<string, unknown>>;
 /** Lets a test mirror the server: a started flow shows up as `signIn: pending` on later statuses. */
 let onSignInStarted: ((response: Record<string, unknown>) => void) | undefined;
+/** What GET /api/agent/prompt-notes answers. */
+let savedTips: { savedAt: string } | null;
 
 function sse(chunks: Array<Record<string, unknown>>): Response {
   const text = chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n";
@@ -87,6 +89,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     signInBodies.push(JSON.parse(String(init?.body)));
     onSignInStarted?.(signInResponse);
     return new Response(JSON.stringify(signInResponse), { status: 200 });
+  }
+  if (url.startsWith("/api/agent/prompt-notes")) {
+    return new Response(JSON.stringify({ notes: savedTips }), { status: 200 });
   }
   if (url === "/api/agent/chat") {
     chatBodies.push(JSON.parse(String(init?.body)));
@@ -166,6 +171,7 @@ describe("AgentPanel", () => {
     signInResponse = { state: "pending" };
     signInBodies = [];
     onSignInStarted = undefined;
+    savedTips = null;
     fetchMock.mockClear();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("open", vi.fn());
@@ -406,6 +412,36 @@ describe("AgentPanel", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
     expect(await screen.findByText("Changed it.")).toBeInTheDocument();
     expect(chatBodies[1].sessionId).toBe("session-1");
+  });
+
+  it("looks up prompting tips for the selected generator's model in a research turn", async () => {
+    useWorkflowStore.setState({
+      nodes: [
+        {
+          id: "generateVideo-1",
+          type: "generateVideo",
+          position: { x: 0, y: 0 },
+          selected: true,
+          data: { selectedModel: { provider: "fal", modelId: "fal-ai/kling/i2v", displayName: "Kling I2V" } },
+        } as never,
+      ],
+    });
+    const reply = replyChunks({ text: "Saved six tips from Kling's guide." }).filter((chunk) => chunk.type !== "data-agent-session");
+    chatChunks.push(reply);
+
+    renderPanel();
+    await waitForComposer();
+    const chip = await screen.findByRole("button", { name: "Look up prompting tips for Kling I2V" });
+    savedTips = { savedAt: "2026-10-02T09:00:00.000Z" };
+    fireEvent.click(chip);
+
+    expect(await screen.findByText("Saved six tips from Kling's guide.")).toBeInTheDocument();
+    const sent = (chatBodies[0].messages as Array<{ metadata?: unknown; parts: Array<{ text?: string }> }>).at(-1)!;
+    expect(sent.parts[0].text).toBe("Look up prompting tips for Kling I2V");
+    expect(sent.metadata).toEqual({ research: { provider: "fal", modelId: "fal-ai/kling/i2v", name: "Kling I2V", nodeType: "generateVideo" } });
+    // Saved now: the chip offers a refresh, and an × that forgets them.
+    expect(await screen.findByRole("button", { name: "Refresh prompting tips for Kling I2V" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Forget the saved prompting tips for Kling I2V" })).toBeInTheDocument();
   });
 
   it("keeps finished chats in the history, labelled by the agent's summary, and reopens them", async () => {

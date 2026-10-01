@@ -381,6 +381,7 @@ tab switch).
 | Shared contracts | `src/lib/agent/types.ts` |
 | Node catalog, handle rules, draft, layout, snapshot | `src/lib/agent/graph/` |
 | Tools and the system prompt | `src/lib/agent/tools/`, `src/lib/agent/prompt.ts` |
+| Prompting guides by modality, model notes, research turn | `src/lib/agent/prompting/` |
 | Harnesses (Claude Agent SDK, codex app-server), env, billing checks | `src/lib/agent/server/` |
 | UI message stream bridge | `src/lib/agent/server/chatStream.ts` |
 | Panel, button, sign-in card | `src/components/agent/`, `src/lib/agent/client/` |
@@ -394,6 +395,18 @@ Run the app with `npm run dev` / `npm start` / Electron (plain `next dev` /
 in. `NB_CODEX_EFFORT` overrides Codex's reasoning effort (default `medium`).
 When the canvas rules in `WorkflowCanvas.tsx` or a node's sockets change,
 update `src/lib/agent/graph/catalog.ts` / `handles.ts` too (the server's copy).
+
+Prompts: the agent calls `get_prompt_guide` before writing a prompt. It
+renders the guide for the node's modality and task (image, video, audio, 3D,
+LLM instruction), notes read from the model's own schema and description,
+and any prompting tips saved for that model. A new prompt-taking node type
+needs an entry in `PROMPT_NODE_MODALITY`. Tips are looked up only when the
+user asks ("Look up prompting tips" chip, with one generator selected): a
+research turn with the harness's own web search on, no canvas tools, no
+chat history and no session part, whose one tool saves the tips under
+`~/.node-banana/prompt-notes/<provider>/<model>.json`
+(`NODE_BANANA_PROMPT_NOTES_DIR` moves it; tests must set it or pass a
+store).
 
 ## Desktop releases and updates
 
@@ -489,6 +502,7 @@ All routes in `src/app/api/`:
 | `/api/agent/chat` | 10 min | Run one agent turn (AI SDK UI message stream) |
 | `/api/agent/status` | 1 min | Each harness: installed, signed in, subscription billing, models |
 | `/api/agent/sign-in` | 1 min | Start a harness's own sign-in flow |
+| `/api/agent/prompt-notes` | default | Read (GET) or forget (DELETE) the prompting tips saved for a model |
 | `/api/assets` | 10 min | List assets (GET, keyset pages) / start recording one (POST → upload ticket, or a server download for URLs) |
 | `/api/assets/uploads/[id]` | 10 min | Stream an asset's bytes (PUT) |
 | `/api/assets/[id]` (`/file`, `/poster`, `/workflow`) | default | Read/patch an asset, stream its file (Range), store a video poster, get its run snapshot |

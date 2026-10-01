@@ -82,6 +82,8 @@ export const CLAUDE_AGENT_CWD = path.join(os.homedir(), ".node-banana", "agent")
 
 /** Upper bound on model round-trips in one turn. */
 const MAX_TURNS = 40;
+/** Claude Code's own web tools, given to research turns only. */
+export const CLAUDE_WEB_TOOLS = ["WebSearch", "WebFetch"] as const;
 
 /**
  * `claude auth status`, reading the same settings as a turn. The SDK passes
@@ -230,8 +232,9 @@ export function buildClaudeOptions(input: {
     settingSources: [],
     // No MCP servers but ours (.mcp.json, user and plugin servers are ignored).
     strictMcpConfig: true,
-    // No built-in tools at all: no shell, files, web, sub-agents or skills.
-    tools: [],
+    // No built-in tools: no shell, files, sub-agents or skills. Web search and
+    // fetch only for a research turn, which has no canvas tools.
+    tools: params.webAccess ? [...CLAUDE_WEB_TOOLS] : [],
     mcpServers: {
       [CLAUDE_MCP_SERVER_NAME]: createSdkMcpServer({
         name: CLAUDE_MCP_SERVER_NAME,
@@ -239,7 +242,10 @@ export function buildClaudeOptions(input: {
         tools: buildClaudeTools(params.tools),
       }),
     },
-    allowedTools: params.tools.definitions.map((definition) => claudeToolName(definition.name)),
+    allowedTools: [
+      ...params.tools.definitions.map((definition) => claudeToolName(definition.name)),
+      ...(params.webAccess ? CLAUDE_WEB_TOOLS : []),
+    ],
     // Our tools run without asking; anything else is denied.
     permissionMode: "dontAsk",
     systemPrompt: params.systemPrompt,

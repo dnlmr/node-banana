@@ -26,7 +26,8 @@ describe("buildAgentSystemPrompt", () => {
   it("teaches the LLM chain, the Array delimiter and where comments and API keys go (review C30, C31, C37)", () => {
     expect(prompt).toContain("that Prompt holds the LLM's whole instruction plus the user's idea");
     expect(prompt).toContain("Reply with only the prompt.");
-    expect(prompt).toContain("Exception: a Prompt that feeds LLM Generate is the LLM's instruction");
+    // How to write that instruction now comes from get_prompt_guide (the llmGenerate guide).
+    expect(prompt).toContain("call get_prompt_guide for the node it feeds");
     expect(prompt).toContain("node comments never reach any model");
     expect(prompt).toContain('Prompt "cat, dog, bird" → Array (delimiter ",")');
     expect(prompt).toContain("the Array's delimiter must match the list's separator");
@@ -62,8 +63,9 @@ describe("buildAgentSystemPrompt", () => {
     const line = (type: string) => lines.find((l) => l.startsWith(`- ${type} (`))!;
     expect(line("videoTrim")).toContain("set{startTime(s), endTime(s; 0=end)}");
     expect(line("array")).toContain('delimiter(default "*"');
-    // Raised from 13k when every generator gained model + modelParameters and the model rule grew.
-    expect(prompt.length).toBeLessThan(13_500);
+    // Raised from 13k when every generator gained model + modelParameters and the model rule grew,
+    // then from 13.5k for the rule that keeps the user's stated preferences standing.
+    expect(prompt.length).toBeLessThan(14_000);
   });
 
   it("teaches what groups are and when to make them", () => {

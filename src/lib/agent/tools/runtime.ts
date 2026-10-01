@@ -23,11 +23,15 @@ import {
   createWorkflowShape,
   describeNodeTypesShape,
   editWorkflowShape,
+  getPromptGuideShape,
   getWorkflowShape,
   searchModelsShape,
   updateNodeShape,
 } from "./definitions";
 import { AgentModels, type ModelRequest, type ModelSource } from "./modelSearch";
+import { PROMPT_NODE_MODALITY, renderPromptGuide, type PromptGuideInput } from "../prompting";
+import { audioTaskOf } from "../prompting/modelNotes";
+import { filePromptNotesStore, type PromptNotesStore } from "../prompting/notesStore";
 
 const SUMMARY_MAX = 80;
 const GET_WORKFLOW_MAX_NODES = 150;
@@ -48,6 +52,8 @@ export interface AgentToolRuntimeOptions extends Omit<GraphDraftOptions, "models
   signal?: AbortSignal;
   /** Where models come from; the provider registry by default. */
   modelSource?: ModelSource;
+  /** Prompting notes the user saved per model; ~/.node-banana/prompt-notes by default. */
+  promptNotes?: PromptNotesStore;
 }
 
 /** Tools that change the canvas, and so may set models. */
@@ -60,7 +66,7 @@ const LIST_MODELS_ALIAS = "list_models";
  * snapshot, so later calls in the same turn see earlier edits.
  */
 export function createAgentToolRuntime(snapshot: AgentWorkflowSnapshot, options: AgentToolRuntimeOptions = {}): AgentToolRuntime {
-  const { providerKeys, signal, modelSource, ...draftOptions } = options;
+  const { providerKeys, signal, modelSource, promptNotes, ...draftOptions } = options;
   const models = new AgentModels(providerKeys ?? {}, { source: modelSource, signal });
   const draft = new GraphDraft(snapshot ?? { nodes: [], edges: [], groups: [], selectedNodeIds: [] }, { ...draftOptions, models });
 
@@ -68,6 +74,8 @@ export function createAgentToolRuntime(snapshot: AgentWorkflowSnapshot, options:
     [TOOL_NAMES.getWorkflow]: (args) => getWorkflow(draft, args as Args<typeof getWorkflowShape>),
     [TOOL_NAMES.describeNodeTypes]: (args) => describeTypes(args as Args<typeof describeNodeTypesShape>),
     [TOOL_NAMES.searchModels]: (args) => searchModels(models, args as Args<typeof searchModelsShape>),
+    [TOOL_NAMES.getPromptGuide]: (args) =>
+      getPromptGuide(draft, models, promptNotes ?? filePromptNotesStore(), args as Args<typeof getPromptGuideShape>),
     [TOOL_NAMES.createWorkflow]: (args) => createWorkflow(draft, args as Args<typeof createWorkflowShape>),
     [TOOL_NAMES.editWorkflow]: (args) => editWorkflow(draft, args as Args<typeof editWorkflowShape>),
     [TOOL_NAMES.updateNode]: (args) => updateNode(draft, args as Args<typeof updateNodeShape>),
@@ -292,6 +300,84 @@ function describeTypes(args: Args<typeof describeNodeTypesShape>): AgentToolResu
 async function searchModels(models: AgentModels, args: Args<typeof searchModelsShape>): Promise<AgentToolResult> {
   const result = await models.search(args);
   return { ok: result.ok, text: result.text, summary: clip(result.summary), ops: [] };
+}
+
+async function getPromptGuide(
+  draft: GraphDraft,
+  models: AgentModels,
+  notes: PromptNotesStore,
+  args: Args<typeof getPromptGuideShape>,
+): Promise<AgentToolResult> {
+  const node = args.node ? (draft.getNode(args.node) ?? draft.getNode(draft.refs.get(args.node) ?? "")) : undefined;
+  if (args.node && !node) return failure(`No node "${args.node}" on the canvas. Pass an id from the canvas, or nodeType for a node not made yet.`, "Node not found");
+  const nodeType = node?.type ?? (args.nodeType ? findNodeType(args.nodeType) : undefined);
+  if (!nodeType || !PROMPT_NODE_MODALITY[nodeType]) {
+    return failure(
+      `Pass node (a generator or LLM Generate on the canvas) or nodeType: one of ${Object.keys(PROMPT_NODE_MODALITY).join(", ")}.`,
+      "No guide for that node",
+    );
+  }
+
+  // A node not made yet starts with the user's saved model for its type: the guide is for that one.
+  const modelValue = args.model
+    ? args.provider
+      ? { provider: args.provider, modelId: args.model }
+      : args.model
+    : nodeModelValue(node ?? { data: draft.options.createDefaultNodeData(nodeType) });
+  let model: PromptGuideInput["model"];
+  let modelProblem: string | undefined;
+  if (modelValue !== undefined && isModelNodeType(nodeType)) {
+    await models.prepare([{ kind: "model", nodeType, value: modelValue }]);
+    const lookup = models.resolve(nodeType, modelValue);
+    if (lookup?.ok) {
+      model = { model: lookup.resolved.model, schema: lookup.resolved.schema };
+    } else {
+      modelProblem = lookup ? lookup.error : "the model could not be looked up";
+    }
+  } else if (isModelNodeType(nodeType)) {
+    modelProblem = "no model chosen; the node will use the user's saved default";
+  }
+
+  const task =
+    args.task ?? (node ? taskFromInputs(draft, node) : undefined) ?? (nodeType === "generateAudio" ? audioTaskOf(model?.model, model?.schema) : undefined);
+  const savedNotes = model ? await notes.read(model.model.provider, model.model.id).catch(() => null) : null;
+  const targetNodeType = args.target ? findNodeType(args.target) : undefined;
+  const guide = renderPromptGuide({ nodeType, task, model, modelProblem, savedNotes, targetNodeType });
+  if (!guide.ok) return failure(guide.text, "No such prompt guide");
+  return { ok: true, text: guide.text, summary: clip(`Read the ${guide.task} prompt guide${model ? ` for ${model.model.name}` : ""}`), ops: [] };
+}
+
+/** A node's model as settings.model takes it: a provider pair, or a Gemini image id. */
+function nodeModelValue(node: Pick<DraftNode, "data">): unknown {
+  const selected = node.data.selectedModel as { provider?: unknown; modelId?: unknown } | undefined;
+  if (selected && typeof selected.modelId === "string" && selected.modelId) {
+    return typeof selected.provider === "string" && selected.provider ? { provider: selected.provider, modelId: selected.modelId } : selected.modelId;
+  }
+  return typeof node.data.model === "string" && node.data.model ? node.data.model : undefined;
+}
+
+/** The task a node's connected inputs imply: an edit when an image comes in, and so on. */
+function taskFromInputs(draft: GraphDraft, node: DraftNode): string | undefined {
+  const incoming = draft.edges.filter((edge) => edge.target === node.id);
+  const count = (type: string) =>
+    incoming.filter((edge) => {
+      const handle = edge.targetHandle ?? "";
+      if (handle) return handle.startsWith(type);
+      const source = draft.getNode(edge.source);
+      return source ? NODE_CATALOG[source.type].outputs[0]?.type === type : false;
+    }).length;
+  switch (node.type) {
+    case "nanoBanana": {
+      const images = count("image");
+      return images > 1 ? "compose" : images === 1 ? "edit" : "generate";
+    }
+    case "generateVideo":
+      return count("audio") > 0 ? "audio-to-video" : count("image") > 0 ? "image-to-video" : "text-to-video";
+    case "generate3d":
+      return count("image") > 0 ? "image-to-3d" : "text-to-3d";
+    default:
+      return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------

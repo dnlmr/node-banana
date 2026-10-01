@@ -380,11 +380,12 @@ describe("createAgentChatStream: what the harness is given", () => {
       { role: "user", text: "make a cat workflow" },
       { role: "assistant", text: "Added a prompt.\n\nPress Run when ready." },
     ]);
-    expect(params.prompt).toBe("<canvas nodes=1/>\n<user>now make it a dog</user>");
-    // The prompt builder's text, then which model the turn runs on (our prompt replaces the CLI's own).
-    expect(params.systemPrompt).toBe(
-      "SYSTEM for claude\n\nYou are running on Sonnet (sonnet), through the user's Claude Code. Say so if asked which model you are.",
+    // Which model the turn runs on (our prompt replaces the CLI's own), then the prompt builder's text.
+    expect(params.prompt).toBe(
+      "<model>You are running on Sonnet (sonnet), through the user's Claude Code. Say so if asked which model you are.</model>\n\n" +
+        "<canvas nodes=1/>\n<user>now make it a dog</user>",
     );
+    expect(params.systemPrompt).toBe("SYSTEM for claude");
     expect(params.sessionId).toBe("session-9");
     expect(params.signal).toBe(controller.signal);
     expect(params.tools.definitions).toEqual(definitions);

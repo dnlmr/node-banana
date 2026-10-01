@@ -12,9 +12,13 @@ import type { HarnessTurnParams } from "../types";
 export const HISTORY_CHAR_BUDGET = 24_000;
 
 /**
- * `prompt` preceded by the earlier conversation, newest turns kept when the
- * whole history does not fit the budget. Returns `prompt` unchanged when
- * there is no history.
+ * `prompt` preceded by the earlier conversation, cut to the budget when it
+ * does not all fit. Returns `prompt` unchanged when there is no history.
+ *
+ * What is kept, in order: the last two messages (what the new one answers),
+ * then the user's messages newest first, then the agent's replies. The user's
+ * words carry their instructions and preferences, often stated once near the
+ * start; the replies only summarise tool calls, which are not replayed anyway.
  */
 export function withConversationHistory(
   history: HarnessTurnParams["history"],
@@ -24,21 +28,25 @@ export function withConversationHistory(
   const turns = history.filter((turn) => turn.text.trim().length > 0);
   if (turns.length === 0) return prompt;
 
-  const lines: string[] = [];
+  const lines = turns.map((turn) => {
+    const line = `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text.trim()}`;
+    return line.length > budget ? `${line.slice(0, budget)}…` : line;
+  });
+  const newestFirst = turns.map((_, i) => turns.length - 1 - i);
+  const order = [
+    ...newestFirst.slice(0, 2),
+    ...newestFirst.slice(2).filter((i) => turns[i].role === "user"),
+    ...newestFirst.slice(2).filter((i) => turns[i].role !== "user"),
+  ];
+  const kept = new Set<number>();
   let used = 0;
-  let dropped = 0;
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const turn = turns[i];
-    let line = `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text.trim()}`;
-    if (line.length > budget) line = `${line.slice(0, budget)}…`;
-    if (used + line.length > budget && lines.length > 0) {
-      dropped = i + 1;
-      break;
-    }
-    lines.unshift(line);
-    used += line.length;
+  for (const i of order) {
+    if (kept.size > 0 && used + lines[i].length > budget) continue;
+    kept.add(i);
+    used += lines[i].length;
   }
 
+  const dropped = turns.length - kept.size;
   const note =
     dropped > 0
       ? `(${dropped} earlier message${dropped === 1 ? "" : "s"} omitted.)\n`
@@ -47,7 +55,7 @@ export function withConversationHistory(
     "<conversation_history>",
     "Earlier messages in this chat, for context. The canvas may have changed since; " +
       "the canvas in the current message is authoritative.",
-    `${note}${lines.join("\n\n")}`,
+    `${note}${lines.filter((_, i) => kept.has(i)).join("\n\n")}`,
     "</conversation_history>",
     "",
     prompt,

@@ -13,6 +13,7 @@ import type {
   AgentDataParts,
   AgentGraphOpBatch,
   AgentHarnessId,
+  AgentMessageMetadata,
   AgentUIMessage,
   AgentWorkflowSnapshot,
 } from "@/lib/agent/types";
@@ -29,6 +30,8 @@ export interface AgentStatusLine {
 export interface AgentQueuedMessage {
   id: string;
   text: string;
+  /** Sent with the message when its turn starts (a research turn's target). */
+  metadata?: AgentMessageMetadata;
 }
 
 export interface UseAgentChatOptions {
@@ -52,8 +55,11 @@ export interface UseAgentChatResult {
   statusLine: AgentStatusLine | null;
   /** Messages after which the user pressed stop. */
   stoppedMessageIds: ReadonlySet<string>;
-  /** Sends the message, or queues it while a turn runs. False only for an empty message. */
-  send: (text: string) => boolean;
+  /**
+   * Sends the message, or queues it while a turn runs. False only for an empty
+   * message. `metadata` rides on the user's message (a research turn's target).
+   */
+  send: (text: string, metadata?: AgentMessageMetadata) => boolean;
   /** Messages waiting for the running turn to end, oldest first. Never persisted. */
   queued: AgentQueuedMessage[];
   /**
@@ -292,15 +298,15 @@ export function useAgentChat({
   }, [harness, clearQueue]);
 
   const startTurn = useCallback(
-    (text: string) => {
+    (text: string, metadata?: AgentMessageMetadata) => {
       beginTurn();
-      void sendMessage({ text });
+      void sendMessage(metadata ? { text, metadata } : { text });
     },
     [beginTurn, sendMessage],
   );
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, metadata?: AgentMessageMetadata) => {
       const trimmed = text.trim();
       if (!trimmed) return false;
       if (busy) {
@@ -308,11 +314,11 @@ export function useAgentChat({
         // A hold left by an earlier stop belongs to messages that are gone.
         if (queuedRef.current.length === 0) setQueueHeld(false);
         queueIdRef.current += 1;
-        const entry = { id: `queued-${queueIdRef.current}`, text: trimmed };
+        const entry: AgentQueuedMessage = { id: `queued-${queueIdRef.current}`, text: trimmed, ...(metadata ? { metadata } : {}) };
         setQueued((previous) => [...previous, entry]);
         return true;
       }
-      startTurn(trimmed);
+      startTurn(trimmed, metadata);
       return true;
     },
     [busy, startTurn],
@@ -325,7 +331,7 @@ export function useAgentChat({
     const [next, ...rest] = queued;
     if (!next) return;
     setQueued(rest);
-    startTurn(next.text);
+    startTurn(next.text, next.metadata);
   }, [busy, queueHeld, turnsFinished, queued, startTurn]);
 
   const removeQueued = useCallback((id: string) => {
@@ -352,7 +358,7 @@ export function useAgentChat({
     releasedTurnRef.current = turnsFinished;
     setQueueHeld(false);
     setQueued(rest);
-    startTurn(next.text);
+    startTurn(next.text, next.metadata);
   }, [busy, turnsFinished, startTurn]);
 
   const retry = useCallback(() => {

@@ -17,6 +17,7 @@ export const TOOL_NAMES = {
   updateNode: "update_node",
   arrangeWorkflow: "arrange_workflow",
   nameConversation: "name_conversation",
+  getPromptGuide: "get_prompt_guide",
 } as const;
 
 export type AgentToolName = (typeof TOOL_NAMES)[keyof typeof TOOL_NAMES];
@@ -176,6 +177,27 @@ export const nameConversationShape = {
     .describe('3-6 words naming what the conversation is about, sentence case, no final period, e.g. "Espresso hero film workflow".'),
 };
 
+export const getPromptGuideShape = {
+  node: z
+    .string()
+    .optional()
+    .describe("A generator or LLM Generate node on the canvas (its id, or a ref from earlier this turn): its type, model and connected inputs pick the guide."),
+  nodeType: z
+    .string()
+    .optional()
+    .describe("For a node not made yet: nanoBanana, generateVideo, generateAudio, generate3d or llmGenerate."),
+  model: z.string().optional().describe("The model the prompt is for, as settings.model takes it (an id from search_models). Overrides the node's model."),
+  provider: z.string().optional().describe("The model's provider, when several list the same id."),
+  task: z
+    .string()
+    .optional()
+    .describe("A task of that node's guide, e.g. generate, edit, compose (image); text-to-video, image-to-video (video); speech, music, sound-effect (audio); instruction, prompt-writer (llmGenerate). Omit to have it picked from the node's inputs and model."),
+  target: z
+    .string()
+    .optional()
+    .describe("llmGenerate prompt-writer only: the node type the LLM's prompt is for, e.g. nanoBanana."),
+};
+
 export const AGENT_TOOL_DEFINITIONS: AgentToolDefinition[] = [
   {
     name: TOOL_NAMES.getWorkflow,
@@ -232,6 +254,14 @@ export const AGENT_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     description:
       "Re-arrange nodes into tidy left-to-right columns following the connections (the whole canvas, or only nodeIds). Each group moves as one unit: its nodes are tidied inside its box, which is refit around them (naming one node of a group arranges the whole group), and nothing else is moved into a box. Use when the user asks to tidy or clean up the layout; new nodes are already placed well.",
     inputShape: arrangeWorkflowShape,
+  },
+  {
+    name: TOOL_NAMES.getPromptGuide,
+    title: "Read prompt guide",
+    readOnly: true,
+    description:
+      "How to write a strong prompt for one node: the parts it needs in order, the length, rules, a weak and a strong example, notes from the chosen model's own listing, and prompting notes the user saved for that model. Call it before you write or rewrite the prompt that feeds a generator or LLM Generate, once per node type and model in this conversation; pass the node when it exists.",
+    inputShape: getPromptGuideShape,
   },
   {
     name: TOOL_NAMES.nameConversation,
