@@ -2,7 +2,14 @@
 
 import { useCallback, useState, type KeyboardEvent, type Ref } from "react";
 import type { ChatStatus } from "ai";
-import { ArrowLeftRightIcon, CheckIcon, ChevronDownIcon, SquareDashedMousePointerIcon, XIcon } from "lucide-react";
+import {
+  ArrowLeftRightIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  PencilIcon,
+  SquareDashedMousePointerIcon,
+  XIcon,
+} from "lucide-react";
 import {
   PromptInput,
   PromptInputBody,
@@ -21,6 +28,7 @@ import {
 import { MenuSectionLabel, menuItemClass, menuSurfaceClass } from "@/components/ui/Menu";
 import { isImeKeyEvent } from "@/lib/agent/client/keyboard";
 import { AGENT_POPOVER_LAYER } from "./AgentChrome";
+import type { AgentQueuedMessage } from "./hooks/useAgentChat";
 
 export interface AgentComposerNote {
   key: string;
@@ -39,7 +47,7 @@ export interface AgentComposerProps {
   /** The level the model runs at unless the user picks another (marked in the menu). */
   defaultEffort?: string;
   onEffortChange?: (effort: string) => void;
-  /** Returns false when the message was not sent (empty, or a turn is running). */
+  /** Sends, or queues while a turn runs. Returns false when the message was not taken (empty). */
   onSend: (text: string) => boolean;
   onStop: () => void;
   /** Context chips beside send (selection, harness switch); a chip with onDismiss gets an ×. */
@@ -52,6 +60,13 @@ export interface AgentComposerProps {
    */
   draft?: string;
   onDraftChange?: (draft: string) => void;
+  /** Messages waiting for the running turn, shown above the box. */
+  queued?: AgentQueuedMessage[];
+  /** The queue waits for the user (the last turn was stopped or failed): offer "Send now". */
+  queueHeld?: boolean;
+  onEditQueued?: (id: string) => void;
+  onRemoveQueued?: (id: string) => void;
+  onSendQueuedNow?: () => void;
 }
 
 const EFFORT_LABELS: Record<string, string> = {
@@ -132,10 +147,76 @@ function EffortPicker({
   );
 }
 
+const queuedIconButtonClass =
+  "flex size-6 shrink-0 items-center justify-center rounded-md squircle text-neutral-500 transition-colors duration-[120ms] " +
+  "hover:bg-white/10 hover:text-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection";
+
+/** Messages typed while a turn ran: one line each, editable (back into the box) or removable until they go. */
+function QueuedMessages({
+  queued,
+  held,
+  onEdit,
+  onRemove,
+  onSendNow,
+}: {
+  queued: AgentQueuedMessage[];
+  held: boolean;
+  onEdit?: (id: string) => void;
+  onRemove?: (id: string) => void;
+  onSendNow?: () => void;
+}) {
+  return (
+    <section aria-label="Queued messages" className="mb-1.5 rounded-[10px] squircle bg-white/[0.04] p-1 text-[12px] leading-4">
+      <p className="px-2 pb-0.5 pt-1 text-neutral-500">Queued · {queued.length}</p>
+      <ul>
+        {queued.map((entry, index) => (
+          <li key={entry.id} className="flex h-7 items-center gap-0.5 rounded-md squircle pl-2 pr-0.5">
+            <span className="min-w-0 flex-1 truncate text-neutral-300" title={entry.text}>
+              {entry.text}
+            </span>
+            {held && index === 0 && onSendNow && (
+              <button
+                type="button"
+                onClick={onSendNow}
+                className="mr-0.5 h-6 shrink-0 rounded-md squircle bg-white/[0.08] px-2 text-neutral-200 transition-colors duration-[120ms] hover:bg-white/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
+              >
+                Send now
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                aria-label={`Edit queued message: ${entry.text}`}
+                onClick={() => onEdit(entry.id)}
+                className={queuedIconButtonClass}
+              >
+                <PencilIcon className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            )}
+            {onRemove && (
+              <button
+                type="button"
+                aria-label={`Remove queued message: ${entry.text}`}
+                onClick={() => onRemove(entry.id)}
+                className={queuedIconButtonClass}
+              >
+                <XIcon className="size-3.5" strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** The agent takes no attachments: let the browser paste the text part of a mixed clipboard. */
 const pasteTextOnly = () => {};
 
-/** The message box: a real <textarea> (Enter sends, Shift+Enter breaks the line), context chips and send/stop. */
+/**
+ * The message box: a real <textarea> (Enter sends, or queues while a turn runs;
+ * Shift+Enter breaks the line), context chips, send/stop and the queued messages.
+ */
 export function AgentComposer({
   status,
   busy,
@@ -149,6 +230,11 @@ export function AgentComposer({
   textareaRef,
   draft: parentDraft,
   onDraftChange,
+  queued = [],
+  queueHeld = false,
+  onEditQueued,
+  onRemoveQueued,
+  onSendQueuedNow,
 }: AgentComposerProps) {
   const [ownDraft, setOwnDraft] = useState("");
   const parentKeepsDraft = parentDraft !== undefined && onDraftChange !== undefined;
@@ -169,17 +255,25 @@ export function AgentComposer({
         // prompt input already ignores it; Safari ends the composition before this
         // keydown arrives, so claim that one here or it would send a half-typed message.
         if (!event.nativeEvent.isComposing) event.preventDefault();
-        return;
       }
-      // While a turn runs the submit button is "Stop"; Enter must not queue another message.
-      if (busy && event.key === "Enter" && !event.shiftKey) event.preventDefault();
+      // Otherwise Enter submits, also while a turn runs: the button is then
+      // "Stop" (not a submit button), and onSend queues the message.
     },
-    [busy],
+    [],
   );
 
   return (
     // The minimal well, 8px inside the window's edge.
     <div className="shrink-0 p-2">
+      {queued.length > 0 && (
+        <QueuedMessages
+          queued={queued}
+          held={queueHeld && !busy}
+          onEdit={onEditQueued}
+          onRemove={onRemoveQueued}
+          onSendNow={onSendQueuedNow}
+        />
+      )}
       <PromptInput
         onSubmit={handleSubmit}
         // Focus lifts the well's edge instead of drawing a ring: the box has focus whenever the window is open.
@@ -200,7 +294,7 @@ export function AgentComposer({
             // Replaces the prompt input's handler, which would take any file on the
             // clipboard as a (hidden, never sent) attachment and swallow the text with it.
             onPaste={pasteTextOnly}
-            placeholder="Describe a workflow, or a change to this one…"
+            placeholder={busy ? "Queue a message…" : "Describe a workflow, or a change to this one…"}
             aria-label="Message the agent"
             className="max-h-40 min-h-11 px-3 pb-1 pt-2.5 text-[13px] leading-5 text-neutral-100 placeholder:text-neutral-500 md:text-[13px]"
           />
