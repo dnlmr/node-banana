@@ -993,6 +993,34 @@ describe("FloatingActionBar", () => {
       expect(screen.queryByText("Run group")).not.toBeInTheDocument();
     });
 
+    it("stays a Stop button between two runs of a batch", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ isRunning: false, runCount: 4, batch: { id: "b", index: 2, count: 4, stopping: false } }))
+      );
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      expect(await screen.findByText("2 / 4")).toBeInTheDocument();
+      expect(screen.queryByTitle("Run options")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByText("Stop"));
+      expect(mockRequestStop).toHaveBeenCalled();
+      expect(mockRunBatch).not.toHaveBeenCalled();
+    });
+
+    it("on the last run, Stop stops now, so the label does not promise to finish it", async () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ isRunning: true, runCount: 4, batch: { id: "b", index: 4, count: 4, stopping: false } }))
+      );
+      render(
+        <TestWrapper>
+          <FloatingActionBar />
+        </TestWrapper>
+      );
+      expect(await screen.findByTitle("Run 4 of 4")).toBeInTheDocument();
+    });
+
     it("says Stopping once Stop was pressed mid-batch", async () => {
       mockUseWorkflowStore.mockImplementation((selector) =>
         selector(createDefaultState({ isRunning: true, runCount: 10, batch: { id: "b", index: 3, count: 10, stopping: true } }))

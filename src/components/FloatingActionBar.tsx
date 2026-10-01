@@ -470,12 +470,16 @@ export function FloatingActionBar() {
     setAllEdgesHidden(hiddenEdgeCount === 0);
   };
 
+  // A batch is busy from its first run to its last, including the moments
+  // between runs when no run is going.
+  const busy = isRunning || batch !== null;
+
   const handleRunClick = useCallback(() => {
     // Check if we're in tutorial mode
     const ftuxState = useFTUXStore.getState();
     const currentStep = ftuxState.tutorialSteps[ftuxState.currentTutorialStep];
 
-    if (isRunning) {
+    if (busy) {
       requestStop();
     } else if (ftuxState.tutorialActive && currentStep?.id === "run-workflow") {
       // Use mock execution for tutorial
@@ -486,7 +490,7 @@ export function FloatingActionBar() {
       // node is given.
       runBatch({ kind: "all" });
     }
-  }, [isRunning, requestStop, runBatch, mockTutorialExecution]);
+  }, [busy, requestStop, runBatch, mockTutorialExecution]);
 
   const handleRunFromSelected = () => {
     if (selectedNodeId) {
@@ -511,10 +515,12 @@ export function FloatingActionBar() {
     ? "Local server disconnected"
     : !valid
       ? errors.join("\n")
-      : batch && isRunning
+      : batch
         ? batch.stopping
           ? `Stopping after run ${batch.index}. Click again to stop now`
-          : `Run ${batch.index} of ${batch.count}. Stop finishes this run first`
+          : batch.index < batch.count
+            ? `Run ${batch.index} of ${batch.count}. Stop finishes this run first`
+            : `Run ${batch.index} of ${batch.count}`
         : isRunning
           ? getRunningLabel()
           : runCount > 1
@@ -562,7 +568,7 @@ export function FloatingActionBar() {
         <div className="relative ml-0.5 flex items-center" ref={runMenuRef}>
           <div
             className={`relative flex h-9 items-stretch overflow-hidden rounded-lg squircle transition-[background-color,box-shadow,transform] duration-[120ms] ease-out ${
-              !valid && !isRunning
+              !valid && !busy
                 ? "bg-white/8 text-neutral-500"
                 : "bg-neutral-50 text-neutral-900 hover:bg-white hover:shadow-[0_0_0_1px_rgba(255,255,255,0.35),0_1px_2px_rgba(0,0,0,0.3)] active:scale-[0.97] active:bg-neutral-200"
             }`}
@@ -570,12 +576,12 @@ export function FloatingActionBar() {
             <button
               type="button"
               onClick={handleRunClick}
-              disabled={!desktopConnected || (!valid && !isRunning)}
+              disabled={!desktopConnected || (!valid && !busy)}
               title={runTitle}
               data-tutorial="floating-run-button"
               className="flex items-center gap-1.5 whitespace-nowrap pl-3 pr-3.5 text-[13px] font-semibold focus-visible:outline-none disabled:cursor-not-allowed"
             >
-              {isRunning && batch ? (
+              {batch ? (
                 <>
                   <SpinnerIcon />
                   <span>{batch.stopping ? "Stopping" : "Stop"}</span>
@@ -600,7 +606,7 @@ export function FloatingActionBar() {
             </button>
 
             {/* Dropdown chevron button */}
-            {!isRunning && valid && (
+            {!busy && valid && (
               <button
                 type="button"
                 onClick={() => setRunMenuOpen(!runMenuOpen)}
@@ -614,7 +620,7 @@ export function FloatingActionBar() {
             )}
 
             {/* Batch progress: runs finished so far, along the button's bottom edge */}
-            {isRunning && batch && (
+            {batch && (
               <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-black/8">
                 <span
                   className="block h-full bg-neutral-900 transition-[width] duration-300 ease-out"
@@ -625,7 +631,7 @@ export function FloatingActionBar() {
           </div>
 
           {/* Dropdown menu */}
-          {runMenuOpen && !isRunning && (
+          {runMenuOpen && !busy && (
             <MenuSurface floating={false} role="menu" data-tutorial="floating-run-menu" className="absolute bottom-full right-0 z-20 mb-2 min-w-[220px] py-1 [&_button]:whitespace-nowrap">
               <MenuItem
                 role="menuitem"
