@@ -36,14 +36,6 @@ vi.mock("@/store/workflowStore", () => ({
     }
     return mockUseWorkflowStore((s: unknown) => s);
   },
-  GROUP_COLORS: {
-    neutral: "#262626",
-    blue: "#1e3a5f",
-    green: "#1a3d2e",
-    purple: "#2d2458",
-    orange: "#3d2a1a",
-    red: "#3d1a1a",
-  },
 }));
 
 // Helper to create mock group
@@ -148,12 +140,25 @@ describe("GroupBackgroundsPortal", () => {
 
       const { container } = render(<GroupBackgroundsPortal />);
       const background = container.querySelector(".rounded-xl") as HTMLElement;
-      // Check that the background style contains the blue color (computed as rgba)
+      // A faint wash of the hue (teal #4f9d93 = rgb(79, 157, 147)) and no outline
       const style = background.getAttribute("style") || "";
-      // Blue color #1e3a5f = rgb(30, 58, 95) with transparency
-      expect(style).toContain("30, 58, 95");
+      expect(style).toContain("79, 157, 147");
       expect(style).toContain("background-color");
-      expect(style).toContain("border");
+      expect(style).not.toContain("border");
+    });
+
+    it("falls back to the neutral hue for a colour key it does not know", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => {
+        return selector(createDefaultState({
+          groups: {
+            "group-1": createMockGroup({ color: "teal" as Group["color"] }),
+          },
+        }));
+      });
+
+      const { container } = render(<GroupBackgroundsPortal />);
+      const background = container.querySelector(".rounded-xl") as HTMLElement;
+      expect(background.getAttribute("style")).toContain("138, 146, 156");
     });
 
     it("should set pointerEvents to none on backgrounds", () => {
@@ -293,10 +298,11 @@ describe("GroupControlsOverlay", () => {
       render(<GroupControlsOverlay />);
       fireEvent.click(screen.getByTitle("Group options"));
 
-      expect(screen.getByText("Background")).toBeInTheDocument();
+      expect(screen.getByText("Colour")).toBeInTheDocument();
+      expect(screen.getByText("Rename")).toBeInTheDocument();
       expect(screen.getByText("Lock")).toBeInTheDocument();
-      expect(screen.getByText("NBP Input")).toBeInTheDocument();
-      expect(screen.getByText("Delete")).toBeInTheDocument();
+      expect(screen.getByText("NBP input")).toBeInTheDocument();
+      expect(screen.getByText("Delete group")).toBeInTheDocument();
     });
   });
 
@@ -381,7 +387,7 @@ describe("GroupControlsOverlay", () => {
   });
 
   describe("Lock Toggle", () => {
-    it("should show Unlock label in menu when group is locked", () => {
+    it("marks a locked group in its label and shows the Lock row switched on", () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           groups: { "group-1": createMockGroup({ locked: true }) },
@@ -389,8 +395,9 @@ describe("GroupControlsOverlay", () => {
       });
 
       render(<GroupControlsOverlay />);
+      expect(screen.getByLabelText("Locked")).toBeInTheDocument();
       fireEvent.click(screen.getByTitle("Group options"));
-      expect(screen.getByText("Unlock")).toBeInTheDocument();
+      expect(screen.getByRole("menuitemcheckbox", { name: /lock/i })).toHaveAttribute("aria-checked", "true");
     });
 
     it("should call toggleGroupLock when Lock is clicked in menu", () => {
@@ -408,7 +415,7 @@ describe("GroupControlsOverlay", () => {
   });
 
   describe("Color Picker", () => {
-    it("should show color picker when Background is clicked in menu", () => {
+    it("shows the six hues as a swatch row at the top of the menu, the current one checked", () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           groups: { "group-1": createMockGroup({ color: "blue" }) },
@@ -416,18 +423,13 @@ describe("GroupControlsOverlay", () => {
       });
 
       render(<GroupControlsOverlay />);
-
-      // Open menu, then click Background to show color fan
       fireEvent.click(screen.getByTitle("Group options"));
-      fireEvent.click(screen.getByText("Background"));
 
-      // Should show color options (Gray, Blue, Green, Purple, Orange, Red)
-      expect(screen.getByTitle("Gray")).toBeInTheDocument();
-      expect(screen.getByTitle("Blue")).toBeInTheDocument();
-      expect(screen.getByTitle("Green")).toBeInTheDocument();
-      expect(screen.getByTitle("Purple")).toBeInTheDocument();
-      expect(screen.getByTitle("Orange")).toBeInTheDocument();
-      expect(screen.getByTitle("Red")).toBeInTheDocument();
+      for (const label of ["Slate", "Teal", "Olive", "Plum", "Amber", "Terracotta"]) {
+        expect(screen.getByTitle(label)).toBeInTheDocument();
+      }
+      expect(screen.getByRole("menuitemradio", { name: "Teal" })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("menuitemradio", { name: "Olive" })).toHaveAttribute("aria-checked", "false");
     });
 
     it("should call updateGroup with new color when color is selected", () => {
@@ -439,12 +441,9 @@ describe("GroupControlsOverlay", () => {
 
       render(<GroupControlsOverlay />);
 
-      // Open menu, then color picker
       fireEvent.click(screen.getByTitle("Group options"));
-      fireEvent.click(screen.getByText("Background"));
-
-      // Select green
-      fireEvent.click(screen.getByTitle("Green"));
+      // Olive is the `green` key: the stored value stays the key, not the hue
+      fireEvent.click(screen.getByTitle("Olive"));
 
       expect(mockUpdateGroup).toHaveBeenCalledWith("group-1", { color: "green" });
     });
@@ -461,8 +460,40 @@ describe("GroupControlsOverlay", () => {
       render(<GroupControlsOverlay />);
 
       fireEvent.click(screen.getByTitle("Group options"));
-      fireEvent.click(screen.getByText("Delete"));
+      fireEvent.click(screen.getByText("Delete group"));
       expect(mockDeleteGroup).toHaveBeenCalledWith("group-1");
+    });
+  });
+
+  describe("Rename and NBP input", () => {
+    it("Rename in the menu starts editing the name", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => {
+        return selector(createDefaultState({
+          groups: { "group-1": createMockGroup({ name: "Shots" }) },
+        }));
+      });
+
+      render(<GroupControlsOverlay />);
+      fireEvent.click(screen.getByTitle("Group options"));
+      fireEvent.click(screen.getByText("Rename"));
+      expect(screen.getByDisplayValue("Shots")).toBeInTheDocument();
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
+    it("NBP input toggles the flag and marks the label", () => {
+      mockUseWorkflowStore.mockImplementation((selector) => {
+        return selector(createDefaultState({
+          groups: { "group-1": createMockGroup({ isNbpInput: true }) },
+        }));
+      });
+
+      render(<GroupControlsOverlay />);
+      expect(screen.getByLabelText("NBP input")).toBeInTheDocument();
+      fireEvent.click(screen.getByTitle("Group options"));
+      const row = screen.getByRole("menuitemcheckbox", { name: /nbp input/i });
+      expect(row).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(row);
+      expect(mockUpdateGroup).toHaveBeenCalledWith("group-1", { isNbpInput: false });
     });
   });
 

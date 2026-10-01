@@ -588,7 +588,7 @@ describe("the agent's own groups", () => {
     );
     await expectRejected([{ op: "group", nodes: [], name: "Nothing" }], "a group needs at least one node");
     await expectRejected([{ op: "group", nodes: ["nanoBanana-2"] }], "a group needs a name");
-    await expectRejected([{ op: "group", nodes: ["nanoBanana-2"], name: "Teal", color: "teal" }], 'color "teal" is not a group colour; use one of neutral, blue, green, purple, orange, red.');
+    await expectRejected([{ op: "group", nodes: ["nanoBanana-2"], name: "Magenta", color: "magenta" }], 'color "magenta" is not a group colour; use one of neutral, blue, green, purple, orange, red.');
     await expectRejected([{ op: "ungroup", group: "Hero film" }], 'group "Hero film" does not exist. Groups: "Scene set" [group-1].');
     await expectRejected([{ op: "add_to_group", nodes: ["nanoBanana-2"] }], "group is required");
     await expectRejected([{ op: "update_group", group: "group-1" }], 'nothing to change on group "Scene set" [group-1]');
@@ -619,6 +619,13 @@ describe("the agent's own groups", () => {
     expect(Object.keys(store.groups)).toEqual(["group-ag2"]);
     expect(membersOf(store, "group-ag2")).toEqual(["prompt-1", "nanoBanana-2"]);
     expectTidyGroups(store);
+  });
+
+  it("takes the picker's hue names as colours and stores the key behind them", async () => {
+    const state: StoreState = { nodes: [storeNode("nanoBanana-2", "nanoBanana", { x: 420, y: 0 })], edges: [], groups: {} };
+    const olive = await call(runtimeWith(state), "edit_workflow", { operations: [{ op: "group", nodes: ["nanoBanana-2"], name: "Olive", color: "Olive" }] });
+    expect(olive.ok, olive.text).toBe(true);
+    expect((olive.ops.find((op) => op.op === "addGroup") as Extract<AgentGraphOp, { op: "addGroup" }>).color).toBe("green");
   });
 
   it("create_workflow checks group members too, and a replaced canvas drops the old groups", async () => {

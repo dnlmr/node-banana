@@ -1841,7 +1841,11 @@ const GROUP_NAME_MAX = 80;
 /** A group box fitted around nodes where they are may be this many times the area of their tidy block before they are gathered. */
 const SPRAWL_FACTOR = 2;
 /** Colour words a model may use for the canvas's group colours. */
-const GROUP_COLOR_ALIASES: Record<string, GroupColor> = { grey: "neutral", gray: "neutral", default: "neutral", violet: "purple" };
+const GROUP_COLOR_ALIASES: Record<string, GroupColor> = {
+  grey: "neutral", gray: "neutral", default: "neutral", violet: "purple",
+  // The picker's names for the hues behind the keys
+  slate: "neutral", teal: "blue", olive: "green", plum: "purple", amber: "orange", terracotta: "red",
+};
 
 function removedEntry(node: DraftNode): RemovedNode {
   return { id: node.id, type: node.type, ...(titleOf(node) ? { title: titleOf(node) } : {}), ...(node.content ? { content: { ...node.content } } : {}) };
