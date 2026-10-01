@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import { shallow, useShallow } from "zustand/shallow";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { NanoBananaNodeData, WorkflowEdgeData } from "@/types";
+import { ArrayNodeData, NanoBananaNodeData, WorkflowEdgeData } from "@/types";
 import { getSharedGradientId } from "./SharedEdgeGradients";
 import { EDGE_COLORS, edgeColorKeyForHandles } from "@/lib/edges/colors";
 import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
@@ -32,11 +32,15 @@ import {
   stubGroupKey,
 } from "@/lib/edges/labels";
 import { EdgeLabel } from "./EdgeLabel";
+import { arrayEdgeLabel, arrayLabelRows } from "@/lib/edges/arrayItems";
 import { edgeBundles, bundleReach, bundleClampKey, type BundleMembership } from "@/lib/edges/bundles";
 import { edgeGraphIndex, nodeGraphIndex } from "@/lib/edges/graphIndex";
 import { bundleClampStyle } from "./BundleClamp";
 import { HookBundleClamp } from "./HookBundleClamp";
 import { hookHandles, insertHookHandle } from "@/lib/edges/hook";
+
+/** Room between a target-end label and the handle: the same column as the hidden stubs. */
+const TARGET_LABEL_GAP = 12;
 
 interface EdgeData extends WorkflowEdgeData {
   offsetX?: number;
@@ -167,15 +171,21 @@ export function EditableEdge({
   );
   // And from the nodes: the clamp position for each end lives on the node
   // that owns the handle, and selection and loading state drive the stroke
-  const { sourceReach, targetReach, isConnectedToSelection, isTargetLoading } = useWorkflowStore(
+  const { sourceReach, targetReach, isConnectedToSelection, isTargetLoading, arrayLabel } = useWorkflowStore(
     useShallow((state) => {
       const { byId, selectedIds } = nodeGraphIndex(state.nodes);
       const targetNode = byId.get(target);
+      const sourceNode = byId.get(source);
       return {
         sourceReach: bundleReach(state.nodes, source, "source", sourceHandleId),
         targetReach: bundleReach(state.nodes, target, "target", targetHandleId),
         isConnectedToSelection: selectedIds.has(source) || selectedIds.has(target),
         isTargetLoading: targetNode?.type === "nanoBanana" && (targetNode.data as NanoBananaNodeData).status === "loading",
+        // Which item an Array connection carries ("Array 2", "All 7")
+        arrayLabel:
+          sourceNode?.type === "array"
+            ? arrayEdgeLabel({ id, source, target, sourceHandle: sourceHandleId, data: data as EdgeData | undefined }, sourceNode.data as ArrayNodeData)
+            : null,
       };
     })
   );
@@ -189,7 +199,7 @@ export function EditableEdge({
       setStubGroupWidth: state.setStubGroupWidth,
     }))
   );
-  const stubLabel = displayLabel;
+  const stubLabel = hasOwnLabel || !arrayLabel ? displayLabel : arrayLabel;
 
   // Bundles: the noodles sharing a handle leave it as one short stem and
   // split further out, until one of them is selected.
@@ -209,15 +219,20 @@ export function EditableEdge({
   // Where this noodle starts and ends: the stem's far end when bundled
   const startX = sourceBundle ? sourceX + sDir * sourceReach : sourceX;
   const endX = targetBundle ? targetX + tDir * targetReach : targetX;
+  // An Array item name says what arrives, so it sits at the noodle's target end
+  const labelAtTarget = !hasOwnLabel && Boolean(arrayLabel) && !(data as EdgeData | undefined)?.isLoop;
   // Hidden stubs stack down the side of the node without overlapping, which
-  // needs the y of every handle on that side, not just this edge's own
+  // needs the y of every handle on that side, not just this edge's own. An
+  // Array item name at the target end takes a row in the same stack.
   const sourceHandleY = useHandleY(source, "source", isHidden);
-  const targetHandleY = useHandleY(target, "target", isHidden);
+  const targetHandleY = useHandleY(target, "target", isHidden || labelAtTarget);
   const sourceStack = useWorkflowStore((state) =>
     isHidden ? hiddenStubOffset(id, state.edges, "source", sourceHandleY, sourceY, state.expandedStubGroup) : 0
   );
   const targetStack = useWorkflowStore((state) =>
-    isHidden ? hiddenStubOffset(id, state.edges, "target", targetHandleY, targetY, state.expandedStubGroup) : 0
+    isHidden || labelAtTarget
+      ? hiddenStubOffset(id, state.edges, "target", targetHandleY, targetY, state.expandedStubGroup, arrayLabelRows(state.nodes, state.edges, target))
+      : 0
   );
   const measureSourceGroup = useCallback((w: number) => setStubGroupWidth?.(sourceGroupKey, w), [setStubGroupWidth, sourceGroupKey]);
   const measureTargetGroup = useCallback((w: number) => setStubGroupWidth?.(targetGroupKey, w), [setStubGroupWidth, targetGroupKey]);
@@ -389,10 +404,12 @@ export function EditableEdge({
   const stemOpacity = isConnectedToSelection ? 1 : appearance.fadedOpacity;
   const showPulse = isTargetLoading && appearance.loadingPulse;
 
-  // Labels: only one the user typed sits on the noodle; the automatic type
-  // and image-order names stay on the toolbar and the hidden-connection stubs
-  const labelText = hasOwnLabel ? displayLabel : "";
+  // Labels: one the user typed sits on the noodle, and so does the item an
+  // Array connection carries; the automatic type and image-order names stay
+  // on the toolbar and the hidden-connection stubs
+  const labelText = hasOwnLabel ? displayLabel : arrayLabel ?? "";
   const showLabel = Boolean(labelText) || Boolean(edgeData?.isLoop);
+  const targetDirection = targetPosition === "right" ? 1 : -1;
 
   if (isHidden) {
     if (isConnecting) return null;
@@ -619,8 +636,9 @@ export function EditableEdge({
 
       {showLabel && !hookBundle && (
         <EdgeLabel
-          x={labelX}
-          y={labelY + parallel * 18}
+          x={labelAtTarget ? targetX + targetDirection * TARGET_LABEL_GAP : labelX}
+          y={labelAtTarget ? targetY + targetStack : labelY + parallel * 18}
+          anchor={labelAtTarget ? (targetDirection < 0 ? "end" : "start") : "center"}
           text={labelText}
           color={edgeColor}
           loopCount={edgeData?.isLoop ? edgeData.loopCount || 3 : undefined}

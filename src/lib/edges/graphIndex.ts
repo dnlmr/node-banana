@@ -47,6 +47,11 @@ export interface EdgeGraphIndex {
   hookBundles: Map<string, WorkflowEdge[]>;
   /** Hidden stub groups per node side, keyed by `hiddenStubSideKey`. */
   hiddenStubGroups: Map<string, HiddenStubGroup[]>;
+  /**
+   * Per target node, the visible, unnamed, non-loop connections that carry an
+   * Array item index: the ones that may wear the item name at their target end.
+   */
+  itemEdgesByTarget: Map<string, WorkflowEdge[]>;
   selectedIds: Set<string>;
   /** The first selected edge, which carries the toolbar. */
   toolbarEdgeId: string | null;
@@ -184,10 +189,16 @@ function buildEdgeGraphIndex(edges: WorkflowEdge[]): EdgeGraphIndex {
     hiddenStubGroups.set(sideKey, [...(unnamed.get(sideKey)?.values() ?? []), ...(named.get(sideKey)?.values() ?? [])]);
   }
 
+  const itemEdgesByTarget = new Map<string, WorkflowEdge[]>();
+  for (const e of sorted) {
+    if (e.data?.hidden || e.data?.isLoop || ownLabel(e) || typeof e.data?.arrayItemIndex !== "number") continue;
+    push(itemEdgesByTarget, e.target, e);
+  }
+
   const selectedIds = new Set(edges.filter((e) => e.selected).map((e) => e.id));
   const toolbarEdgeId = edges.find((e) => e.selected)?.id ?? null;
 
-  return { byId, imageSequence, parallel, bundles, hookBundles, hiddenStubGroups, selectedIds, toolbarEdgeId };
+  return { byId, imageSequence, parallel, bundles, hookBundles, hiddenStubGroups, itemEdgesByTarget, selectedIds, toolbarEdgeId };
 }
 
 const EMPTY_EDGE_INDEX = buildEdgeGraphIndex([]);

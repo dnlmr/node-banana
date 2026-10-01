@@ -92,6 +92,22 @@ describe("stackHiddenStubs", () => {
     expect(placed.has("elsewhere")).toBe(false);
   });
 
+  it("stacks an Array item name with the stubs instead of under one", () => {
+    // The expanded image stack runs to 144, past the text handle at 130
+    const placed = stackHiddenStubs(edges, "b", "target", handleY, 0, imageGroup, [
+      { edgeId: "item", handleId: "text", createdAt: 1 },
+    ]);
+    expect(placed.get("img3")).toBe(144);
+    expect(placed.get("item")).toBe(174);
+    // The hidden text stub on the same handle stacks below the name
+    expect(placed.get("txt1")).toBe(196);
+  });
+
+  it("leaves an Array item name at its handle when nothing is near", () => {
+    const placed = stackHiddenStubs([], "b", "target", handleY, 0, null, [{ edgeId: "item", handleId: "text", createdAt: 1 }]);
+    expect(placed.get("item")).toBe(130);
+  });
+
   it("orders by creation on the source side when handles are level", () => {
     const placed = stackHiddenStubs(edges, "c", "source", () => 50, 0, stubGroupKey("c", "source", "image"));
     expect(placed.get("elsewhere")).toBe(50);
