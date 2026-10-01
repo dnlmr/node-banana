@@ -70,6 +70,17 @@ describe("get_prompt_guide", () => {
     expect(result.text).toContain("The voice is chosen in voice (modelParameters)");
   });
 
+  it("uses the user's saved model for a node not made yet", async () => {
+    const snapshot = {
+      ...snapshotOf({ nodes: [], edges: [] }),
+      nodeDefaults: { generateVideo: { selectedModel: { provider: "fal", modelId: KLING.id, displayName: KLING.name } } },
+    };
+    const rt = createAgentToolRuntime(snapshot, { randomId: sequentialIds(), providerKeys: { fal: "fal-key" }, modelSource: source, promptNotes: memoryPromptNotesStore() });
+    const result = await call(rt, "get_prompt_guide", { nodeType: "generateVideo", task: "image-to-video" });
+    expect(result.summary).toBe("Read the image-to-video prompt guide for Kling I2V");
+    expect(result.text).toContain("Takes a negative prompt (negative_prompt)");
+  });
+
   it("still gives the generic guide when the node has no model", async () => {
     const state: StoreState = { nodes: [storeNode("generate3d-1", "generate3d", { x: 0, y: 0 })], edges: [] };
     const result = await call(runtime(state), "get_prompt_guide", { node: "generate3d-1" });

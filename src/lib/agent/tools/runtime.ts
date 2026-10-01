@@ -318,7 +318,12 @@ async function getPromptGuide(
     );
   }
 
-  const modelValue = args.model ? (args.provider ? { provider: args.provider, modelId: args.model } : args.model) : node ? nodeModelValue(node) : undefined;
+  // A node not made yet starts with the user's saved model for its type: the guide is for that one.
+  const modelValue = args.model
+    ? args.provider
+      ? { provider: args.provider, modelId: args.model }
+      : args.model
+    : nodeModelValue(node ?? { data: draft.options.createDefaultNodeData(nodeType) });
   let model: PromptGuideInput["model"];
   let modelProblem: string | undefined;
   if (modelValue !== undefined && isModelNodeType(nodeType)) {
@@ -343,7 +348,7 @@ async function getPromptGuide(
 }
 
 /** A node's model as settings.model takes it: a provider pair, or a Gemini image id. */
-function nodeModelValue(node: DraftNode): unknown {
+function nodeModelValue(node: Pick<DraftNode, "data">): unknown {
   const selected = node.data.selectedModel as { provider?: unknown; modelId?: unknown } | undefined;
   if (selected && typeof selected.modelId === "string" && selected.modelId) {
     return typeof selected.provider === "string" && selected.provider ? { provider: selected.provider, modelId: selected.modelId } : selected.modelId;
