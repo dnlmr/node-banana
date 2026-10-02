@@ -251,7 +251,8 @@ export function Dialog({
         ref={overlayRef}
         data-dialog-overlay=""
         className={cn(
-          "fixed inset-0 z-100 flex items-center justify-center animate-dialog-backdrop",
+          // Over the desktop title bar a dialog would otherwise inherit its drag region
+          "fixed inset-0 z-100 flex items-center justify-center animate-dialog-backdrop [-webkit-app-region:no-drag]",
           isLightbox ? "bg-scrim-heavy p-8" : "bg-scrim",
           overlayClassName,
           overlayProps?.className

@@ -6,12 +6,14 @@ import { MediaViewer, type MediaViewerAction, type MediaViewerItem } from "@/com
 import { NodeShell } from "./NodeShell";
 import { ControlsCard, CornerGrip, EmptyState, type SocketSpec, HeightGrip } from "./ui";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { OutputGalleryNodeData } from "@/types";
+import { useAssetStore } from "@/store/assetStore";
+import { historyViewerItem } from "@/components/GlobalImageHistory";
+import { OutputGalleryNodeData, type ImageHistoryItem } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
 import { useAddMediaNode } from "@/hooks/useAddMediaNode";
 import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
 import { downloadMedia as downloadMediaUtil } from "@/utils/downloadMedia";
-import { Download, ImagePlus, Menu, Play, Trash2 } from "lucide-react";
+import { Check, Download, ImagePlus, LibraryBig, Menu, Play, Trash2 } from "lucide-react";
 
 const INPUT_SOCKETS: SocketSpec[] = [
   { id: "image", type: "image", label: "Image" },
@@ -44,6 +46,18 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
   const { getNodes, setNodes } = useReactFlow();
   const addMediaNode = useAddMediaNode();
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  // "Add to graph" reads "Added" for the item it just added, as in the history viewer
+  const [addedId, setAddedId] = useState<string | null>(null);
+  const setAppView = useAssetStore((state) => state.setAppView);
+  // The gallery holds bare data URLs; the generation history knows what made
+  // each one, so a gallery image that is in the history gets the same prompt
+  // and details the history viewer shows for it.
+  const globalImageHistory = useWorkflowStore((state) => state.globalImageHistory);
+  const historyBySrc = useMemo(() => {
+    const map = new Map<string, ImageHistoryItem>();
+    for (const entry of globalImageHistory ?? []) if (!map.has(entry.image)) map.set(entry.image, entry);
+    return map;
+  }, [globalImageHistory]);
 
   // Display stored media only — items are accumulated during workflow execution
   const displayMedia = useMemo(() => {
@@ -175,6 +189,7 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
 
   const closeLightbox = useCallback(() => {
     setLightboxIndex(null);
+    setAddedId(null);
   }, []);
 
   const downloadMedia = useCallback(() => {
@@ -272,37 +287,50 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
   const currentItem = lightboxIndex !== null ? displayMedia[lightboxIndex] : null;
   const gridHeight = nodeData.mediaHeight ?? GRID_HEIGHT;
 
-  // The viewer's items: images then videos, as the grid shows them.
+  // The viewer's items: images then videos, as the grid shows them. An image
+  // the history knows is described the way the history viewer describes it.
   const viewerItems = useMemo<MediaViewerItem[]>(
     () =>
-      displayMedia.map((item, idx) => ({
-        id: `${item.type}-${idx}`,
-        src: item.src,
-        kind: item.type,
-        thumb: item.type === "video" ? videoThumbnails.get(item.src) : undefined,
-        title: `${item.type === "video" ? "Video" : "Image"} ${idx + 1}`,
-        details: [["Type", item.type === "video" ? "Video" : "Image"], ["Node", "Output gallery"]],
-      })),
-    [displayMedia, videoThumbnails],
+      displayMedia.map((item, idx) => {
+        const id = `${item.type}-${idx}`;
+        const known = item.type === "image" ? historyBySrc.get(item.src) : undefined;
+        if (known) return { ...historyViewerItem(known), id };
+        return {
+          id,
+          src: item.src,
+          kind: item.type,
+          thumb: item.type === "video" ? videoThumbnails.get(item.src) : undefined,
+          title: `${item.type === "video" ? "Video" : "Image"} ${idx + 1}`,
+          details: [["Type", item.type === "video" ? "Video" : "Image"], ["Node", "Output gallery"]],
+        };
+      }),
+    [displayMedia, videoThumbnails, historyBySrc],
   );
+  // The same actions, order and tones as the recent-generations viewer, plus
+  // the one only a gallery has: taking an item out of it.
   const viewerActions = useMemo<MediaViewerAction[]>(() => {
     if (lightboxIndex === null || !currentItem) return [];
+    const itemId = `${currentItem.type}-${lightboxIndex}`;
+    const added = addedId === itemId;
     return [
-      { label: "Download", icon: Download, tone: "primary", shortcut: "d", onClick: downloadMedia },
       {
-        label: "Add to graph as input",
-        icon: ImagePlus,
+        label: added ? "Added" : "Add to graph",
+        icon: added ? Check : ImagePlus,
+        tone: added ? "success" : "primary",
         shortcut: "Enter",
-        onClick: () =>
+        onClick: () => {
           addMediaNode({
             kind: currentItem.type,
             src: currentItem.src,
             filename: currentItem.type === "video" ? `gallery-video-${lightboxIndex + 1}.mp4` : `gallery-image-${lightboxIndex + 1}.png`,
-          }),
+          });
+          setAddedId(itemId);
+        },
       },
+      { label: "Download", icon: Download, shortcut: "d", onClick: downloadMedia },
       { label: "Remove from gallery", icon: Trash2, tone: "danger", onClick: () => removeMedia(lightboxIndex) },
     ];
-  }, [lightboxIndex, currentItem, downloadMedia, addMediaNode, removeMedia]);
+  }, [lightboxIndex, currentItem, addedId, downloadMedia, addMediaNode, removeMedia]);
 
   return (
     <>
@@ -398,10 +426,26 @@ export function OutputGalleryNode({ id, data, selected }: NodeProps<OutputGaller
         open={lightboxIndex !== null && currentItem !== null}
         items={viewerItems}
         index={lightboxIndex ?? 0}
-        onIndexChange={setLightboxIndex}
+        onIndexChange={(index) => {
+          setAddedId(null);
+          setLightboxIndex(index);
+        }}
         onClose={closeLightbox}
         actions={viewerActions}
         label="Gallery"
+        footer={
+          <button
+            type="button"
+            onClick={() => {
+              closeLightbox();
+              setAppView("assets");
+            }}
+            className="flex h-7 items-center justify-center gap-2 rounded-md text-[11px] font-medium text-neutral-400 transition-colors duration-[120ms] hover:bg-white/7 hover:text-white"
+          >
+            <LibraryBig size={14} strokeWidth={1.75} />
+            <span>Open in Assets</span>
+          </button>
+        }
       />
     </>
   );

@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { OutputGalleryNode } from "@/components/nodes/OutputGalleryNode";
 
 const mockUpdateNodeData = vi.fn();
 const mockAddNode = vi.fn(() => "imageInput-9");
+const storeState = vi.hoisted(() => ({ globalImageHistory: [] as unknown[] }));
 vi.mock("@/store/workflowStore", () => ({
   useWorkflowStore: vi.fn((selector) =>
     selector({
@@ -19,6 +20,7 @@ vi.mock("@/store/workflowStore", () => ({
       onConnect: vi.fn(),
       setHoveredNodeId: vi.fn(),
       getConnectedInputs: vi.fn(() => ({ images: [], videos: [], text: null, dynamicInputs: {} })),
+      globalImageHistory: storeState.globalImageHistory,
     })
   ),
 }));
@@ -52,20 +54,43 @@ function renderGallery(data: Record<string, unknown>) {
 describe("OutputGalleryNode", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("opens an item in the shared viewer, where it can be downloaded, added to the graph or removed", () => {
+  it("opens an item in the shared viewer with the history viewer's actions, plus Remove", () => {
     const OTHER = "data:image/png;base64,other";
     renderGallery({ images: [IMG, OTHER], imageRefs: ["ref-1", "ref-2"] });
     fireEvent.click(screen.getByRole("button", { name: "Open image 2" }));
     const rail = screen.getByTestId("media-viewer-rail");
     expect(rail).toHaveTextContent("2 of 2");
     expect(rail).toHaveTextContent("Image 2");
-    expect(screen.getByRole("button", { name: "Download" })).toHaveClass("bg-neutral-200");
+    // Same order and tones as the recent-generations viewer: Add first, as the primary
+    const buttons = within(rail).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    expect(buttons.slice(-4)).toEqual(["Add to graph", "Download", "Remove from gallery", "Open in Assets"]);
+    expect(screen.getByRole("button", { name: "Add to graph" })).toHaveClass("bg-neutral-200");
+    expect(within(rail).getByRole("button", { name: "Close" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add to graph as input" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to graph" }));
     expect(mockAddNode).toHaveBeenCalledWith("imageInput", expect.anything(), { image: OTHER, filename: "gallery-image-2.png" });
+    expect(screen.getByRole("button", { name: "Added" })).toHaveClass("bg-emerald-400");
 
     fireEvent.click(screen.getByRole("button", { name: "Remove from gallery" }));
     expect(mockUpdateNodeData).toHaveBeenCalledWith("gallery-1", { images: [IMG], imageRefs: ["ref-1"] });
+  });
+
+  it("describes an image the generation history knows the way the history viewer does", () => {
+    storeState.globalImageHistory = [
+      { id: "h1", image: IMG, timestamp: Date.now() - 5 * 60_000, prompt: "A red shoe", aspectRatio: "1:1", model: "nano-banana-pro", generation: { size: "1024x1024", outputFormat: "png" } },
+    ];
+    try {
+      renderGallery({ images: [IMG], imageRefs: ["ref-1"] });
+      fireEvent.click(screen.getByRole("button", { name: "Open image 1" }));
+      const rail = screen.getByTestId("media-viewer-rail");
+      expect(rail).toHaveTextContent("A red shoe");
+      expect(rail).toHaveTextContent("Nano Banana Pro");
+      expect(rail).toHaveTextContent("5m ago");
+      expect(rail).toHaveTextContent("1024x1024");
+      expect(rail).toHaveTextContent("PNG");
+    } finally {
+      storeState.globalImageHistory = [];
+    }
   });
 
   it("has no grip while empty", () => {
