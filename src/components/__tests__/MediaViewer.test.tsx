@@ -160,7 +160,8 @@ describe("MediaViewer", () => {
 
   it("closes from the button and Escape", () => {
     const { props } = renderViewer();
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    // The close button sits in the rail header, clear of the desktop window's drag strip
+    fireEvent.click(within(screen.getByTestId("media-viewer-rail")).getByRole("button", { name: "Close" }));
     expect(props.onClose).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(props.onClose).toHaveBeenCalledTimes(2);

@@ -336,6 +336,16 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
             >
               <ChevronRight size={16} strokeWidth={2} />
             </button>
+            {/* In the rail, not hanging off the top corner: up there it sat inside the
+                desktop window's drag strip, where a click moved the window instead. */}
+            <button
+              type="button"
+              aria-label="Close"
+              onClick={onClose}
+              className="ml-1 flex h-7 w-7 items-center justify-center rounded-md bg-white/4 text-neutral-200 transition-colors hover:bg-white/8"
+            >
+              <X size={16} strokeWidth={2} />
+            </button>
           </div>
         </div>
 
@@ -366,15 +376,6 @@ export function MediaViewer({ open, items, index, onIndexChange, onClose, action
         <div className="flex-1" />
         {footer}
       </aside>
-
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close"
-        className={cn("absolute -right-4 -top-4 flex h-8 w-8 items-center justify-center rounded-lg", LIGHTBOX_BUTTON)}
-      >
-        <X size={16} strokeWidth={2} />
-      </button>
     </Dialog>
   );
 }
