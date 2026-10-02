@@ -3,6 +3,8 @@ import type { QuickstartView } from "@/types/quickstart";
 import { pushGenerationToast } from "@/components/GenerationToast";
 import { create, StateCreator } from "zustand";
 import { COMFY_SETTINGS_CHANGED_EVENT, getComfySettings, migrateLegacyComfyCloudKey } from "@/lib/comfy/settings";
+import { createAutoSave, type AutoSave } from "./utils/autoSave";
+import { saveShortcutLabel } from "@/utils/saveShortcut";
 import { useShallow } from "zustand/shallow";
 import {
   Connection,
@@ -68,6 +70,8 @@ import {
   getCanvasNavigationSettings,
   saveCanvasNavigationSettings,
   getEdgeDefaults,
+  loadAutoSaveEnabled,
+  saveAutoSaveEnabled,
 } from "./utils/localStorage";
 import { normalizeEdgeAppearance } from "@/lib/edges/appearance";
 import {
@@ -481,7 +485,8 @@ export interface WorkflowStore {
   setAutoSaveEnabled: (enabled: boolean) => void;
   setUseExternalImageStorage: (enabled: boolean) => void;
   markAsUnsaved: () => void;
-  saveToFile: () => Promise<boolean>;
+  /** Save the workflow to its folder. A manual save reports failure in a toast; autosave reports through its own notice. */
+  saveToFile: (options?: { reason?: "manual" | "auto" }) => Promise<boolean>;
   saveAsFile: (name: string) => Promise<boolean>;
   initializeAutoSave: () => void;
   cleanupAutoSave: () => void;
@@ -579,7 +584,8 @@ function syncIdCounters(nodes: WorkflowNode[], groups: Record<string, NodeGroup>
   nodeIdCounter = maxSuffix(nodes.map((node) => node.id));
   groupIdCounter = maxSuffix(Object.keys(groups || {}));
 }
-let autoSaveIntervalId: ReturnType<typeof setInterval> | null = null;
+let autoSave: AutoSave | null = null;
+let autoSaveWindowListeners: (() => void) | null = null;
 
 // Undo/redo state (module-level, not in Zustand to avoid serialization)
 const undoManager = new UndoManager();
@@ -1007,7 +1013,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   generationsPath: null,
   lastSavedAt: null,
   hasUnsavedChanges: false,
-  autoSaveEnabled: true,
+  autoSaveEnabled: loadAutoSaveEnabled(),
   isSaving: false,
 
   // Workflow tabs initial state: one live tab
@@ -3703,6 +3709,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
   setAutoSaveEnabled: (enabled: boolean) => {
     set({ autoSaveEnabled: enabled });
+    saveAutoSaveEnabled(enabled);
   },
 
   setUseExternalImageStorage: (enabled: boolean) => {
@@ -3713,7 +3720,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     set({ hasUnsavedChanges: true });
   },
 
-  saveToFile: async () => {
+  saveToFile: async (options = {}) => {
+    const reason = options.reason ?? "manual";
     let {
       nodes,
       edges,
@@ -3904,16 +3912,16 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
         return true;
       } else {
-        useToast.getState().show(`Auto-save failed: ${result.error}`, "error");
+        // Autosave reports through its own notice, once, not on every attempt
+        if (reason === "manual") useToast.getState().show(`Couldn't save: ${result.error}`, "error");
         return false;
       }
     } catch (error) {
-      useToast
-        .getState()
-        .show(
-          `Auto-save failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-          "error"
-        );
+      if (reason === "manual") {
+        useToast
+          .getState()
+          .show(`Couldn't save: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
+      }
       return false;
     } finally {
       set({ isSaving: false });
@@ -3947,28 +3955,39 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     return success;
   },
 
+  // Autosave follows the edits (src/store/utils/autoSave.ts): a few seconds
+  // after the last change, never mid-run, never when clean; and it saves at
+  // once when the window loses focus or the tab is hidden.
   initializeAutoSave: () => {
-    if (autoSaveIntervalId) return;
-
-    autoSaveIntervalId = setInterval(async () => {
-      const state = get();
-      if (
-        state.autoSaveEnabled &&
-        state.hasUnsavedChanges &&
-        state.workflowId &&
-        state.workflowName &&
-        state.saveDirectoryPath &&
-        !state.isSaving
-      ) {
-        await state.saveToFile();
-      }
-    }, 90 * 1000); // 90 seconds
+    if (autoSave) return;
+    autoSave = createAutoSave({
+      getState: () => get(),
+      subscribe: (listener) => useWorkflowStore.subscribe(listener),
+      save: () => get().saveToFile({ reason: "auto" }),
+      onFailure: (error) => {
+        const detail = error instanceof Error ? error.message : "";
+        useToast.getState().show(`Autosave is paused: it couldn't write the workflow${detail ? ` (${detail})` : ""}. Save with ${saveShortcutLabel()} to try now.`, "error");
+      },
+    });
+    autoSave.start();
+    if (typeof window !== "undefined") {
+      const flush = () => { void autoSave?.flush(); };
+      const onVisibility = () => { if (document.visibilityState === "hidden") flush(); };
+      window.addEventListener("blur", flush);
+      document.addEventListener("visibilitychange", onVisibility);
+      autoSaveWindowListeners = () => {
+        window.removeEventListener("blur", flush);
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
+    }
   },
 
   cleanupAutoSave: () => {
-    if (autoSaveIntervalId) {
-      clearInterval(autoSaveIntervalId);
-      autoSaveIntervalId = null;
+    if (autoSave) {
+      autoSave.stop();
+      autoSave = null;
+      autoSaveWindowListeners?.();
+      autoSaveWindowListeners = null;
     }
   },
 

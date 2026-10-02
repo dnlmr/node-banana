@@ -14,6 +14,7 @@ describe("KeyboardShortcutsDialog", () => {
     render(<KeyboardShortcutsDialog isOpen onClose={vi.fn()} />);
     expect(screen.getByRole("dialog", { name: "Keyboard Shortcuts" })).toBeInTheDocument();
     expect(screen.getByText("Run workflow")).toBeInTheDocument();
+    expect(screen.getByText("Save workflow")).toBeInTheDocument();
     expect(screen.getByText("Add Prompt node")).toBeInTheDocument();
   });
 

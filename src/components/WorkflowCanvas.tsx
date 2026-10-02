@@ -80,6 +80,8 @@ import { loadAgentSettings } from "@/lib/agent/client/settings";
 import type { AgentPresence } from "./agent/AgentPanel";
 import { useViewportWidth } from "./agent/hooks/useViewportWidth";
 import { GroupBackgroundsPortal, GroupControlsOverlay } from "./GroupsOverlay";
+import { requestSave } from "@/store/saveRequestStore";
+import { insideAgentWindow, isSaveShortcut } from "@/utils/saveShortcut";
 import { NodeType, NanoBananaNodeData, HandleType, PromptNodeData, LLMGenerateNodeData, PromptConstructorNodeData, AvailableVariable, WorkflowNodeData } from "@/types";
 import { isComfyWorkflow, isNodeBananaWorkflow } from "@/lib/comfy/detect";
 import { NODE_TITLES, getNodeHandles } from "@/lib/nodes/handles";
@@ -1762,6 +1764,14 @@ export function WorkflowCanvas() {
 
   // Keyboard shortcuts for copy/paste and stacking selected nodes
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
+    // Save works everywhere, including inside a node's text field; only the
+    // agent window keeps its own keystrokes
+    if (isSaveShortcut(event)) {
+      if (insideAgentWindow(event.target)) return;
+      event.preventDefault();
+      requestSave("shortcut");
+      return;
+    }
     // The canvas is hidden behind the Assets view: none of its keys apply
     if (useAssetStore.getState().appView !== "canvas") return;
     // Ignore if user is typing in an input field (including the edge label

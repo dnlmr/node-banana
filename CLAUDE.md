@@ -58,7 +58,7 @@ All application state lives in `workflowStore.ts` using Zustand. Key patterns:
 - `executeWorkflow(startFromNodeId?)` runs the pipeline via topological sort
 - `getConnectedInputs(nodeId)` retrieves upstream data for a node
 - `updateNodeData(nodeId, partialData)` updates node state
-- Auto-save runs every 90 seconds when enabled
+- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`)
 
 ### Execution Flow
 
@@ -156,6 +156,7 @@ Returns `{ images: string[], text: string | null }`.
 ## Keyboard Shortcuts
 
 - `Cmd/Ctrl + Enter` - Run workflow (as many times as the Run menu's Runs count)
+- `Cmd/Ctrl + S` - Save workflow (works inside a node's text field; the first save asks for a name and location). The desktop app's File › Save is the same request (`src/store/saveRequestStore.ts`, answered by `FloatingMenu`)
 - `Cmd/Ctrl + C/V` - Copy/paste nodes
 - `Shift + P` - Add prompt node at center
 - `Shift + I` - Add image input node
@@ -524,6 +525,7 @@ All routes in `src/app/api/`:
 ## localStorage Keys
 
 - `node-banana-workflow-configs` - Project metadata (paths)
+- `node-banana-autosave` - "Save automatically" (absent or `on` means on)
 - `node-banana-provider-settings` - Provider API keys and enabled flags (the `comfy` entry is the one Comfy key; `node-banana-comfy-settings` no longer stores one)
 - `node-banana-workflow-costs` - Cost tracking per workflow
 - `node-banana-nanoBanana-defaults` - Sticky generation settings

@@ -27,6 +27,8 @@ import {
 } from "./chromeStyles";
 import { LibraryNotices } from "./LibraryNotices";
 import { useSettingsDialogStore } from "@/store/settingsDialogStore";
+import { useSaveRequestStore, type SaveReason } from "@/store/saveRequestStore";
+import { saveShortcutLabel } from "@/utils/saveShortcut";
 
 /** The bar's buttons are the navigator card's: 32px squircles in a 40px row. */
 const ICON_BUTTON = `relative ${CHROME_ICON_BUTTON} ${CHROME_ICON_BUTTON_SIZE.md}`;
@@ -221,18 +223,20 @@ export function FloatingMenu() {
     ? new Date(lastSavedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     : null;
   // The pill shows no status text; the tab carries the name and this string goes
-  // into the Save tooltip and the menu's Save row.
+  // into the Save tooltip and the menu's Save row: saved, saving, or unsaved
+  // with the shortcut that fixes it.
+  const shortcut = saveShortcutLabel();
   const saveStatus = !isProjectConfigured
-    ? "Not saved"
+    ? `Not saved · ${shortcut}`
     : isSaving
       ? "Saving..."
       : hasUnsavedChanges
         ? lastSavedText
-          ? `Unsaved · last saved ${lastSavedText}`
-          : "Unsaved"
+          ? `Unsaved · last saved ${lastSavedText} · ${shortcut}`
+          : `Unsaved changes · ${shortcut}`
         : lastSavedText
           ? `Saved ${lastSavedText}`
-          : "Not saved";
+          : `Not saved · ${shortcut}`;
 
   const closeMenu = useCallback((restoreFocus = false) => {
     setIsOpen(false);
@@ -324,15 +328,27 @@ export function FloatingMenu() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsRequest]);
 
-  const handleSave = () => {
-    if (!isProjectConfigured) {
-      handleNewProject();
-    } else if (canSave) {
-      saveToFile();
+  // One save for the button, the menu row, Cmd/Ctrl+S and the desktop's File ›
+  // Save: a workflow with a folder saves; one without is asked for a name and
+  // location once, then saves.
+  const handleSave = (_reason: SaveReason = "button") => {
+    if (canSave) {
+      void saveToFile({ reason: "manual" });
     } else {
-      handleOpenSettings();
+      handleNewProject();
     }
   };
+
+  const saveRequest = useSaveRequestStore((state) => state.request);
+  const consumeSaveRequest = useSaveRequestStore((state) => state.consumeRequest);
+  useEffect(() => {
+    if (!saveRequest) return;
+    consumeSaveRequest();
+    if (isSaving) return;
+    handleSave(saveRequest.reason);
+    // The request is the trigger; handleSave reads the latest state when it runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveRequest]);
 
   const handleProjectSave = async (id: string, name: string, path: string) => {
     setWorkflowMetadata(id, name, path); // generationsPath is auto-derived
@@ -368,13 +384,7 @@ export function FloatingMenu() {
     }
   };
 
-  const saveAction = !isProjectConfigured
-    ? "Save project"
-    : isSaving
-      ? "Saving..."
-      : canSave
-        ? "Save project"
-        : "Configure save location";
+  const saveAction = isSaving ? "Saving..." : "Save project";
   const saveTitle = saveAction === saveStatus ? saveAction : `${saveAction} · ${saveStatus}`;
 
   const commentTitle = `${unviewedCount} unviewed comment${unviewedCount !== 1 ? "s" : ""} (${commentCount} total)`;
@@ -429,7 +439,7 @@ export function FloatingMenu() {
 
           <button
             type="button"
-            onClick={handleSave}
+            onClick={() => handleSave("button")}
             disabled={isSaving}
             className={ICON_BUTTON}
             aria-label={saveAction}
@@ -439,6 +449,12 @@ export function FloatingMenu() {
             <SaveIcon />
             {showUnsavedDot && (
               <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-neutral-800" />
+            )}
+            {isSaving && (
+              <span
+                data-testid="saving-dot"
+                className="absolute top-1.5 right-1.5 h-2 w-2 animate-pulse rounded-full bg-amber-400 ring-2 ring-neutral-800"
+              />
             )}
           </button>
 
@@ -469,7 +485,7 @@ export function FloatingMenu() {
               icon={<SaveIcon />}
               label="Save project"
               hint={saveStatus}
-              onClick={choose(handleSave)}
+              onClick={choose(() => handleSave("menu"))}
               title={saveAction}
             />
             <MenuRow

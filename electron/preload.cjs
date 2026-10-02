@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld('nodeBananaDesktop', {
     },
   },
   openLogs: () => ipcRenderer.invoke('desktop:open-logs'),
+  onSaveRequest: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('desktop:save-request', listener);
+    return () => ipcRenderer.removeListener('desktop:save-request', listener);
+  },
   updates: {
     state: () => ipcRenderer.invoke('desktop:updates:state'),
     check: () => ipcRenderer.invoke('desktop:updates:check'),

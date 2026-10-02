@@ -38,6 +38,8 @@ declare global {
         onStatus: (callback: (online: boolean) => void) => () => void;
       };
       openLogs: () => Promise<void>;
+      /** File › Save in the app menu (Cmd/Ctrl+S); the page saves the current workflow. */
+      onSaveRequest: (callback: () => void) => () => void;
       updates: {
         state: () => Promise<DesktopUpdateState>;
         /** A manual check: its result is shown even when there is nothing new. */

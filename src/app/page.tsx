@@ -14,6 +14,7 @@ import { FTUXModal } from "@/components/onboarding/FTUXModal";
 import { getFTUXCompleted, setFTUXCompleted } from "@/store/utils/localStorage";
 import { useFTUXStore } from "@/store/ftuxStore";
 import { anyWorkflowTabUnsaved } from "@/store/utils/workflowTabs";
+import { requestSave } from "@/store/saveRequestStore";
 import { useAssetStore } from "@/store/assetStore";
 import { AssetsView } from "@/components/assets/AssetsView";
 import { watchFirstRecording } from "@/components/assets/FirstRunHint";
@@ -59,6 +60,9 @@ function Editor() {
     initializeAutoSave();
     return () => cleanupAutoSave();
   }, [initializeAutoSave, cleanupAutoSave]);
+
+  // File › Save in the desktop app's menu (Cmd/Ctrl+S wherever focus is)
+  useEffect(() => window.nodeBananaDesktop?.onSaveRequest?.(() => requestSave("desktop")), []);
 
   // The asset library: ask the server where it is (recording stays off until
   // it answers that it is available), and say once where the first asset went

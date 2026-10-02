@@ -192,6 +192,8 @@ export function ProjectSetupModal({
     return joinPathForPlatform(trimmedBase, sanitizedFolder);
   };
 
+  const autoSaveEnabled = useWorkflowStore((state) => state.autoSaveEnabled);
+  const setAutoSaveEnabled = useWorkflowStore((state) => state.setAutoSaveEnabled);
   const {
     workflowId,
     workflowName,
@@ -732,6 +734,14 @@ export function ProjectSetupModal({
                 onChange={() => setExternalStorage(externalStorage ? false : true)}
                 label="Embed images as base64"
               />
+            </DialogRow>
+
+            <DialogRow
+              title="Save automatically"
+              description="Saves a few seconds after you stop editing, and when you leave the window. Never during a run."
+              className="pt-[18px] pb-0"
+            >
+              <Switch checked={autoSaveEnabled} onChange={setAutoSaveEnabled} label="Save automatically" />
             </DialogRow>
 
             {error && <DialogStatus tone="error">{error}</DialogStatus>}

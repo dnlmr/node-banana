@@ -343,3 +343,24 @@ export const loadNanoBananaDefaults = loadGenerateImageDefaults;
  * @deprecated Backward-compatible alias. Use `saveGenerateImageDefaults` instead.
  */
 export const saveNanoBananaDefaults = saveGenerateImageDefaults;
+
+// Autosave preference ("Save automatically" in Settings → Project); on by default
+export const AUTOSAVE_KEY = "node-banana-autosave";
+
+export const loadAutoSaveEnabled = (): boolean => {
+  if (typeof window === "undefined") return true;
+  try {
+    return localStorage.getItem(AUTOSAVE_KEY) !== "off";
+  } catch {
+    return true;
+  }
+};
+
+export const saveAutoSaveEnabled = (enabled: boolean): void => {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(AUTOSAVE_KEY, enabled ? "on" : "off");
+  } catch {
+    // Storage unavailable (private window): the setting lasts the session
+  }
+};
