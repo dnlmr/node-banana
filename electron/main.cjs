@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createRecoveryStore } = require('./lib/recovery.cjs');
+const { buildMenuTemplate } = require('./lib/menu.cjs');
 const { importEnvironmentFile } = require('./lib/environment-import.cjs');
 const { createCredentialStore } = require('./lib/credentials.cjs');
 const { provisionRuntime } = require('./lib/runtime.cjs');
@@ -291,10 +292,15 @@ else {
     });
     session.defaultSession.setPermissionCheckHandler(allowedPermission);
     session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => callback(allowedPermission(contents, permission, details.requestingUrl)));
-    Menu.setApplicationMenu(Menu.buildFromTemplate([
-      ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []), { role: 'fileMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
-      { label: 'Help', submenu: [{ label: 'Check for Updates…', click: () => void updates.check({ manual: true }) }, { type: 'separator' }, { label: 'Open Logs', click: openLogs }, { label: 'Restart Local Server', click: () => void startWithRetry() }, { label: 'Recover Editor', click: () => { if (rendererCrashed && window) { rendererCrashed = false; window.reload(); } } }] },
-    ]));
+    Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate({
+      platform: process.platform,
+      // File › Save: the page saves the workflow; Cmd/Ctrl+S works wherever focus is
+      onSave: () => { if (window && !window.isDestroyed()) window.webContents.send('desktop:save-request'); },
+      onCheckForUpdates: () => void updates.check({ manual: true }),
+      onOpenLogs: openLogs,
+      onRestartServer: () => void startWithRetry(),
+      onRecoverEditor: () => { if (rendererCrashed && window) { rendererCrashed = false; window.reload(); } },
+    })));
     if (await startWithRetry()) { await createWindow(); updates.start(); }
   }).catch(fail);
 }

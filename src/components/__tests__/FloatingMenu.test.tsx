@@ -5,6 +5,8 @@ import { useAssetStore } from "@/store/assetStore";
 import { useSettingsDialogStore } from "@/store/settingsDialogStore";
 
 const mockSetWorkflowMetadata = vi.fn();
+import { useSaveRequestStore } from "@/store/saveRequestStore";
+
 const mockSaveToFile = vi.fn();
 const mockLoadWorkflow = vi.fn();
 const mockSetShortcutsDialogOpen = vi.fn();
@@ -138,7 +140,7 @@ describe("FloatingMenu", () => {
       render(<FloatingMenu />);
       expect(screen.getByRole("button", { name: "Menu" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open project" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Save project" })).toHaveAttribute("title", "Save project · Not saved");
+      expect(screen.getByRole("button", { name: "Save project" }).getAttribute("title")).toMatch(/^Save project · Not saved · /);
       expect(screen.queryByText("Untitled")).not.toBeInTheDocument();
       expect(screen.queryByText("Not saved")).not.toBeInTheDocument();
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -162,7 +164,7 @@ describe("FloatingMenu", () => {
       useState(configuredState({ lastSavedAt: new Date(2024, 0, 1, 15, 42).getTime(), hasUnsavedChanges: true }));
       render(<FloatingMenu />);
       expect(screen.getByRole("button", { name: "Save project" }).getAttribute("title")).toMatch(
-        /^Save project · Unsaved · last saved /
+        /^Save project · Unsaved · last saved .* · (⌘S|Ctrl\+S)$/
       );
     });
 
@@ -173,6 +175,7 @@ describe("FloatingMenu", () => {
       expect(save).toHaveAttribute("title", "Saving...");
       expect(save).toBeDisabled();
       expect(save.querySelector(".bg-red-500")).not.toBeInTheDocument();
+      expect(screen.getByTestId("saving-dot")).toBeInTheDocument();
     });
 
     it("shows the unsaved dot only when a configured project has changes", () => {
@@ -203,14 +206,29 @@ describe("FloatingMenu", () => {
       useState(configuredState());
       render(<FloatingMenu />);
       fireEvent.click(screen.getByRole("button", { name: "Save project" }));
-      expect(mockSaveToFile).toHaveBeenCalledTimes(1);
+      expect(mockSaveToFile).toHaveBeenCalledExactlyOnceWith({ reason: "manual" });
     });
 
-    it("opens settings when the project has a name but no save location", () => {
+    it("asks for a name and location when the project has a name but no save location", () => {
       useState(configuredState({ saveDirectoryPath: "" }));
       render(<FloatingMenu />);
-      fireEvent.click(screen.getByRole("button", { name: "Configure save location" }));
-      expect(screen.getByTestId("project-setup-modal")).toHaveAttribute("data-mode", "settings");
+      fireEvent.click(screen.getByRole("button", { name: "Save project" }));
+      expect(screen.getByTestId("project-setup-modal")).toHaveAttribute("data-mode", "new");
+      expect(mockSaveToFile).not.toHaveBeenCalled();
+    });
+
+    it("saves when a save is requested from elsewhere (Cmd/Ctrl+S, the desktop's File › Save)", () => {
+      useState(configuredState());
+      render(<FloatingMenu />);
+      act(() => useSaveRequestStore.getState().requestSave("shortcut"));
+      expect(mockSaveToFile).toHaveBeenCalledExactlyOnceWith({ reason: "manual" });
+      expect(useSaveRequestStore.getState().request).toBeNull();
+    });
+
+    it("a requested save on an unsaved workflow opens the new-project dialog", () => {
+      render(<FloatingMenu />);
+      act(() => useSaveRequestStore.getState().requestSave("desktop"));
+      expect(screen.getByTestId("project-setup-modal")).toHaveAttribute("data-mode", "new");
       expect(mockSaveToFile).not.toHaveBeenCalled();
     });
   });
