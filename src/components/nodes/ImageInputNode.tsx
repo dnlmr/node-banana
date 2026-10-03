@@ -7,6 +7,7 @@ import { useCommentNavigation } from "@/hooks/useCommentNavigation";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { ImageInputNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
+import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
 import { Download, Upload, X } from "lucide-react";
@@ -21,6 +22,7 @@ export function ImageInputNode({ id, data, selected }: NodeProps<ImageInputNodeT
   const adaptiveImage = useAdaptiveImageSrc(nodeData.image, id);
   useCommentNavigation(id);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const { beginRequest, cancelRequest } = useNodeMediaRequest();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
@@ -39,11 +41,14 @@ export function ImageInputNode({ id, data, selected }: NodeProps<ImageInputNodeT
         return;
       }
 
+      const isCurrent = beginRequest();
       const reader = new FileReader();
       reader.onload = (event) => {
+        if (!isCurrent()) return;
         const base64 = event.target?.result as string;
         const img = new Image();
         img.onload = () => {
+          if (!isCurrent()) return;
           updateNodeData(id, {
             image: base64,
             imageRef: undefined,
@@ -55,7 +60,7 @@ export function ImageInputNode({ id, data, selected }: NodeProps<ImageInputNodeT
       };
       reader.readAsDataURL(file);
     },
-    [id, updateNodeData]
+    [id, updateNodeData, beginRequest]
   );
 
   const handleDrop = useCallback(
@@ -82,13 +87,14 @@ export function ImageInputNode({ id, data, selected }: NodeProps<ImageInputNodeT
   }, []);
 
   const handleRemove = useCallback(() => {
+    cancelRequest();
     updateNodeData(id, {
       image: null,
       imageRef: undefined,
       filename: null,
       dimensions: null,
     });
-  }, [id, updateNodeData]);
+  }, [id, updateNodeData, cancelRequest]);
 
   // The clip follows the image: stored dimensions first, then whatever loads.
   const dims = nodeData.dimensions;

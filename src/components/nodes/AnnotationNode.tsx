@@ -7,6 +7,7 @@ import { useAnnotationStore } from "@/store/annotationStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { AnnotationNodeData } from "@/types";
 import { useAdaptiveImageSrc } from "@/hooks/useAdaptiveImageSrc";
+import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, SummaryValues, type SocketSpec } from "./ui";
 import { Download, Plus, X } from "lucide-react";
@@ -20,6 +21,7 @@ export function AnnotationNode({ id, data, selected }: NodeProps<AnnotationNodeT
   const nodeData = data;
   const openModal = useAnnotationStore((state) => state.openModal);
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const { beginRequest, cancelRequest } = useNodeMediaRequest();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
@@ -38,8 +40,10 @@ export function AnnotationNode({ id, data, selected }: NodeProps<AnnotationNodeT
         return;
       }
 
+      const isCurrent = beginRequest();
       const reader = new FileReader();
       reader.onload = (event) => {
+        if (!isCurrent()) return;
         const base64 = event.target?.result as string;
         updateNodeData(id, {
           sourceImage: base64,
@@ -51,7 +55,7 @@ export function AnnotationNode({ id, data, selected }: NodeProps<AnnotationNodeT
       };
       reader.readAsDataURL(file);
     },
-    [id, updateNodeData]
+    [id, updateNodeData, beginRequest]
   );
 
   const handleDrop = useCallback(
@@ -87,6 +91,7 @@ export function AnnotationNode({ id, data, selected }: NodeProps<AnnotationNodeT
   }, [id, nodeData, openModal]);
 
   const handleRemove = useCallback(() => {
+    cancelRequest();
     updateNodeData(id, {
       sourceImage: null,
       sourceImageRef: undefined,
@@ -94,7 +99,7 @@ export function AnnotationNode({ id, data, selected }: NodeProps<AnnotationNodeT
       outputImageRef: undefined,
       annotations: [],
     });
-  }, [id, updateNodeData]);
+  }, [id, updateNodeData, cancelRequest]);
 
   const displayImage = nodeData.outputImage || nodeData.sourceImage;
   const adaptiveDisplayImage = useAdaptiveImageSrc(displayImage, id);
