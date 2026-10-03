@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Comfy Router models brought up to date** — FLUX 3 Image (up to 10 reference images, with search grounding), Ideogram 4.5 (source images and a mask), Seedream 5.0 Flash, Eleven v4 and Eleven v4 Turbo, and Grok Imagine Video 1.5 Lite. FLUX.1 Canny and Depth, which the Router no longer serves, are gone.
+
 ### Changed
 
 - **Node redesign** — Every node is now built from the same anatomy: a media card that shows images, video, audio and text at their native proportions with the sockets set into its border, a gap row for history navigation or a scrubber, and a detached controls card beneath with a summary row (provider, model, key values) that opens into a single column of tight fields. Selection, running and error outlines live on the media card only. Node height is derived from content; nodes are resized by width only, and double-clicking a resize edge restores the type's default width.

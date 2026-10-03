@@ -62,6 +62,22 @@ describe("Router request bodies", () => {
     expect(await bodyFor("bfl/flux-2-pro", {})).toEqual({ prompt: "a photo of a cat" });
   });
 
+  it("FLUX 3 Image: one images list of raw base64, settings beside it", async () => {
+    const body = await bodyFor(
+      "bfl/flux-3-image",
+      { images: [PNG_URL, JPG_URL], parameters: { aspect_ratio: "16:9", resolution: "2k" } },
+      ["aspect_ratio", "resolution"]
+    );
+    expect(body).toEqual({ prompt: "a photo of a cat", images: [PNG_B64, JPG_B64], aspect_ratio: "16:9", resolution: "2k" });
+    expect(await bodyFor("bfl/flux-3-image", {})).toEqual({ prompt: "a photo of a cat" });
+  });
+
+  it("Ideogram 4.5: source images and a mask as data URLs, one image", async () => {
+    const body = await bodyFor("ideogram/ideogram-4-5", { dynamicInputs: { image: PNG_URL, mask: JPG_URL } });
+    expect(body).toEqual({ prompt: "a photo of a cat", images: [PNG_URL], mask: JPG_URL, num_images: 1 });
+    expect(await bodyFor("ideogram/ideogram-4-5", {})).toEqual({ prompt: "a photo of a cat", num_images: 1 });
+  });
+
   it("named handles win over the images list, so a mask is never also a reference", async () => {
     const body = await bodyFor("openai/gpt-image-1.5", {
       images: [PNG_URL, JPG_URL],
@@ -156,6 +172,12 @@ describe("readRouterResult", () => {
       "Black Forest Labs: Content Moderated"
     );
     expect(() => readRouterResult(binding("bfl/flux-kontext-pro"), { status: "Ready", result: {} })).toThrow("No image in the FLUX Kontext Pro result");
+  });
+
+  it("Ideogram 4.5: the first image URL", () => {
+    expect(readRouterResult(binding("ideogram/ideogram-4-5"), { data: [{ url: "https://example.com/i.png", is_image_safe: true }] }).source).toBe(
+      "https://example.com/i.png"
+    );
   });
 
   it("GPT Image: b64_json as a png data URL", () => {
