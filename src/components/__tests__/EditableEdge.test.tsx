@@ -862,6 +862,33 @@ describe("EditableEdge when hidden", () => {
     expect(setStubGroupWidth).toHaveBeenCalledWith("node-2:target:image", expect.any(Number));
   });
 
+  it("folds an output's hidden connections that share a name into one pill", () => {
+    // One output feeding forty nodes, every connection named "Model": one pill at the output, not forty
+    const fanOut = Array.from({ length: 40 }, (_, i) => ({
+      id: `edge-${i}`, source: "node-1", sourceHandle: "image", target: `node-${i + 2}`, targetHandle: "image",
+      data: { hidden: true, createdAt: i, label: "Model" },
+    }));
+    const setStubGroupWidth = vi.fn();
+    mockUseWorkflowStore.mockImplementation((selector) =>
+      selector(createDefaultState({ edges: fanOut, setStubGroupWidth, setHoveredHandle: mockSetHoveredHandle }))
+    );
+    const pills = fanOut.filter((member) => {
+      const { unmount } = render(
+        <TestWrapper>
+          <EditableEdge {...createDefaultProps({ id: member.id, target: member.target, data: member.data })} />
+        </TestWrapper>
+      );
+      const pill = screen.queryByTestId("hidden-edge-stub-source");
+      if (pill) expect(pill).toHaveTextContent("Model");
+      // Each target has only this connection, so its own stub still shows the name
+      expect(screen.getByTestId("hidden-edge-stub-target")).toHaveTextContent("Model");
+      unmount();
+      return pill !== null;
+    });
+    expect(pills.map((e) => e.id)).toEqual(["edge-0"]);
+    expect(setStubGroupWidth).toHaveBeenCalledWith("node-1:source:image#Model", expect.any(Number));
+  });
+
   it("ghosts the line while a stub is hovered", () => {
     const { container } = renderHidden();
     expect(container.querySelector('[data-testid="hidden-edge-ghost"]')).toBeNull();
