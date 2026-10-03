@@ -15,9 +15,9 @@ Multi-provider support. Dynamic prompting features. Local, private, MIT, BYOK.
 
 <br />
 
-[**Documentation**](https://node-banana-docs.vercel.app/) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/89Nr6EKkTf)
+[**Download for Mac · Apple Silicon**](https://nodebanana.app/download/mac) &nbsp;&bull;&nbsp; [**Download for Windows · x64**](https://nodebanana.app/download/windows)
 
-Landing page source: [`site/`](site/)
+[Website](https://nodebanana.app/) &nbsp;&bull;&nbsp; [**Documentation**](https://node-banana-docs.vercel.app/) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/89Nr6EKkTf) &nbsp;&bull;&nbsp; [All releases](https://github.com/shrimbly/node-banana/releases)
 
 <br />
 
@@ -38,6 +38,9 @@ Node Banana is a node-based workflow editor for AI media generation. Drag nodes 
 
 | Feature | Description |
 |:--------|:------------|
+| **Desktop app** | A signed Mac app (Apple Silicon) and a Windows installer (x64) that update themselves. Keys are encrypted at rest; workflows and media stay on your disk |
+| **Agent** | A chat window that builds workflows, edits the canvas and changes node settings, running on your own Claude Code or Codex (ChatGPT) subscription through the vendor's CLI, never on API credits |
+| **Asset library** | Everything you generate is saved as it is made and browsable in the Assets view, with filters, favourites, tags, and the workflow that made it |
 | **Dynamic Prompting** | Build prompts with variables, LLM-powered text construction, and reusable prompt chains that adapt per run and per input |
 | **Prompt to Workflow** | Generate complete workflows from natural language descriptions |
 | **Visual Node Editor** | Drag-and-drop nodes onto an infinite canvas with pan and zoom |
@@ -49,7 +52,8 @@ Node Banana is a node-based workflow editor for AI media generation. Drag nodes 
 | **Text Generation** | Generate text using Google Gemini, OpenAI, or Anthropic models |
 | **Workflow Chaining** | Connect multiple nodes to create complex multi-step pipelines |
 | **Group Locking** | Lock node groups to skip them during execution |
-| **Save/Load** | Export and import workflows as JSON files |
+| **Batch runs** | Run a workflow or a group N times, with each output tagged by its run |
+| **Save/Load** | Cmd/Ctrl+S saves, autosave follows your edits, and workflows are portable JSON files |
 
 ## Supported Providers
 
@@ -65,12 +69,20 @@ Node Banana is a node-based workflow editor for AI media generation. Drag nodes 
 
 ## Getting Started
 
-### Prerequisites
+### Install the desktop app
+
+Download the installer for your platform from [nodebanana.app](https://nodebanana.app/): **Mac (Apple Silicon, macOS 13 or later)** as a signed and notarised DMG, or **Windows (x64, Windows 10 or later)** as an installer. The Windows build is not code-signed, so SmartScreen may warn on first run. The app keeps itself up to date from [GitHub Releases](https://github.com/shrimbly/node-banana/releases); every release also lists SHA-256 checksums for its installers.
+
+Then open Settings → Providers and paste the API keys for the providers you use. Node Banana calls those providers directly with your keys, and their usage is billed to you by them. Keys are stored encrypted in your OS profile; workflows and generated media are files in the Node Banana folder (Documents by default). See the [desktop guide](docs/desktop-preview.md) for data locations, logs, recovery and updates.
+
+### Run from source
+
+#### Prerequisites
 
 - Node.js 18+
 - npm
 
-### Quick Start
+#### Quick Start
 
 ```bash
 git clone https://github.com/shrimbly/node-banana.git
@@ -125,9 +137,7 @@ Run `npm run electron:smoke` to check the real desktop window, editor interactio
 local file save/load, native dialog bridge, settings persistence, and server
 shutdown using a temporary profile. It needs a graphical desktop (or Xvfb on
 Linux). Add `-- --production` to test an existing production build. These commands
-run from source. Use `npm run electron:package` for an unsigned Apple Silicon app, DMG and ZIP, and `npm run electron:acceptance` for packaged crash/recovery checks. See the [Mac preview guide](docs/desktop-preview.md) for installation, encrypted credentials and recovery details. Signing and automatic updates remain deferred for the preview. ComfyUI remains a separately installed or remote service.
-
-The [Node Banana 2.0 launch plan](docs/2.0-launch-plan.md) tracks the remaining Windows x64 and Mac Apple Silicon release work, installer polish, landing page and launch acceptance checks.
+run from source. Use `npm run electron:package` for an unsigned Apple Silicon app, DMG and ZIP (`--sign` signs and notarises it; on Windows it makes the installer), and `npm run electron:acceptance` for packaged crash/recovery checks. See the [desktop guide](docs/desktop-preview.md) for installation, encrypted credentials, recovery and how releases are cut. ComfyUI remains a separately installed or remote service.
 
 For macOS title-bar changes, also run
 `npm run electron:smoke -- --production --native-input` after building. This uses
@@ -234,6 +244,9 @@ The `/examples` directory contains example workflow files. To try them:
 npm test              # Watch mode
 npm run test:run      # Single run
 npm run test:coverage # With coverage report
+npm run electron:test # The desktop shell's own tests
+npm run lint          # ESLint (Next.js rules)
+npm run typecheck     # Type-check the app without its tests
 ```
 
 ## Contributing
