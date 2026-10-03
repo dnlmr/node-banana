@@ -64,8 +64,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(line("videoTrim")).toContain("set{startTime(s), endTime(s; 0=end)}");
     expect(line("array")).toContain('delimiter(default "*"');
     // Raised from 13k when every generator gained model + modelParameters and the model rule grew,
-    // then from 13.5k for the rule that keeps the user's stated preferences standing.
-    expect(prompt.length).toBeLessThan(14_000);
+    // then from 13.5k for the rule that keeps the user's stated preferences standing,
+    // then from 14k for the rule that makes "this style" mean the selection.
+    expect(prompt.length).toBeLessThan(14_250);
   });
 
   it("teaches what groups are and when to make them", () => {
