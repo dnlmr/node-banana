@@ -81,6 +81,13 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
+`npm run dev` and `npm start` (after `npm run build`) listen on `127.0.0.1`
+only, and the API answers Node Banana's own page, not other websites. To reach
+the app from another device, set `HOST=0.0.0.0` (for example
+`HOST=0.0.0.0 npm start`). Do that only on a trusted network or behind an
+authenticated proxy: the API reads and writes local workflow files and spends
+the provider keys in `.env.local`.
+
 ### Local Electron app
 
 Use Node.js 22.12 or newer for the Electron tooling. After `npm install`, launch

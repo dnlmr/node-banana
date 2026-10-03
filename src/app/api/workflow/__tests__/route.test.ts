@@ -22,6 +22,10 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 // The request guard is covered by src/app/api/__tests__/fileRoutesGuard.test.ts.
+vi.mock("@/lib/assets/server/fsutil", () => ({
+  atomicWriteFile: (...args: unknown[]) => mockWriteFile(...args),
+}));
+
 vi.mock("@/lib/assets/server/guard", () => ({ guardAssetRequest: vi.fn(() => null) }));
 
 import { POST, GET } from "../route";
@@ -78,7 +82,7 @@ describe("/api/workflow route", () => {
       expect(mockWriteFile).toHaveBeenCalledWith(
         "/test/dir/my-workflow.json",
         JSON.stringify(mockWorkflow, null, 2),
-        "utf-8"
+        { fsync: true }
       );
     });
 
@@ -206,7 +210,7 @@ describe("/api/workflow route", () => {
       expect(mockWriteFile).toHaveBeenCalledWith(
         "/nonexistent/dir/workflow.json",
         JSON.stringify(mockWorkflow, null, 2),
-        "utf-8"
+        { fsync: true }
       );
     });
 

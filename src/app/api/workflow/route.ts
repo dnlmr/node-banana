@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { atomicWriteFile } from "@/lib/assets/server/fsutil";
 import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { logger } from "@/utils/logger";
 import { validateWorkflowPath } from "@/utils/pathValidation";
@@ -118,9 +119,10 @@ export async function POST(request: NextRequest) {
     const safeName = filename.replace(/[^a-zA-Z0-9-_]/g, "_");
     const filePath = path.join(directoryPath, `${safeName}.json`);
 
-    // Write workflow JSON
+    // Write beside the file and rename over it, so a write that fails midway
+    // (a full disk) leaves the last good save rather than a truncated one
     const json = JSON.stringify(workflow, null, 2);
-    await fs.writeFile(filePath, json, "utf-8");
+    await atomicWriteFile(filePath, json, { fsync: true });
 
     logger.info('file.save', 'Workflow saved successfully', {
       filePath,

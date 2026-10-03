@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
+  // `next build` type-checks the app; the test files have their own
+  // (standalone `tsc`) baseline and are not part of the build.
+  typescript: { tsconfigPath: "tsconfig.build.json" },
 };
 
 export default nextConfig;

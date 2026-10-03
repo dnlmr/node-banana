@@ -250,6 +250,30 @@ describe("getConnectedInputsPure", () => {
     expect(result.dynamicInputs).toEqual({ image_url: "data:image/png;base64,a" });
   });
 
+  it.each([false, true])("keeps the prompt slot as the prompt when a negative prompt is connected after it (routed: %s)", (routed) => {
+    const nodes = [
+      makeNode("positive", "prompt", { prompt: "a mountain lake" }),
+      makeNode("negative", "prompt", { prompt: "blurry, low quality" }),
+      makeNode("router", "router"),
+      makeNode("gen", "generateVideo", {
+        inputSchema: [{ name: "prompt", type: "text" }, { name: "negative_prompt", type: "text" }],
+      }),
+    ];
+    const textEdge = (source: string, target: string, handle: string): WorkflowEdge => ({
+      ...makeEdge(source, target, handle), sourceHandle: "text",
+    });
+    const edges = [
+      ...(routed ? [textEdge("positive", "router", "text")] : []),
+      textEdge(routed ? "router" : "positive", "gen", "text-0"),
+      textEdge("negative", "gen", "text-1"),
+    ];
+
+    const result = getConnectedInputsPure("gen", nodes, edges);
+
+    expect(result.text).toBe("a mountain lake");
+    expect(result.dynamicInputs).toEqual({ prompt: "a mountain lake", negative_prompt: "blurry, low quality" });
+  });
+
   it("should populate dynamicInputs through a router passthrough (regression: router bypassed dynamicInputs → 422)", () => {
     const nodes = [
       makeNode("img", "imageInput", { image: "data:image/png;base64,a" }),
@@ -292,6 +316,53 @@ describe("getConnectedInputsPure", () => {
 
     expect(result.dynamicInputs).toEqual({ image_url: "data:image/png;base64,a" });
     expect(result.images).toEqual(["data:image/png;base64,a"]);
+  });
+
+  it.each(["router", "switch"])("keeps both video frame slots fed through converging %s branches", (branchType) => {
+    const image = "data:image/png;base64,frame";
+    const branchData = branchType === "switch"
+      ? { inputType: "image", switches: [{ id: "on", enabled: true }] }
+      : {};
+    const nodes = [
+      makeNode("image", "imageInput", { image }),
+      makeNode("shared", "router"),
+      makeNode("left", branchType, branchData),
+      makeNode("right", branchType, branchData),
+      makeNode("video", "generateVideo", {
+        inputSchema: [{ name: "start_frame", type: "image" }, { name: "end_frame", type: "image" }],
+      }),
+    ];
+    const sourceHandle = branchType === "switch" ? "on" : "image";
+    const edges = [
+      makeEdge("image", "shared"),
+      makeEdge("shared", "left"),
+      makeEdge("shared", "right"),
+      { ...makeEdge("left", "video", "image-0"), sourceHandle },
+      { ...makeEdge("right", "video", "image-1"), sourceHandle },
+    ];
+
+    const result = getConnectedInputsPure("video", nodes, edges);
+
+    expect(result.dynamicInputs).toEqual({ start_frame: image, end_frame: image });
+    expect(result.images).toEqual([image, image]);
+  });
+
+  it("still stops at a router cycle and keeps the input that feeds it", () => {
+    const image = "data:image/png;base64,frame";
+    const nodes = [
+      makeNode("image", "imageInput", { image }),
+      makeNode("left", "router"),
+      makeNode("right", "router"),
+      makeNode("gen", "nanoBanana"),
+    ];
+    const edges = [
+      makeEdge("left", "right"),
+      makeEdge("right", "left"),
+      makeEdge("image", "left"),
+      makeEdge("right", "gen"),
+    ];
+
+    expect(getConnectedInputsPure("gen", nodes, edges).images).toEqual([image]);
   });
 
   it("should map a connected video into dynamicInputs and videos via schema", () => {

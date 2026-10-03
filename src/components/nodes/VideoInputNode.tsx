@@ -6,6 +6,7 @@ import { NodeShell } from "./NodeShell";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { VideoInputNodeData } from "@/types";
 import { useVideoBlobUrl } from "@/hooks/useVideoBlobUrl";
+import { useNodeMediaRequest } from "@/hooks/useNodeMediaRequest";
 import { useVideoAutoplay } from "@/hooks/useVideoAutoplay";
 import { downloadMedia } from "@/utils/downloadMedia";
 import { ControlsCard, ScrubRow, SummaryValues, formatTime, type SocketSpec } from "./ui";
@@ -23,6 +24,7 @@ const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "video", type: "video", label: "Vide
 export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeType>) {
   const nodeData = data;
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
+  const { beginRequest, cancelRequest } = useNodeMediaRequest();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loadedAspect, setLoadedAspect] = useState<{ src: string; aspect: number } | null>(null);
 
@@ -46,15 +48,23 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
       }
 
       // Extract metadata using a temporary video element pointing at the original file
+      const isCurrent = beginRequest();
       const metadataUrl = URL.createObjectURL(file);
       const video = document.createElement("video");
       video.preload = "metadata";
 
       const reader = new FileReader();
+      reader.onerror = reader.onabort = () => URL.revokeObjectURL(metadataUrl);
       reader.onload = (event) => {
+        if (!isCurrent()) {
+          URL.revokeObjectURL(metadataUrl);
+          return;
+        }
         const base64 = event.target?.result as string;
 
         video.onloadedmetadata = () => {
+          URL.revokeObjectURL(metadataUrl);
+          if (!isCurrent()) return;
           updateNodeData(id, {
             video: base64,
             videoRef: undefined,
@@ -63,9 +73,10 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
             duration: video.duration,
             dimensions: { width: video.videoWidth, height: video.videoHeight },
           });
-          URL.revokeObjectURL(metadataUrl);
         };
         video.onerror = () => {
+          URL.revokeObjectURL(metadataUrl);
+          if (!isCurrent()) return;
           // Still load the file even if metadata extraction fails
           updateNodeData(id, {
             video: base64,
@@ -75,13 +86,12 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
             duration: null,
             dimensions: null,
           });
-          URL.revokeObjectURL(metadataUrl);
         };
         video.src = metadataUrl;
       };
       reader.readAsDataURL(file);
     },
-    [id, updateNodeData]
+    [id, updateNodeData, beginRequest]
   );
 
   const handleDrop = useCallback(
@@ -108,6 +118,7 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
   }, []);
 
   const handleRemove = useCallback(() => {
+    cancelRequest();
     updateNodeData(id, {
       video: null,
       videoRef: undefined,
@@ -116,7 +127,7 @@ export function VideoInputNode({ id, data, selected }: NodeProps<VideoInputNodeT
       dimensions: null,
       format: null,
     });
-  }, [id, updateNodeData]);
+  }, [id, updateNodeData, cancelRequest]);
 
   const dims = nodeData.dimensions;
   const storedAspect = dims && dims.width > 0 && dims.height > 0 ? dims.width / dims.height : null;

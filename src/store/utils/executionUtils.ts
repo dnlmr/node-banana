@@ -270,10 +270,8 @@ export function clearNodeImageRefs(nodes: WorkflowNode[]): WorkflowNode[] {
   return nodes.map(node => {
     const data = { ...node.data } as Record<string, unknown>;
 
-    // Revoke blob URLs for video/3D outputs before clearing
-    revokeBlobUrl(data.outputVideo as string | undefined);
-    revokeBlobUrl(data.glbUrl as string | undefined);
-
+    // Media URLs stay live: the save that follows reads their blobs to write
+    // them into the new folder, and the canvas keeps showing them.
     // Clear all ref fields regardless of node type (match any key ending in Ref or Refs)
     for (const key of Object.keys(data)) {
       if (/Refs?$/.test(key)) {

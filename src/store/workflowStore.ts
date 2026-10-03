@@ -262,6 +262,8 @@ export interface WorkflowFile {
 interface ClipboardData {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
+  /** The folder the copied nodes' file refs are relative to. */
+  imageRefBasePath?: string | null;
 }
 
 /** A run as the asset library knows it, and the canvas it started on. */
@@ -586,6 +588,10 @@ function syncIdCounters(nodes: WorkflowNode[], groups: Record<string, NodeGroup>
 }
 let autoSave: AutoSave | null = null;
 let autoSaveWindowListeners: (() => void) | null = null;
+// The save in flight, if any. Saves run one at a time: a manual save that
+// overlapped an autosave could finish first and be overwritten on disk by the
+// older snapshot, or have its isSaving cleared from under it.
+let activeSave: Promise<void> | null = null;
 
 // Undo/redo state (module-level, not in Zustand to avoid serialization)
 const undoManager = new UndoManager();
@@ -624,6 +630,20 @@ function abortNodeRuns(state: WorkflowStore, reason: string): void {
 // How the latest executeWorkflow / executeSelectedNodes went, for runBatch:
 // the serial moves when a run starts, `failed` is set when it ends in error.
 const lastRun = { serial: 0, failed: false };
+
+// Counts every run started (workflow, selection, single node), so the
+// writes of a stopped run can tell whether a newer run has begun since.
+let runStarts = 0;
+
+/**
+ * Whether a run started with `controller` may still set the run state
+ * (isRunning, the controller, the current nodes): it is the current run, or
+ * it was stopped and nothing has started since. A stopped run that finishes
+ * late must not unlock, or end, the run that replaced it.
+ */
+function ownsRunState(state: WorkflowStore, controller: AbortController): boolean {
+  return state._abortController === controller || (state._abortController === null && !state.isRunning);
+}
 
 // Track pending save-generation syncs to ensure IDs are resolved before workflow save
 const pendingImageSyncs = new Map<string, Promise<void>>();
@@ -867,34 +887,53 @@ function syncUndoFlags(set: (partial: Partial<WorkflowStore>) => void): void {
 // unbounded across a session (each item can be 1-2MB).
 const MAX_GLOBAL_IMAGE_HISTORY = 50;
 
-// Scan a node's data for blob: object URLs and revoke them to free the
-// backing Blob memory. Used when nodes are permanently discarded (workflow
-// clear/reload) where the undo history that referenced them is also cleared.
-function revokeNodeBlobUrls(nodes: WorkflowNode[]): void {
+// Every blob: object URL a set of nodes holds.
+function nodeBlobUrls(nodes: readonly WorkflowNode[]): Set<string> {
+  const urls = new Set<string>();
   // Recursively walk strings, arrays, and nested plain objects so blob: URLs
-  // held in gallery/video arrays or nested media metadata are revoked too.
+  // held in gallery/video arrays or nested media metadata are found too.
   // The depth cap guards against cycles / pathologically deep structures.
-  const revokeDeep = (value: unknown, depth: number): void => {
+  const visitDeep = (value: unknown, depth: number): void => {
     if (depth > 8) return;
     if (typeof value === "string") {
-      if (value.startsWith("blob:")) revokeBlobUrl(value);
+      if (value.startsWith("blob:")) urls.add(value);
       return;
     }
     if (Array.isArray(value)) {
-      for (const item of value) revokeDeep(item, depth + 1);
+      for (const item of value) visitDeep(item, depth + 1);
       return;
     }
     if (value && typeof value === "object") {
       for (const item of Object.values(value as Record<string, unknown>)) {
-        revokeDeep(item, depth + 1);
+        visitDeep(item, depth + 1);
       }
     }
   };
-  for (const node of nodes) {
-    const data = node.data as Record<string, unknown> | undefined;
-    if (!data) continue;
-    revokeDeep(data, 0);
+  for (const node of nodes) visitDeep(node.data, 0);
+  return urls;
+}
+
+// Revoke the blob: object URLs of nodes being discarded for good (workflow
+// clear/reload, a closed tab) where the undo history that referenced them is
+// also cleared, unless `retainedNodes` (still alive elsewhere) hold them too.
+function revokeNodeBlobUrls(nodes: WorkflowNode[], retainedNodes: readonly WorkflowNode[] = []): void {
+  const retained = nodeBlobUrls(retainedNodes);
+  for (const url of nodeBlobUrls(nodes)) {
+    if (!retained.has(url)) revokeBlobUrl(url);
   }
+}
+
+/**
+ * Nodes that keep their media URLs alive when a graph is discarded: the
+ * clipboard, whose copies share URL strings with their source, and every
+ * other tab, which may hold pasted copies.
+ */
+function retainedMediaNodes(state: WorkflowStore, discardedTabId = state.activeTabId): WorkflowNode[] {
+  return [
+    ...(state.clipboard?.nodes ?? []),
+    ...(state.activeTabId !== discardedTabId ? state.nodes : []),
+    ...state.tabs.filter((tab) => tab.id !== discardedTabId).flatMap((tab) => tab.snapshot?.nodes ?? []),
+  ];
 }
 
 /**
@@ -1714,7 +1753,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const clonedNodes = clonePreservingStrings(selectedNodes) as WorkflowNode[];
     const clonedEdges = clonePreservingStrings(connectedEdges) as WorkflowEdge[];
 
-    set({ clipboard: { nodes: clonedNodes, edges: clonedEdges } });
+    set({ clipboard: { nodes: clonedNodes, edges: clonedEdges, imageRefBasePath: get().imageRefBasePath } });
   },
 
   pasteNodes: (offset: XYPosition = { x: 50, y: 50 }) => {
@@ -1733,9 +1772,15 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       idMapping.set(node.id, newId);
     });
 
+    // File refs are relative to the folder they were copied from. Pasted into
+    // another one, the media is written again there rather than pointing at
+    // files this folder does not have.
+    const clipboardNodes = clipboard.imageRefBasePath && clipboard.imageRefBasePath === get().imageRefBasePath
+      ? clipboard.nodes
+      : clearNodeImageRefs(clipboard.nodes);
     // Create new nodes with updated IDs and offset positions
     const pastedCellMemberIds = new Set<string>();
-    const newNodes: WorkflowNode[] = clipboard.nodes.map((node) => {
+    const newNodes: WorkflowNode[] = clipboardNodes.map((node) => {
       let data = clonePreservingStrings(node.data) as WorkflowNodeData;
 
       // A pasted splitGrid must not keep driving the original's cell nodes:
@@ -2197,17 +2242,25 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     return nodeReadinessPure(nodes, edges);
   },
 
-  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null): NodeExecutionContext => ({
+  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null): NodeExecutionContext => {
+    // An executor writes to the canvas it started on, and only until a newer
+    // run takes over after its own was stopped. Stopped with nothing after
+    // it, it may still put its node back to idle.
+    const generation = get().canvasGeneration;
+    const startedAfter = runStarts;
+    const isCurrent = () =>
+      get().canvasGeneration === generation && !(signal?.aborted && runStarts !== startedAfter);
+    return {
     node,
     getConnectedInputs: get().getConnectedInputs,
-    updateNodeData: get().updateNodeData,
+    updateNodeData: (id, data) => { if (isCurrent()) get().updateNodeData(id, data); },
     getFreshNode: (id: string) => get().nodes.find((n) => n.id === id),
     getEdges: () => get().edges,
     getNodes: () => get().nodes,
     signal,
     providerSettings: get().providerSettings,
-    addIncurredCost: (cost: number) => get().addIncurredCost(cost),
-    addToGlobalHistory: (item) => get().addToGlobalHistory(item),
+    addIncurredCost: (cost: number) => { if (isCurrent()) get().addIncurredCost(cost); },
+    addToGlobalHistory: (item) => { if (isCurrent()) get().addToGlobalHistory(item); },
     batch: batchTag(get().batch),
     generationsPath: get().generationsPath,
     saveDirectoryPath: get().saveDirectoryPath,
@@ -2220,6 +2273,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       });
     },
     appendOutputGalleryImage: (targetId: string, image: string) => {
+      if (!isCurrent()) return;
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
@@ -2230,6 +2284,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }));
     },
     appendOutputGalleryVideo: (targetId: string, video: string) => {
+      if (!isCurrent()) return;
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
@@ -2239,10 +2294,22 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         hasUnsavedChanges: true,
       }));
     },
-    materializeSplitGridCells: (nodeId: string) => get().materializeSplitGridCells(nodeId),
+    materializeSplitGridCells: (nodeId: string) => isCurrent() && get().materializeSplitGridCells(nodeId),
+    releaseMediaUrl: (url) => {
+      if (!isCurrent() || !url?.startsWith("blob:")) return;
+      const state = get();
+      const owners = nodeBlobUrls([
+        ...state.nodes,
+        ...retainedMediaNodes(state),
+        ...undoManager.retainedNodes,
+        ...(pendingDataSnapshot?.nodes ?? []),
+      ]);
+      if (!owners.has(url)) revokeBlobUrl(url);
+    },
     ...assetRecordingFor(assetRun !== undefined ? assetRun : get()._currentRun),
     get: get as () => unknown,
-  }),
+    };
+  },
 
   executeWorkflow: async (startFromNodeId?: string) => {
     if (!canStartExecution(get().desktopConnected)) return;
@@ -2283,6 +2350,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     };
     const assetRun = openAssetRun(get);
     set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController, _currentRun: assetRun });
+    runStarts += 1;
     lastRun.serial += 1;
     lastRun.failed = false;
     // Nodes that had nothing to work with, named for the end-of-run summary
@@ -2393,7 +2461,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       } catch (error) {
         // Nothing to work with is not a failure: the node and what depends on
         // it are skipped, and the rest of the graph keeps going
-        if (!isMissingInputError(error)) throw error;
+        if (!isMissingInputError(error) || !ownsRunState(get(), abortController)) throw error;
         set({ skippedNodeIds: new Set([...get().skippedNodeIds, node.id]) });
         unreadyNodes.push(String(nodeData.customTitle || node.type));
         logger.info('node.execution', 'Node skipped (missing input)', {
@@ -2523,9 +2591,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: forwardDeps,
         maxConcurrent: maxConcurrentCalls,
         signal: abortController.signal,
-        isRunning: () => get().isRunning,
+        isRunning: () => get().isRunning && get()._abortController === abortController,
         getNode: (id) => get().nodes.find((n) => n.id === id),
-        setCurrentNodeIds: (ids) => set({ currentNodeIds: ids }),
+        setCurrentNodeIds: (ids) => {
+          if (get()._abortController === abortController) set({ currentNodeIds: ids });
+        },
         runNode: (node, signal) => executeSingleNode(node, signal),
         onNodeError: (node, err) => {
           logger.error('workflow.error', 'Node execution failed', {
@@ -2664,6 +2734,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
 
+      // A newer run owns the canvas now: its state, skips and log session stay
+      if (!ownsRunState(get(), abortController)) return;
       // Reset skipped nodes' status back to idle
       resetSkippedNodes();
 
@@ -2672,6 +2744,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       saveLogSession();
       await logger.endSession();
     } catch (error) {
+      if (!ownsRunState(get(), abortController)) return;
       // Handle AbortError gracefully (user cancelled)
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('workflow.end', 'Workflow execution cancelled by user');
@@ -2876,6 +2949,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const firstNodeRun = nodeRuns.size === 0;
     nodeRuns.set(nodeId, { controller: abortController, assetRun });
     set({ isRunning: true, currentNodeIds: [...get().currentNodeIds.filter((id) => id !== nodeId), nodeId] });
+    runStarts += 1;
 
     // The last node run to end clears the running state and the log session
     const finish = async () => {
@@ -2962,9 +3036,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const { edges: currentEdges } = get();
       const downstreamEdges = currentEdges.filter(e => e.source === nodeId);
       for (const edge of downstreamEdges) {
+        if (abortController.signal.aborted) break;
         const targetNode = get().nodes.find(n => n.id === edge.target);
         if (!targetNode) continue;
-        const targetCtx = get()._buildExecutionContext(targetNode, undefined, assetRun);
+        const targetCtx = get()._buildExecutionContext(targetNode, abortController.signal, assetRun);
         switch (targetNode.type) {
           case "glbViewer":
             await executeGlbViewer(targetCtx);
@@ -2987,6 +3062,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       logger.error('node.error', 'Node regeneration failed', {
         nodeId,
       }, error instanceof Error ? error : undefined);
+      // Stopped and perhaps started again: the node is not this run's to mark
+      if (nodeRuns.get(nodeId)?.controller !== abortController) return;
       updateNodeData(nodeId, {
         status: "error",
         error: error instanceof Error ? error.message : "Regeneration failed",
@@ -3032,6 +3109,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const abortController = new AbortController();
     const assetRun = openAssetRun(get);
     set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController, _currentRun: assetRun });
+    runStarts += 1;
     lastRun.serial += 1;
     lastRun.failed = false;
 
@@ -3176,9 +3254,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: selectedEdges,
         maxConcurrent: maxConcurrentCalls,
         signal: abortController.signal,
-        isRunning: () => get().isRunning,
+        isRunning: () => get().isRunning && get()._abortController === abortController,
         getNode: (id) => nodesToExecute.find((n) => n.id === id),
-        setCurrentNodeIds: (ids) => set({ currentNodeIds: ids }),
+        setCurrentNodeIds: (ids) => {
+          if (get()._abortController === abortController) set({ currentNodeIds: ids });
+        },
         runNode: (node, signal) => executeNode(node, signal),
         onNodeError: (node, err) => {
           logger.error('node.error', 'Node execution failed in batch', {
@@ -3197,9 +3277,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           const downstreamEdges = currentEdges.filter(e => e.source === nodeId);
           for (const edge of downstreamEdges) {
             if (selectedSet.has(edge.target) || propagated.has(edge.target)) continue;
+            if (abortController.signal.aborted) break;
             const targetNode = get().nodes.find(n => n.id === edge.target);
             if (!targetNode) continue;
-            const targetCtx = get()._buildExecutionContext(targetNode);
+            const targetCtx = get()._buildExecutionContext(targetNode, abortController.signal);
             switch (targetNode.type) {
               case "glbViewer":
                 await executeGlbViewer(targetCtx);
@@ -3222,12 +3303,14 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
 
+      if (!ownsRunState(get(), abortController)) return;
       logger.info('node.execution', 'Selected nodes execution completed successfully');
       set({ isRunning: false, currentNodeIds: [], _abortController: null });
 
       saveLogSession();
       await logger.endSession();
     } catch (error) {
+      if (!ownsRunState(get(), abortController)) return;
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('node.execution', 'Selected nodes execution cancelled by user');
       } else {
@@ -3280,10 +3363,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const inflight = get()._abortController;
     if (inflight) inflight.abort("workflow-replaced");
     abortNodeRuns(get(), "workflow-replaced");
-    set({ isRunning: false, pausedAtNodeId: null, currentNodeIds: [], _abortController: null });
-
-    // Keep generated ids clear of the loaded graph's ids
-    syncIdCounters(workflow.nodes, workflow.groups);
+    // The canvas is being replaced from now on, not only once the media has
+    // loaded: a save or another load that finishes meanwhile must see it
+    const generation = get().canvasGeneration + 1;
+    set({ isRunning: false, pausedAtNodeId: null, currentNodeIds: [], _abortController: null, canvasGeneration: generation });
 
     // Migrate legacy nanoBanana nodes: derive selectedModel from model field if missing
     workflow.nodes = workflow.nodes.map((node) => {
@@ -3376,12 +3459,22 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }
     }
 
+    // A newer load, a clear or a tab switch took the canvas while the media
+    // loaded. This graph must not replace that one (or another tab's unsaved work).
+    if (get().canvasGeneration !== generation) return;
+    // The outgoing graph stayed on screen while the media loaded, so a run
+    // may have started on it since. That run goes with its graph.
+    get()._abortController?.abort("workflow-replaced");
+    abortNodeRuns(get(), "workflow-replaced");
+    // Keep generated ids clear of the loaded graph's ids
+    syncIdCounters(hydratedWorkflow.nodes, hydratedWorkflow.groups);
+
     // Load cost data for this workflow
     const costData = workflow.id ? loadWorkflowCostData(workflow.id) : null;
 
     // Revoke any blob: object URLs held by the outgoing nodes before they are
     // replaced. Safe because the undo history that referenced them is cleared below.
-    revokeNodeBlobUrls(get().nodes);
+    revokeNodeBlobUrls(get().nodes, [...retainedMediaNodes(get()), ...hydratedWorkflow.nodes]);
 
     set({
       // Clear selected state - selection should not be persisted across sessions
@@ -3410,6 +3503,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       batch: null,
       isRunning: false,
       currentNodeIds: [],
+      _abortController: null,
       // Restore workflow ID and paths from localStorage if available
       workflowId: workflow.id || null,
       workflowName: workflow.name,
@@ -3538,7 +3632,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     if (tabs.length === 1) {
       // The last tab never goes away; it just becomes a fresh one
-      revokeNodeBlobUrls(get().nodes);
+      revokeNodeBlobUrls(get().nodes, retainedMediaNodes(get()));
       const id = createTabId();
       set({ tabs: [{ id, snapshot: null }], activeTabId: id });
       applyTabSnapshot(set, get, empty());
@@ -3547,7 +3641,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     if (tabId !== activeTabId) {
       // A parked tab: drop it, and the media object URLs only it referenced
-      if (closing.snapshot) revokeNodeBlobUrls(closing.snapshot.nodes);
+      if (closing.snapshot) revokeNodeBlobUrls(closing.snapshot.nodes, retainedMediaNodes(get(), tabId));
       set({ tabs: tabs.filter((tab) => tab.id !== tabId) });
       return true;
     }
@@ -3556,7 +3650,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const next = tabs.find((tab) => tab.id === nextId);
     if (!nextId || !next) return false;
     // The live graph is being discarded, so its media object URLs go with it
-    revokeNodeBlobUrls(get().nodes);
+    revokeNodeBlobUrls(get().nodes, retainedMediaNodes(get()));
     const remaining = tabs.filter((tab) => tab.id !== tabId).map((tab) => (tab.id === nextId ? { ...tab, snapshot: null } : tab));
     set({ tabs: remaining, activeTabId: nextId });
     applyTabSnapshot(set, get, next.snapshot ?? empty());
@@ -3578,7 +3672,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     // Revoke any blob: object URLs held by the outgoing nodes before they are
     // discarded. Safe here because the undo history that also referenced them
     // is cleared below.
-    revokeNodeBlobUrls(get().nodes);
+    revokeNodeBlobUrls(get().nodes, retainedMediaNodes(get()));
     set({
       nodes: [],
       edges: [],
@@ -3742,6 +3836,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   saveToFile: async (options = {}) => {
+    while (activeSave) await activeSave;
     const reason = options.reason ?? "manual";
     let {
       nodes,
@@ -3761,12 +3856,19 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       return false;
     }
 
+    // The canvas this save belongs to. If another replaces it meanwhile (a
+    // load, a clear, a tab switch), the save must not touch the new one.
+    const generation = get().canvasGeneration;
+    const replaced = () => get().canvasGeneration !== generation;
+    let finishSave!: () => void;
+    activeSave = new Promise((resolve) => (finishSave = resolve));
     set({ isSaving: true });
 
     try {
       // Wait for any pending image/video saves to complete so their IDs are synced
       // This prevents saving workflows with temporary IDs that don't match saved files
       await waitForPendingImageSyncs();
+      if (replaced()) return false;
 
       // Re-fetch nodes after waiting, as imageHistory IDs may have been updated
       let currentNodes = get().nodes;
@@ -3836,6 +3938,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       if (useExternalImageStorage) {
         workflow = await externalizeWorkflowMedia(workflow, saveDirectoryPath);
       }
+      if (replaced()) return false;
 
       const response = await fetch("/api/workflow", {
         method: "POST",
@@ -3848,6 +3951,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       });
 
       const result = await response.json();
+      if (replaced()) return false;
 
       if (result.success) {
         const timestamp = Date.now();
@@ -3877,6 +3981,15 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             'capturedImageRef', 'videoRef', 'outputVideoRef', 'audioFileRef', 'outputAudioRef',
           ] as const;
           const ARRAY_REF_FIELDS = ['inputImageRefs', 'imageRefs', 'videoRefs'] as const;
+          // The media field each ref describes
+          const MEDIA_FIELD_BY_REF: Record<string, string> = {
+            imageRef: 'image', sourceImageRef: 'sourceImage', outputImageRef: 'outputImage',
+            imageARef: 'imageA', imageBRef: 'imageB', capturedImageRef: 'capturedImage',
+            videoRef: 'video', outputVideoRef: 'outputVideo', audioFileRef: 'audioFile',
+            outputAudioRef: 'outputAudio', inputImageRefs: 'inputImages',
+            imageRefs: 'images', videoRefs: 'videos',
+          };
+          const savedNodesById = new Map(savedNodesSnapshot.map((node) => [node.id, node]));
 
           // Index the externalized refs by node id (not array position) so the
           // merge is robust to nodes added/removed/reordered during the save.
@@ -3890,15 +4003,23 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           // returned untouched.
           const nodesWithRefs = freshNodes.map((node) => {
             const extData = extRefsById.get(node.id);
-            if (!extData) return node;
+            const savedNode = savedNodesById.get(node.id);
+            if (!extData || !savedNode || savedNode.type !== node.type) return node;
 
             const mergedData = { ...node.data } as Record<string, unknown>;
+            const savedData = savedNode.data as Record<string, unknown>;
+            // A ref names the file written for the media this save read. Media
+            // replaced since then must keep no ref, or the next save would point
+            // at the old file and the replacement would be lost on reopening.
+            const unchanged = (key: string) =>
+              mergedData[MEDIA_FIELD_BY_REF[key]] === savedData[MEDIA_FIELD_BY_REF[key]] &&
+              mergedData[key] === savedData[key];
             let touched = false;
             for (const key of STRING_REF_FIELDS) {
-              if (typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
             }
             for (const key of ARRAY_REF_FIELDS) {
-              if (Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
             }
             return touched ? ({ ...node, data: mergedData as WorkflowNodeData } as WorkflowNode) : node;
           });
@@ -3946,6 +4067,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       return false;
     } finally {
       set({ isSaving: false });
+      activeSave = null;
+      finishSave();
     }
   },
 
@@ -3954,6 +4077,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (!trimmedName) {
       return false;
     }
+    // Change the identity only once a save in flight has finished with the old one
+    while (activeSave) await activeSave;
 
     const { saveDirectoryPath, workflowId: prevId, workflowName: prevName, hasUnsavedChanges: prevUnsaved } = get();
     if (!saveDirectoryPath) {
@@ -3968,9 +4093,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       hasUnsavedChanges: true,
     });
 
+    const generation = get().canvasGeneration;
     const success = await get().saveToFile();
-    if (!success) {
-      // Rollback to previous identity on failure
+    if (!success && get().canvasGeneration === generation && get().workflowId === newWorkflowId) {
+      // Rollback to previous identity on failure (never onto a canvas that replaced it)
       set({ workflowId: prevId, workflowName: prevName, hasUnsavedChanges: prevUnsaved });
     }
     return success;
