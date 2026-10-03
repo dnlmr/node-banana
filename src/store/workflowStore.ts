@@ -3838,19 +3838,19 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   saveToFile: async (options = {}) => {
     while (activeSave) await activeSave;
     const reason = options.reason ?? "manual";
-    let {
+    const {
       nodes,
       edges,
       edgeStyle,
       edgeAppearance,
       groups,
       runCount,
-      workflowId,
       workflowName,
       saveDirectoryPath,
       useExternalImageStorage,
       imageRefBasePath,
     } = get();
+    let { workflowId } = get();
 
     if (!workflowId || !workflowName || !saveDirectoryPath) {
       return false;

@@ -465,9 +465,8 @@ export interface RemoveBackgroundNodeData extends BaseNodeData {
 /**
  * Router node - pure passthrough routing node with dynamic multi-type handles
  */
-export interface RouterNodeData extends BaseNodeData {
-  // No internal state - all routing is derived from edge connections
-}
+// No internal state: all routing is derived from edge connections.
+export type RouterNodeData = BaseNodeData;
 
 /**
  * Switch node - toggle-controlled routing with named outputs

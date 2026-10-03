@@ -54,11 +54,8 @@ export async function executeLlmGenerate(
   const nodeData = node.data as LLMGenerateNodeData;
 
   // Determine images and text
-  let images: string[];
-  let text: string | null;
-
-  images = inputs.images.length > 0 ? inputs.images : nodeData.inputImages;
-  text = inputs.text ?? nodeData.inputPrompt;
+  const images: string[] = inputs.images.length > 0 ? inputs.images : nodeData.inputImages;
+  const text: string | null = inputs.text ?? nodeData.inputPrompt;
 
   if (!text) {
     updateNodeData(node.id, {

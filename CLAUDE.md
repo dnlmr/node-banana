@@ -8,7 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev      # Start Next.js dev server at http://localhost:3000
 npm run build    # Build for production
 npm run start    # Start production server (node server.js --production)
-npm run lint     # Run Next.js linting
+npm run lint     # ESLint with Next.js's rules (React Compiler rules and no-explicit-any are warnings)
+npm run typecheck # Type-check the app without its tests (tsconfig.build.json)
 npm run test     # Run all tests with Vitest (watch mode)
 npm run test:run # Run all tests once (CI mode)
 ```

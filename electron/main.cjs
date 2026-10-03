@@ -244,7 +244,7 @@ function registerBridge() {
       case 'close': window.close(); break;
       case 'minimize': window.minimize(); break;
       case 'toggle-fullscreen': window.setFullScreen(!window.isFullScreen()); break;
-      case 'toggle-maximize': window.isMaximized() ? window.unmaximize() : window.maximize(); break;
+      case 'toggle-maximize': if (window.isMaximized()) window.unmaximize(); else window.maximize(); break;
     }
   });
 }

@@ -160,7 +160,7 @@ describe("the projects move", () => {
     const first = project(path.join(base, "A", "First"), "First", 2);
     const second = project(path.join(base, "A", "Second"), "Second", 3);
     let steps = 0;
-    let status: Partial<LibraryJobStatus> = {};
+    const status: Partial<LibraryJobStatus> = {};
     const ctx: JobContext = {
       signal: new AbortController().signal,
       update: (patch) => Object.assign(status, patch),

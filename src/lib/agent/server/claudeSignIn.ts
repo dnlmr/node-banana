@@ -53,7 +53,6 @@ const TERMINAL_FALLBACK = `If no browser tab opened, run \`${CLAUDE_SIGN_IN_COMM
 
 const OUTPUT_TAIL = 4_000;
 
-// eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 
 /**

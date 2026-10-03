@@ -95,6 +95,7 @@ export function DesktopSession({ children }: { children: ReactNode }) {
       </DialogBody>
       <DialogFooter>
         {resettable && <DialogButton variant="ghost" onClick={() => void reset()}>Reset stored keys</DialogButton>}
+        {/* eslint-disable-next-line react-hooks/rules-of-hooks -- useSessionCredentials is a store action ("use the keys for this session"), not a hook */}
         <DialogButton variant="ghost" onClick={() => { useSessionCredentials(); hydrate(); setError(null); }}>Use for this session only</DialogButton>
         <DialogButton variant="primary" autoFocus onClick={() => void initialize()}>Retry secure storage</DialogButton>
       </DialogFooter>

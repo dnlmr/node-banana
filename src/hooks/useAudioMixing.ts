@@ -81,7 +81,6 @@ async function decodeWithMediaBunny(
     return decodedBuffers;
   } finally {
     // Defensively close resources — types may not declare close() but implementations may have it
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const closeable = (obj: unknown): obj is { close(): Promise<void> } =>
       obj != null && typeof (obj as any).close === 'function';
     if (closeable(sink)) {

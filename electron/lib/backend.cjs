@@ -26,7 +26,7 @@ function createBackend({ fork, options, entry, onMessage, onDisconnected, diagno
         const finish = error => {
           if (settled) return;
           settled = true; clearTimeout(timer);
-          error ? reject(error) : resolve();
+          if (error) reject(error); else resolve();
         };
         const timer = setTimeout(() => finish(new Error('The local server did not start within 120 seconds. Open Logs for details, then retry.')), timeoutMs);
         try { child = fork(entry, [], options()); }

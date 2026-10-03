@@ -580,7 +580,6 @@ function modelLine(model: ProviderModel, duplicate: boolean): string {
 
 /** Third-party text: one line, no control characters, cut short. */
 function cleanText(text: string, max: number): string {
-  // eslint-disable-next-line no-control-regex
   const flat = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }

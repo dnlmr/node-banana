@@ -108,7 +108,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
       if (!sourceNode) return;
 
       let videoData: string | null = null;
-      let duration: number | null = null;
+      const duration: number | null = null;
 
       if (sourceNode.type === "generateVideo" || sourceNode.type === "easeCurve" || sourceNode.type === "videoStitch" || sourceNode.type === "videoTrim") {
         videoData = (sourceNode.data as any).outputVideo || null;
@@ -280,7 +280,7 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
         activeBlobUrl = null;
       }
     };
-  }, [clipKey]); // eslint-disable-line react-hooks/exhaustive-deps — orderedClips accessed via closure, clipKey is the stable dep
+  }, [clipKey]); // eslint-disable-line react-hooks/exhaustive-deps -- orderedClips accessed via closure, clipKey is the stable dep
 
   // Pointer-based drag reorder (HTML5 drag doesn't work inside React Flow nodes)
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
@@ -465,14 +465,14 @@ export function VideoStitchNode({ id, data, selected }: NodeProps<VideoStitchNod
       {encoderUnsupported ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-4 bg-neutral-900/40">
           <TriangleAlert size={32} strokeWidth={1.5} className="text-neutral-500" />
-          <span className="text-xs text-neutral-400">Your browser doesn't support video encoding.</span>
+          <span className="text-xs text-neutral-400">Your browser doesn&apos;t support video encoding.</span>
           <a
             href="https://discord.com/invite/89Nr6EKkTf"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[10px] text-blue-400 hover:text-blue-300 underline"
           >
-            Doesn't seem right? Message Willie on Discord.
+            Doesn&apos;t seem right? Message Willie on Discord.
           </a>
         </div>
       ) : encoderChecking ? (
