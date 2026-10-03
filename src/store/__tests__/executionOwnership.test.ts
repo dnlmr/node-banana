@@ -51,9 +51,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(hydrateWorkflowMedia).mockImplementation(async (workflow) => workflow);
   store().clearWorkflow();
+  store().clearClipboard();
   useWorkflowStore.setState({ nodes: [node("generate-1")], isSaving: false });
 });
-afterEach(() => store().clearWorkflow());
+afterEach(() => {
+  store().clearWorkflow();
+  vi.restoreAllMocks();
+});
 
 const runners = {
   workflow: () => store().executeWorkflow(),
@@ -214,6 +218,48 @@ describe("downstream consumers of a single-node or selection run", () => {
     expect(downstream.signal?.aborted).toBe(true);
     pending.resolve();
     await run;
+  });
+});
+
+describe("a video output replaced by a run", () => {
+  const video = (id: string, outputVideo?: string) =>
+    ({ ...node(id, "videoTrim"), data: outputVideo ? { outputVideo } : {} }) as WorkflowNode;
+
+  it.each(["another node", "the clipboard", "another tab", "undo", "redo", "a pending undo step"] as const)(
+    "stays alive while %s still holds it",
+    (owner) => {
+      useWorkflowStore.setState({ nodes: [{ ...video("video-1", "blob:shared"), selected: true }] });
+      if (owner === "another node") useWorkflowStore.setState({ nodes: [...store().nodes, video("copy", "blob:shared")] });
+      if (owner === "the clipboard") store().copySelectedNodes();
+      if (owner === "another tab") {
+        store().newTab();
+        useWorkflowStore.setState({ nodes: [video("video-1", "blob:shared")] });
+      }
+      if (owner === "undo") store().addNode("prompt", { x: 0, y: 0 });
+      if (owner === "redo") {
+        // Undo the change that brought the URL in, so only redo holds it
+        useWorkflowStore.setState({ nodes: [video("video-1")] });
+        store().updateNodeData("video-1", { outputVideo: "blob:shared" });
+        store().undo();
+      }
+      if (owner === "a pending undo step") store().updateNodeData("video-1", { outputVideo: "blob:replacement" });
+      const revoke = vi.spyOn(URL, "revokeObjectURL");
+      const ctx = store()._buildExecutionContext(store().nodes[0]);
+      // Executors write during a run, which records no undo steps
+      useWorkflowStore.setState({ isRunning: true });
+      ctx.updateNodeData("video-1", { outputVideo: "blob:replacement" });
+      ctx.releaseMediaUrl!("blob:shared");
+      expect(revoke).not.toHaveBeenCalledWith("blob:shared");
+    },
+  );
+
+  it("is released when nothing holds it any more", () => {
+    useWorkflowStore.setState({ nodes: [video("video-1", "blob:unshared")], isRunning: true });
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const ctx = store()._buildExecutionContext(store().nodes[0]);
+    ctx.updateNodeData("video-1", { outputVideo: "blob:replacement" });
+    ctx.releaseMediaUrl!("blob:unshared");
+    expect(revoke).toHaveBeenCalledWith("blob:unshared");
   });
 });
 

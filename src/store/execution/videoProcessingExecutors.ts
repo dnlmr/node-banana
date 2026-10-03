@@ -6,7 +6,6 @@
  */
 
 import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFrameGrabNodeData } from "@/types";
-import { revokeBlobUrl } from "@/store/utils/executionUtils";
 import { dataUrlToBlob, isDataUrl, readBlobBytes } from "@/lib/assets/client/mediaBlob";
 import type { NodeExecutionContext } from "./types";
 import { assetParameters, assetProducer, holdRecordingRun, recordingResult, recordOutput } from "./assetRecording";
@@ -210,12 +209,12 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       throw new DOMException("Aborted", "AbortError");
     }
 
-    // Revoke old blob URL before replacing
+    // The previous output is released once the new one is in place, and only
+    // if nothing else (a copy, another tab, undo) still holds it
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
     const previousOutput = oldData?.outputVideo;
-    revokeBlobUrl(previousOutput as string | undefined);
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -236,6 +235,8 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       progress: 100,
       error: null,
     });
+
+    ctx.releaseMediaUrl?.(previousOutput as string | undefined);
 
     await recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
       clips: inputs.videos.length,
@@ -324,14 +325,11 @@ export async function executeVideoTrim(ctx: NodeExecutionContext): Promise<void>
       throw new DOMException("Aborted", "AbortError");
     }
 
-    // Revoke old blob URL before replacing
+    // Released once the new output is in place (see the stitch above)
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
     const oldOutputVideo = oldData?.outputVideo as string | undefined;
-    if (oldOutputVideo && oldOutputVideo.startsWith("blob:")) {
-      URL.revokeObjectURL(oldOutputVideo);
-    }
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -352,6 +350,8 @@ export async function executeVideoTrim(ctx: NodeExecutionContext): Promise<void>
       progress: 100,
       error: null,
     });
+
+    ctx.releaseMediaUrl?.(oldOutputVideo);
 
     await recordEditedVideo(ctx, outputVideo, oldOutputVideo, outputBlob, "trim", { startTime, endTime }, endTime - startTime);
   } catch (err) {
@@ -482,12 +482,11 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
       throw new Error("Speed curve processing returned no output");
     }
 
-    // Revoke old blob URL before replacing
+    // Released once the new output is in place (see the stitch above)
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
     const previousOutput = oldData?.outputVideo;
-    revokeBlobUrl(previousOutput as string | undefined);
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -508,6 +507,8 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
       progress: 100,
       error: null,
     });
+
+    ctx.releaseMediaUrl?.(previousOutput as string | undefined);
 
     await recordEditedVideo(
       ctx,

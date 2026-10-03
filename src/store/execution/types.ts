@@ -57,6 +57,8 @@ export interface NodeExecutionContext {
   appendOutputGalleryVideo: (targetId: string, video: string) => void;
   /** Rebuilds a splitGrid node's cells from its template when stale; returns true if rebuilt */
   materializeSplitGridCells: (nodeId: string) => boolean;
+  /** Release a replaced media URL, unless a node, tab, the clipboard or undo history still holds it. */
+  releaseMediaUrl?: (url: string | null | undefined) => void;
   assetRun?: AssetRunContext;
   /** Saves an output to the asset library. Returns at once; the id can go into node data with the output. */
   recordAsset?: (input: RecordAssetInput) => RecordedAssetHandle;

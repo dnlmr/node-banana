@@ -2295,6 +2295,17 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }));
     },
     materializeSplitGridCells: (nodeId: string) => isCurrent() && get().materializeSplitGridCells(nodeId),
+    releaseMediaUrl: (url) => {
+      if (!isCurrent() || !url?.startsWith("blob:")) return;
+      const state = get();
+      const owners = nodeBlobUrls([
+        ...state.nodes,
+        ...retainedMediaNodes(state),
+        ...undoManager.retainedNodes,
+        ...(pendingDataSnapshot?.nodes ?? []),
+      ]);
+      if (!owners.has(url)) revokeBlobUrl(url);
+    },
     ...assetRecordingFor(assetRun !== undefined ? assetRun : get()._currentRun),
     get: get as () => unknown,
     };

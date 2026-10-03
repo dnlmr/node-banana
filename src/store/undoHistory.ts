@@ -22,6 +22,11 @@ export class UndoManager {
     return this.redoStack.length > 0;
   }
 
+  /** The nodes undo and redo can bring back, which keep their media URLs alive. */
+  get retainedNodes(): readonly WorkflowNode[] {
+    return [...this.undoStack, ...this.redoStack].flatMap((snapshot) => snapshot.nodes);
+  }
+
   push(snapshot: UndoSnapshot): void {
     this.undoStack.push(snapshot);
     if (this.undoStack.length > MAX_HISTORY) {
