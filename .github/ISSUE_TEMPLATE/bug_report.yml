@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in Node Banana does not work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before attaching anything, read the note on diagnostics at the bottom: logs are fine, but never attach your credential store, your workflow media or a recovery folder whole.
+  - type: input
+    id: version
+    attributes:
+      label: Node Banana version
+      description: On Mac, Node Banana › About Node Banana; on Windows, Settings › Apps or the installer's file name. Say "from source" with the commit if you run `npm run dev`.
+      placeholder: 2.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Mac (Apple Silicon)
+        - Windows (x64)
+        - Web build from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS version
+      placeholder: macOS 15.3 / Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, what you expected, what happened instead. Which node types, provider and model were involved.
+      placeholder: |
+        1. Open a workflow with …
+        2. Press Run
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        The relevant lines from the log, or the whole log file if it is short. Desktop logs are under Help → Open logs (Mac: `~/Library/Logs/Node Banana/`, Windows: `%APPDATA%\Node Banana\logs\`). Remove anything you would not post publicly: provider keys never appear in logs, but prompts and file paths do.
+        Do not attach the `credentials` file from the app's data folder, your workflow media, or a recovery folder: they are not needed and may hold your keys, images and prompts.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I am on the latest release (the app offers updates under Help → Check for Updates…)
+        - label: I have removed keys, personal paths and private media from what I attached

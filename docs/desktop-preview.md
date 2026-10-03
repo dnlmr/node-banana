@@ -1,6 +1,6 @@
-# Node Banana Mac preview
+# Node Banana desktop
 
-This preview is an Apple Silicon application, signed and notarised when built with `--sign` (see [Releases and updates](#releases-and-updates)) and unsigned otherwise. Testers need macOS, an internet connection for providers, and their own provider keys. They do not need the repository, Node, npm, or an environment file. Intel Macs, Linux artifacts and native file associations are outside this preview.
+The desktop app is an Apple Silicon application (macOS 13 or later), signed and notarised when built with `--sign` (see [Releases and updates](#releases-and-updates)) and unsigned otherwise, and a Windows x64 installer (Windows 10 or later; see [Windows](#windows-x64)). Testers need macOS, an internet connection for providers, and their own provider keys. They do not need the repository, Node, npm, or an environment file. Intel Macs, Linux artifacts and native file associations are outside this preview.
 
 ## Install and try it
 
