@@ -26,6 +26,14 @@ const structuredData = {
   license: "https://github.com/shrimbly/node-banana/blob/master/LICENSE",
   screenshot: ogImage,
   image: ogImage,
+  featureList: [
+    "Node-based canvas for AI image, video, audio, 3D and text generation",
+    "Bring your own API keys: Google Gemini, OpenAI, Anthropic, Replicate, fal.ai, Kie.ai, WaveSpeed, ComfyUI",
+    "An agent that builds and edits workflows on your Claude Code or Codex subscription",
+    "ComfyUI workflows run as nodes",
+    "Every generated asset saved and browsable in an asset library",
+    "Automatic updates on Mac and Windows",
+  ],
   sameAs: ["https://github.com/shrimbly/node-banana", "https://discord.com/invite/89Nr6EKkTf", "https://node-banana-docs.vercel.app/"],
 };
 ---
@@ -57,6 +65,7 @@ const structuredData = {
   <meta name="twitter:image:alt" content="The Node Banana app window: a car photo feeds Generate Image and Generate Video nodes, above the NODE BANANA wordmark.">
 
   <link rel="sitemap" href="/sitemap-index.xml">
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="Node Banana for language models">
   <script type="application/ld+json" set:html={JSON.stringify(structuredData)}></script>
   <link rel="icon" type="image/png" href="/assets/banana.png">
   <link rel="apple-touch-icon" href="/assets/banana.png">
