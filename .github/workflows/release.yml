@@ -125,6 +125,17 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           spctl --assess --type execute --verbose=2 "$app"
           xcrun stapler validate "$app"
+      # The website's /download/mac redirects to releases/latest/download/<this name>,
+      # which needs a name without the version. The updater keeps using the versioned files.
+      - name: Versionless copy for the website
+        if: ${{ env.PUBLISH == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          cp "dist-electron/Node-Banana-$VERSION-arm64.dmg" "$RUNNER_TEMP/Node-Banana-mac-arm64.dmg"
+          gh release upload "$TAG" "$RUNNER_TEMP/Node-Banana-mac-arm64.dmg" --clobber --repo "$GITHUB_REPOSITORY"
       - name: Smoke test the packaged app
         continue-on-error: true
         run: npm run electron:smoke -- --executable "dist-electron/mac-arm64/Node Banana.app/Contents/MacOS/Node Banana"
@@ -176,6 +187,19 @@ jobs:
             Write-Host "::warning::Packaging attempt $attempt failed (exit $LASTEXITCODE)"
           }
           if (-not $ok) { exit 1 }
+      # Same as the Mac job: /download/windows needs a versionless name.
+      - name: Versionless copy for the website
+        if: ${{ env.PUBLISH == 'true' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          $copy = Join-Path $env:RUNNER_TEMP 'Node-Banana-windows-x64.exe'
+          Copy-Item "dist-electron/Node-Banana-$env:VERSION-x64.exe" $copy
+          gh release upload $env:TAG $copy --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Keep the installers
         uses: actions/upload-artifact@v4
         with:

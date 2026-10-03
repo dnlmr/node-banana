@@ -24,18 +24,17 @@ import appWindow from "../partials/app-window.html?raw";
             <span data-stars>1.6k</span><span class="sr-only"> stars on GitHub</span>
           </a>
 
-          <!-- Both downloads point at the latest release for now. Once 2.0 artifacts exist,
-               put the per-platform asset URLs in the two href attributes below (the main
-               button copies whichever platform the visitor is on). -->
+          <!-- /download/mac and /download/windows redirect to the latest release's installer
+               (site/vercel.json). The main button copies whichever platform the visitor is on. -->
           <div class="download" data-download>
-            <a class="btn btn--primary download__main" href="https://github.com/shrimbly/node-banana/releases/latest" data-download-main><span>Download for <span data-platform-label>Mac</span></span></a>
+            <a class="btn btn--primary download__main" href="/download/mac" data-download-main><span>Download for <span data-platform-label>Mac</span></span></a>
             <details class="download__more" data-download-more>
               <summary class="download__toggle" aria-label="Choose another platform">
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
               </summary>
               <ul class="menu">
-                <li><a class="menu__item" href="https://github.com/shrimbly/node-banana/releases/latest" data-platform="mac" data-label="Mac"><span class="menu__name">Mac</span><span class="menu__meta">Apple Silicon · <span class="version"></span></span></a></li>
-                <li><a class="menu__item" href="https://github.com/shrimbly/node-banana/releases/latest" data-platform="windows" data-label="Windows"><span class="menu__name">Windows</span><span class="menu__meta">x64 · <span class="version"></span></span></a></li>
+                <li><a class="menu__item" href="/download/mac" data-platform="mac" data-label="Mac"><span class="menu__name">Mac</span><span class="menu__meta">Apple Silicon · <span class="version"></span></span></a></li>
+                <li><a class="menu__item" href="/download/windows" data-platform="windows" data-label="Windows"><span class="menu__name">Windows</span><span class="menu__meta">x64 · <span class="version"></span></span></a></li>
               </ul>
             </details>
           </div>

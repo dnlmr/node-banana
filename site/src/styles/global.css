@@ -845,7 +845,7 @@ ul { margin: 0; padding: 0; list-style: none; }
 .downloads { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .downloads .eyebrow { margin-left: 12px; }
 .footer__row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px 24px; }
-.footer__nav { display: flex; align-items: center; gap: 24px; }
+.footer__nav { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px; }
 .footer__wordmark { container-type: inline-size; max-width: var(--content); margin: var(--gap-wordmark) auto 0; }
 .footer__wordmark .wordmark { margin: 0; }
 
