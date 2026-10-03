@@ -219,6 +219,24 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** Stems of every file under the workflow's media folders (inputs, generations, legacy .images). */
+async function listMediaIds(workflowPath: string): Promise<string[]> {
+  const ids = new Set<string>();
+  for (const sub of [IMAGES_FOLDER, "generations", LEGACY_IMAGES_FOLDER]) {
+    let names: string[] = [];
+    try {
+      names = await fs.readdir(path.join(workflowPath, sub));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const dot = name.lastIndexOf(".");
+      ids.add(dot > 0 ? name.slice(0, dot) : name);
+    }
+  }
+  return [...ids];
+}
+
 // GET: Load an image from the workflow's folders (inputs, generations, or legacy .images)
 export async function GET(request: NextRequest) {
   const refused = guardAssetRequest(request);
@@ -226,6 +244,15 @@ export async function GET(request: NextRequest) {
   const workflowPath = request.nextUrl.searchParams.get("workflowPath");
   const imageId = request.nextUrl.searchParams.get("imageId");
   const folder = request.nextUrl.searchParams.get("folder"); // Optional hint for which folder to check first
+
+  // ?list=1: the ids of every media file the folder holds, so a save can tell a
+  // ref that still has its file from one that does not before trusting it.
+  if (request.nextUrl.searchParams.get("list") === "1") {
+    if (!workflowPath) return NextResponse.json({ success: false, error: "Missing workflowPath" }, { status: 400 });
+    const pathValidation = validateWorkflowPath(workflowPath);
+    if (!pathValidation.valid) return NextResponse.json({ success: false, error: pathValidation.error }, { status: 400 });
+    return NextResponse.json({ success: true, ids: await listMediaIds(workflowPath) });
+  }
 
   logger.info('file.load', 'Workflow image load request received', {
     workflowPath,

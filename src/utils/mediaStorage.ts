@@ -91,6 +91,13 @@ export async function externalizeWorkflowMedia(
   const savedImageIds = new Map<string, string>(); // base64 hash -> imageId (for deduplication)
   const savedMediaIds = new Map<string, string>(); // base64 hash -> mediaId (for video/audio deduplication)
 
+  // A ref is only trusted when its file is really in this folder. A workflow
+  // saved into a new folder, or whose refs came from another project, used to
+  // drop the embedded media on save and keep a ref to nothing; now such a ref
+  // is set aside so the media is written out again under this folder.
+  const present = await listPresentMediaIds(workflowPath);
+  if (present) workflow = { ...workflow, nodes: workflow.nodes.map((node) => demoteMissingRefs(node, present)) };
+
   // Process nodes in parallel batches with controlled concurrency
   const BATCH_SIZE = 3;
   const externalizedNodes: WorkflowNode[] = new Array(workflow.nodes.length);
@@ -120,6 +127,55 @@ export async function externalizeWorkflowMedia(
     ...workflow,
     nodes: externalizedNodes,
   };
+}
+
+/** The media ids a workflow folder holds, or null when the server could not say (then refs are trusted as before). */
+async function listPresentMediaIds(workflowPath: string): Promise<Set<string> | null> {
+  try {
+    const params = new URLSearchParams({ workflowPath, list: "1" });
+    const response = await fetch(`/api/workflow-images?${params.toString()}`);
+    const body = await response.json();
+    if (!body?.success || !Array.isArray(body.ids)) return null;
+    return new Set(body.ids.filter((id: unknown): id is string => typeof id === "string"));
+  } catch {
+    return null;
+  }
+}
+
+/** Fields that pair a ref with the media it stands for: `imageRef` ↔ `image`, `inputImageRefs[i]` ↔ `inputImages[i]`. */
+function mediaFieldFor(refKey: string): string | null {
+  if (refKey.endsWith("Refs")) return refKey.slice(0, -4) + "s";
+  if (refKey.endsWith("Ref")) return refKey.slice(0, -3);
+  return null;
+}
+
+/**
+ * Drops a ref whose file is not in the folder while the media it stands for is
+ * still embedded, so the save writes the file out instead of trusting the ref.
+ * A ref with no embedded media behind it is left alone: there is nothing to
+ * write, and the loader will report it missing.
+ */
+export function demoteMissingRefs(node: WorkflowNode, present: Set<string>): WorkflowNode {
+  const data = node.data as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+  const change = () => (next ??= { ...data });
+  for (const [key, value] of Object.entries(data)) {
+    const mediaKey = mediaFieldFor(key);
+    if (!mediaKey) continue;
+    if (typeof value === "string") {
+      if (value && !present.has(value) && isDataUrl(data[mediaKey] as string | null | undefined)) delete change()[key];
+    } else if (Array.isArray(value)) {
+      const media = data[mediaKey];
+      if (!Array.isArray(media)) continue;
+      let changed = false;
+      const refs = value.map((ref, i) => {
+        if (typeof ref === "string" && ref && !present.has(ref) && isDataUrl(media[i] as string | null | undefined)) { changed = true; return ""; }
+        return ref;
+      });
+      if (changed) change()[key] = refs;
+    }
+  }
+  return next ? ({ ...node, data: next as WorkflowNode["data"] }) : node;
 }
 
 /**
