@@ -629,6 +629,20 @@ function abortNodeRuns(state: WorkflowStore, reason: string): void {
 // the serial moves when a run starts, `failed` is set when it ends in error.
 const lastRun = { serial: 0, failed: false };
 
+// Counts every run started (workflow, selection, single node), so the
+// writes of a stopped run can tell whether a newer run has begun since.
+let runStarts = 0;
+
+/**
+ * Whether a run started with `controller` may still set the run state
+ * (isRunning, the controller, the current nodes): it is the current run, or
+ * it was stopped and nothing has started since. A stopped run that finishes
+ * late must not unlock, or end, the run that replaced it.
+ */
+function ownsRunState(state: WorkflowStore, controller: AbortController): boolean {
+  return state._abortController === controller || (state._abortController === null && !state.isRunning);
+}
+
 // Track pending save-generation syncs to ensure IDs are resolved before workflow save
 const pendingImageSyncs = new Map<string, Promise<void>>();
 
@@ -2201,17 +2215,25 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     return nodeReadinessPure(nodes, edges);
   },
 
-  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null): NodeExecutionContext => ({
+  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null): NodeExecutionContext => {
+    // An executor writes to the canvas it started on, and only until a newer
+    // run takes over after its own was stopped. Stopped with nothing after
+    // it, it may still put its node back to idle.
+    const generation = get().canvasGeneration;
+    const startedAfter = runStarts;
+    const isCurrent = () =>
+      get().canvasGeneration === generation && !(signal?.aborted && runStarts !== startedAfter);
+    return {
     node,
     getConnectedInputs: get().getConnectedInputs,
-    updateNodeData: get().updateNodeData,
+    updateNodeData: (id, data) => { if (isCurrent()) get().updateNodeData(id, data); },
     getFreshNode: (id: string) => get().nodes.find((n) => n.id === id),
     getEdges: () => get().edges,
     getNodes: () => get().nodes,
     signal,
     providerSettings: get().providerSettings,
-    addIncurredCost: (cost: number) => get().addIncurredCost(cost),
-    addToGlobalHistory: (item) => get().addToGlobalHistory(item),
+    addIncurredCost: (cost: number) => { if (isCurrent()) get().addIncurredCost(cost); },
+    addToGlobalHistory: (item) => { if (isCurrent()) get().addToGlobalHistory(item); },
     batch: batchTag(get().batch),
     generationsPath: get().generationsPath,
     saveDirectoryPath: get().saveDirectoryPath,
@@ -2224,6 +2246,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       });
     },
     appendOutputGalleryImage: (targetId: string, image: string) => {
+      if (!isCurrent()) return;
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
@@ -2234,6 +2257,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }));
     },
     appendOutputGalleryVideo: (targetId: string, video: string) => {
+      if (!isCurrent()) return;
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
@@ -2243,10 +2267,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         hasUnsavedChanges: true,
       }));
     },
-    materializeSplitGridCells: (nodeId: string) => get().materializeSplitGridCells(nodeId),
+    materializeSplitGridCells: (nodeId: string) => isCurrent() && get().materializeSplitGridCells(nodeId),
     ...assetRecordingFor(assetRun !== undefined ? assetRun : get()._currentRun),
     get: get as () => unknown,
-  }),
+    };
+  },
 
   executeWorkflow: async (startFromNodeId?: string) => {
     if (!canStartExecution(get().desktopConnected)) return;
@@ -2287,6 +2312,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     };
     const assetRun = openAssetRun(get);
     set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController, _currentRun: assetRun });
+    runStarts += 1;
     lastRun.serial += 1;
     lastRun.failed = false;
     // Nodes that had nothing to work with, named for the end-of-run summary
@@ -2397,7 +2423,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       } catch (error) {
         // Nothing to work with is not a failure: the node and what depends on
         // it are skipped, and the rest of the graph keeps going
-        if (!isMissingInputError(error)) throw error;
+        if (!isMissingInputError(error) || !ownsRunState(get(), abortController)) throw error;
         set({ skippedNodeIds: new Set([...get().skippedNodeIds, node.id]) });
         unreadyNodes.push(String(nodeData.customTitle || node.type));
         logger.info('node.execution', 'Node skipped (missing input)', {
@@ -2527,9 +2553,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: forwardDeps,
         maxConcurrent: maxConcurrentCalls,
         signal: abortController.signal,
-        isRunning: () => get().isRunning,
+        isRunning: () => get().isRunning && get()._abortController === abortController,
         getNode: (id) => get().nodes.find((n) => n.id === id),
-        setCurrentNodeIds: (ids) => set({ currentNodeIds: ids }),
+        setCurrentNodeIds: (ids) => {
+          if (get()._abortController === abortController) set({ currentNodeIds: ids });
+        },
         runNode: (node, signal) => executeSingleNode(node, signal),
         onNodeError: (node, err) => {
           logger.error('workflow.error', 'Node execution failed', {
@@ -2668,6 +2696,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
 
+      // A newer run owns the canvas now: its state, skips and log session stay
+      if (!ownsRunState(get(), abortController)) return;
       // Reset skipped nodes' status back to idle
       resetSkippedNodes();
 
@@ -2676,6 +2706,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       saveLogSession();
       await logger.endSession();
     } catch (error) {
+      if (!ownsRunState(get(), abortController)) return;
       // Handle AbortError gracefully (user cancelled)
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('workflow.end', 'Workflow execution cancelled by user');
@@ -2880,6 +2911,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const firstNodeRun = nodeRuns.size === 0;
     nodeRuns.set(nodeId, { controller: abortController, assetRun });
     set({ isRunning: true, currentNodeIds: [...get().currentNodeIds.filter((id) => id !== nodeId), nodeId] });
+    runStarts += 1;
 
     // The last node run to end clears the running state and the log session
     const finish = async () => {
@@ -2966,9 +2998,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const { edges: currentEdges } = get();
       const downstreamEdges = currentEdges.filter(e => e.source === nodeId);
       for (const edge of downstreamEdges) {
+        if (abortController.signal.aborted) break;
         const targetNode = get().nodes.find(n => n.id === edge.target);
         if (!targetNode) continue;
-        const targetCtx = get()._buildExecutionContext(targetNode, undefined, assetRun);
+        const targetCtx = get()._buildExecutionContext(targetNode, abortController.signal, assetRun);
         switch (targetNode.type) {
           case "glbViewer":
             await executeGlbViewer(targetCtx);
@@ -2991,6 +3024,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       logger.error('node.error', 'Node regeneration failed', {
         nodeId,
       }, error instanceof Error ? error : undefined);
+      // Stopped and perhaps started again: the node is not this run's to mark
+      if (nodeRuns.get(nodeId)?.controller !== abortController) return;
       updateNodeData(nodeId, {
         status: "error",
         error: error instanceof Error ? error.message : "Regeneration failed",
@@ -3036,6 +3071,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const abortController = new AbortController();
     const assetRun = openAssetRun(get);
     set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController, _currentRun: assetRun });
+    runStarts += 1;
     lastRun.serial += 1;
     lastRun.failed = false;
 
@@ -3180,9 +3216,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: selectedEdges,
         maxConcurrent: maxConcurrentCalls,
         signal: abortController.signal,
-        isRunning: () => get().isRunning,
+        isRunning: () => get().isRunning && get()._abortController === abortController,
         getNode: (id) => nodesToExecute.find((n) => n.id === id),
-        setCurrentNodeIds: (ids) => set({ currentNodeIds: ids }),
+        setCurrentNodeIds: (ids) => {
+          if (get()._abortController === abortController) set({ currentNodeIds: ids });
+        },
         runNode: (node, signal) => executeNode(node, signal),
         onNodeError: (node, err) => {
           logger.error('node.error', 'Node execution failed in batch', {
@@ -3201,9 +3239,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           const downstreamEdges = currentEdges.filter(e => e.source === nodeId);
           for (const edge of downstreamEdges) {
             if (selectedSet.has(edge.target) || propagated.has(edge.target)) continue;
+            if (abortController.signal.aborted) break;
             const targetNode = get().nodes.find(n => n.id === edge.target);
             if (!targetNode) continue;
-            const targetCtx = get()._buildExecutionContext(targetNode);
+            const targetCtx = get()._buildExecutionContext(targetNode, abortController.signal);
             switch (targetNode.type) {
               case "glbViewer":
                 await executeGlbViewer(targetCtx);
@@ -3226,12 +3265,14 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
 
+      if (!ownsRunState(get(), abortController)) return;
       logger.info('node.execution', 'Selected nodes execution completed successfully');
       set({ isRunning: false, currentNodeIds: [], _abortController: null });
 
       saveLogSession();
       await logger.endSession();
     } catch (error) {
+      if (!ownsRunState(get(), abortController)) return;
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('node.execution', 'Selected nodes execution cancelled by user');
       } else {
