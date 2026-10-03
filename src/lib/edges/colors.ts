@@ -62,3 +62,12 @@ export function edgeColorForHandles(
 ): string {
   return EDGE_COLORS[edgeColorKeyForHandles(sourceHandleId, targetHandleId)];
 }
+
+/**
+ * A lighter tint of a `#rrggbb` colour, 40% of the way to white: the head of
+ * the comet on a running noodle, bright enough to lead its own tail.
+ */
+export function edgeHighlightColor(hex: string): string {
+  const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `#${channels.map((c) => Math.round(c * 0.6 + 255 * 0.4).toString(16).padStart(2, "0")).join("")}`;
+}

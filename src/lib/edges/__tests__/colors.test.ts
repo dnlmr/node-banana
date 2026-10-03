@@ -8,6 +8,7 @@ import {
   normalizeHandleType,
   edgeColorKeyForHandles,
   edgeColorForHandles,
+  edgeHighlightColor,
 } from "../colors";
 
 describe("edge colour tokens", () => {
@@ -70,5 +71,20 @@ describe("edgeColorKeyForHandles", () => {
   it("resolves to the hex colour", () => {
     expect(edgeColorForHandles("3d", null)).toBe(HANDLE_TYPE_COLORS["3d"]);
     expect(edgeColorForHandles(null, null)).toBe(EDGE_COLORS.default);
+  });
+});
+
+describe("edgeHighlightColor", () => {
+  it("tints a colour 40% of the way to white", () => {
+    expect(edgeHighlightColor("#10b981")).toBe("#70d5b3");
+    expect(edgeHighlightColor("#3b82f6")).toBe("#89b4fa");
+    expect(edgeHighlightColor("#000000")).toBe("#666666");
+    expect(edgeHighlightColor("#ffffff")).toBe("#ffffff");
+  });
+
+  it("gives every edge colour a valid tint", () => {
+    for (const color of Object.values(EDGE_COLORS)) {
+      expect(edgeHighlightColor(color)).toMatch(/^#[0-9a-f]{6}$/);
+    }
   });
 });

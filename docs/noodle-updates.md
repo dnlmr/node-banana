@@ -28,6 +28,18 @@ Decision (2026-09-03): noodle colours are not user-changeable. Colour always
 follows the data type, so there is no single-colour mode and no per-noodle
 colour override.
 
+Decision (2026-10-03): the loading pulse is a comet. While a node is loading
+(any type: `data.status === "loading"`), each noodle into it carries a short
+bright head (the type colour, 40% towards white) over a softer, wider tail,
+travelling source to target. Both are dashes on `pathLength` 100, so every
+noodle takes one 1.8s beat whatever its length and a node's inputs arrive
+together. Noodles out of a running node stay still. The comet pauses while the
+canvas pans or a node drags; under reduced motion the noodle holds a static
+highlight instead. It replaced a dashed overlay with two glow strokes that only
+ran into Nano Banana nodes and, with the gradient on, was painted with the
+faded gradient. The options considered are on the "Running noodle animation"
+design canvas.
+
 - [x] Single source of edge and handle colour tokens in `src/lib/edges/colors.ts` (replaces the four copies below)
 - [x] `EdgeAppearance` settings type in the store, with save/load, dirty-check and undo parity with `edgeStyle`
 - [x] Settings UI in its own Project Settings → Noodles tab (`ConnectionSettings`); the action-bar button cycles the three line styles
@@ -87,7 +99,7 @@ the same two nodes", which is not a real case; rebuilt around a shared handle.
 | Style and appearance | `EdgeStyle` and `EdgeAppearance` in `src/types/workflow.ts`; `edgeStyle` and `edgeAppearance` in `workflowStore.ts` | Saved in the workflow file; user default in localStorage via `getEdgeDefaults`; load fallback for `edgeStyle` stays `angular` |
 | Colours | `src/lib/edges/colors.ts` | One hue per type; `globals.css` `--handle-color-*` variables are kept in step by a test |
 | Gradients | `SharedEdgeGradients.tsx` | 10 colours × active/dimmed rendered once; dimmed stops follow the faded-opacity setting |
-| Loading pulse | `EditableEdge.tsx` + `flowPulse` in `globals.css` | Three overlay paths while the target generate node is loading |
+| Loading pulse | `EditableEdge.tsx` + `.edge-running` in `globals.css`; head colour from `edgeHighlightColor` | Two overlay paths (head and tail) while the target node is loading; paused by `canvas-interacting` and the navigation classes; static under `prefers-reduced-motion` |
 | Hit area | transparent 15px path (10px on reference edges) | |
 | Toolbar | `src/components/EdgeToolbar.tsx` | Rendered by the selected edge at its midpoint; pause, loop count, delete, "Image N" order; bulk pause/delete for a multi-selection |
 | Store actions | `workflowStore.ts` | `onConnect`, `addEdgeWithType`, `removeEdge`, `toggleEdgePause`, `setLoopCount`, `onEdgesChange`, `setEdgeStyle` |

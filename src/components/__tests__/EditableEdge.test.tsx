@@ -4,6 +4,8 @@ import { EditableEdge } from "@/components/edges/EditableEdge";
 import { ReactFlowProvider, Position } from "@xyflow/react";
 import { EDGE_COLORS } from "@/lib/edges/colors";
 import { STUB_DOUBLE_CLICK_MS } from "@/components/edges/HiddenEdgeStub";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 // Mock the workflow store
 const mockSetEdges = vi.fn();
@@ -409,10 +411,7 @@ describe("EditableEdge", () => {
         </TestWrapper>
       );
 
-      // Should have additional animated paths for loading state
-      const paths = container.querySelectorAll("path");
-      // More paths than just the base edge (loading animation paths)
-      expect(paths.length).toBeGreaterThan(2);
+      expect(container.querySelector('[data-testid="edge-running"]')).not.toBeNull();
     });
 
     it("should not show pulse animation when target node is not loading", () => {
@@ -431,10 +430,7 @@ describe("EditableEdge", () => {
         </TestWrapper>
       );
 
-      // Fewer paths - no animation paths
-      const paths = container.querySelectorAll("path");
-      // Base edge path + interaction path = 2 minimum
-      expect(paths.length).toBeLessThanOrEqual(3);
+      expect(container.querySelector('[data-testid="edge-running"]')).toBeNull();
     });
   });
 
@@ -515,19 +511,67 @@ describe("EditableEdge appearance settings", () => {
     expect(d).not.toMatch(/[CQ]/);
   });
 
-  it("shows the loading pulse while the target generates", () => {
-    withState({
-      nodes: [{ id: "node-2", type: "nanoBanana", data: { status: "loading" }, position: { x: 0, y: 0 } }],
-    });
-    expect(renderEdge().querySelector('path[stroke-dasharray="20 30"]')).not.toBeNull();
+  const running = (container: HTMLElement) => container.querySelector('[data-testid="edge-running"]');
+
+  it.each(["nanoBanana", "generateVideo", "generateAudio", "generate3d", "llmGenerate", "comfyApp", "splitGrid"])(
+    "runs the comet while a %s target is loading",
+    (type) => {
+      withState({ nodes: [{ id: "node-2", type, data: { status: "loading" }, position: { x: 0, y: 0 } }] });
+      expect(running(renderEdge())).not.toBeNull();
+    }
+  );
+
+  it("draws the comet as a tail and a lighter head in the type colour, source to target", () => {
+    withState({ nodes: [{ id: "node-2", type: "generateVideo", data: { status: "loading" }, position: { x: 0, y: 0 } }] });
+    const container = renderEdge();
+    const base = container.querySelector(".react-flow__edge-path")?.getAttribute("d");
+    const tail = container.querySelector(".edge-running-tail");
+    const head = container.querySelector(".edge-running-head");
+    expect(running(container)?.querySelectorAll("path")).toHaveLength(2);
+    expect(tail?.getAttribute("d")).toBe(base);
+    expect(tail?.getAttribute("pathLength")).toBe("100");
+    expect(tail?.getAttribute("stroke")).toBe(EDGE_COLORS.image);
+    expect(tail?.getAttribute("stroke-width")).toBe("6");
+    expect(head?.getAttribute("stroke")).toBe("#70d5b3");
+    expect(head?.getAttribute("stroke-width")).toBe("3");
+    expect(container.querySelector("[filter]")).toBeNull();
   });
 
-  it("skips the loading pulse when the setting is off", () => {
+  it("does not run the comet for an idle or finished target", () => {
+    for (const status of ["idle", "complete", "error"]) {
+      withState({ nodes: [{ id: "node-2", type: "nanoBanana", data: { status }, position: { x: 0, y: 0 } }] });
+      expect(running(renderEdge())).toBeNull();
+    }
+  });
+
+  it("does not run the comet out of a running node", () => {
+    withState({ nodes: [{ id: "node-1", type: "nanoBanana", data: { status: "loading" }, position: { x: 0, y: 0 } }] });
+    expect(running(renderEdge())).toBeNull();
+  });
+
+  it("skips the comet when the setting is off", () => {
     withState({
       edgeAppearance: { ...baseAppearance, loadingPulse: false },
       nodes: [{ id: "node-2", type: "nanoBanana", data: { status: "loading" }, position: { x: 0, y: 0 } }],
     });
-    expect(renderEdge().querySelector('path[stroke-dasharray="20 30"]')).toBeNull();
+    expect(running(renderEdge())).toBeNull();
+  });
+});
+
+describe("running noodle styles", () => {
+  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+
+  it("pauses the comet while the canvas pans or a node drags", () => {
+    for (const cls of ["canvas-interacting", "canvas-native-navigation-active", "canvas-wheel-navigation-active"]) {
+      expect(css).toContain(`.${cls} .edge-running path`);
+    }
+    expect(css).toMatch(/\.canvas-wheel-navigation-active \.edge-running path \{\s*animation-play-state: paused;/);
+  });
+
+  it("holds a static highlight under reduced motion", () => {
+    const block = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce) {\n  .edge-running path"));
+    expect(block).toMatch(/\.edge-running path \{\s*animation: none;\s*stroke-dasharray: none;/);
+    expect(block).toMatch(/\.edge-running-head \{\s*opacity: 0\.85;/);
   });
 });
 
@@ -816,6 +860,33 @@ describe("EditableEdge when hidden", () => {
       </TestWrapper>
     );
     expect(setStubGroupWidth).toHaveBeenCalledWith("node-2:target:image", expect.any(Number));
+  });
+
+  it("folds an output's hidden connections that share a name into one pill", () => {
+    // One output feeding forty nodes, every connection named "Model": one pill at the output, not forty
+    const fanOut = Array.from({ length: 40 }, (_, i) => ({
+      id: `edge-${i}`, source: "node-1", sourceHandle: "image", target: `node-${i + 2}`, targetHandle: "image",
+      data: { hidden: true, createdAt: i, label: "Model" },
+    }));
+    const setStubGroupWidth = vi.fn();
+    mockUseWorkflowStore.mockImplementation((selector) =>
+      selector(createDefaultState({ edges: fanOut, setStubGroupWidth, setHoveredHandle: mockSetHoveredHandle }))
+    );
+    const pills = fanOut.filter((member) => {
+      const { unmount } = render(
+        <TestWrapper>
+          <EditableEdge {...createDefaultProps({ id: member.id, target: member.target, data: member.data })} />
+        </TestWrapper>
+      );
+      const pill = screen.queryByTestId("hidden-edge-stub-source");
+      if (pill) expect(pill).toHaveTextContent("Model");
+      // Each target has only this connection, so its own stub still shows the name
+      expect(screen.getByTestId("hidden-edge-stub-target")).toHaveTextContent("Model");
+      unmount();
+      return pill !== null;
+    });
+    expect(pills.map((e) => e.id)).toEqual(["edge-0"]);
+    expect(setStubGroupWidth).toHaveBeenCalledWith("node-1:source:image#Model", expect.any(Number));
   });
 
   it("ghosts the line while a stub is hovered", () => {
