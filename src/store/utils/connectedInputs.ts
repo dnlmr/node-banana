@@ -455,6 +455,14 @@ export function getConnectedInputsPure(
     }
   }
 
+  // Executors send `text` as the generation prompt. A second text slot (a
+  // negative_prompt connected after it) must not take its place; the named
+  // slots keep their own values in dynamicInputs.
+  const schemaPrompt = dynamicInputs.prompt;
+  if (schemaPrompt !== undefined) {
+    text = Array.isArray(schemaPrompt) ? schemaPrompt[0] ?? text : schemaPrompt;
+  }
+
   return { images, videos, audio, model3d, text, textItems, dynamicInputs, easeCurve };
 }
 
