@@ -87,9 +87,10 @@ LLM models are defined once in `src/lib/llm/catalog.ts`: the current list per pr
 
 ## Model catalog
 
-`GET /api/models` lists every provider with a key. Gemini, Kie, OpenAI and
-Comfy Router are static catalogs in `src/lib/providers/registry.ts`;
-Replicate, fal.ai and WaveSpeed come from the model catalog
+`GET /api/models` lists every provider with a key. Gemini, Kie and OpenAI
+are static catalogs in `src/lib/providers/registry.ts`; Comfy Router offers
+its bound models that the Router's own list says it serves (see "Adding
+Comfy Router Models"); Replicate, fal.ai and WaveSpeed come from the model catalog
 (`src/lib/providers/catalog.ts`): each list is fetched in parallel under its
 own deadline, kept under `~/.node-banana/catalog/<provider>.json`
 (`NODE_BANANA_CATALOG_DIR` moves it; tests must set it), served straight away,

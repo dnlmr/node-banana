@@ -6,7 +6,8 @@
  * GET /api/models, kept here so other server code (the in-app agent) can list
  * models with the same keys, caching, filtering and sorting as the route.
  *
- * Gemini, Kie.ai, OpenAI and Comfy Router are static catalogs; Replicate,
+ * Gemini, Kie.ai and OpenAI are static catalogs; Comfy Router offers its
+ * bound models the Router currently serves (./comfyRouter/catalog); Replicate,
  * fal.ai and WaveSpeed come from the model catalog (./catalog): their lists
  * are fetched at once, each under its own deadline, kept on disk, served
  * straight away and refreshed behind the request when they age. Replicate's
