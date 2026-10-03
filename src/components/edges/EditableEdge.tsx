@@ -16,9 +16,9 @@ import {
 } from "@xyflow/react";
 import { shallow, useShallow } from "zustand/shallow";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { ArrayNodeData, NanoBananaNodeData, WorkflowEdgeData } from "@/types";
+import { ArrayNodeData, WorkflowEdgeData } from "@/types";
 import { getSharedGradientId } from "./SharedEdgeGradients";
-import { EDGE_COLORS, edgeColorKeyForHandles } from "@/lib/edges/colors";
+import { EDGE_COLORS, edgeColorKeyForHandles, edgeHighlightColor } from "@/lib/edges/colors";
 import { EDGE_THICKNESS_PX } from "@/lib/edges/appearance";
 import { EdgeToolbar, useIsToolbarEdge } from "@/components/EdgeToolbar";
 import { HiddenEdgeStub } from "./HiddenEdgeStub";
@@ -180,7 +180,8 @@ export function EditableEdge({
         sourceReach: bundleReach(state.nodes, source, "source", sourceHandleId),
         targetReach: bundleReach(state.nodes, target, "target", targetHandleId),
         isConnectedToSelection: selectedIds.has(source) || selectedIds.has(target),
-        isTargetLoading: targetNode?.type === "nanoBanana" && (targetNode.data as NanoBananaNodeData).status === "loading",
+        // Any node that reports itself loading counts, whatever its type
+        isTargetLoading: (targetNode?.data as { status?: string } | undefined)?.status === "loading",
         // Which item an Array connection carries ("Array 2", "All 7")
         arrayLabel:
           sourceNode?.type === "array"
@@ -586,43 +587,25 @@ export function EditableEdge({
         />
       )}
 
-      {/* Animated pulse overlay when target is loading */}
+      {/* While the target runs, a comet travels each noodle into it: a bright
+          head over a softer, wider tail, paced by globals.css (.edge-running) */}
       {showPulse && (
-        <>
-          {/* Outer glow — replaces blur(6px) filter for better perf on Windows */}
+        <g className="edge-running" data-testid="edge-running">
           <path
             d={edgePath}
-            fill="none"
-            stroke={stroke}
-            strokeWidth={strokeWidth * 6.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={0.06}
+            pathLength={100}
+            className="edge-running-tail"
+            stroke={edgeColor}
+            strokeWidth={strokeWidth + 3}
           />
-          {/* Inner glow */}
           <path
             d={edgePath}
-            fill="none"
-            stroke={stroke}
-            strokeWidth={strokeWidth * 4}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity={0.12}
+            pathLength={100}
+            className="edge-running-head"
+            stroke={edgeHighlightColor(edgeColor)}
+            strokeWidth={strokeWidth}
           />
-          {/* Animated flowing pulse using stroke-dasharray */}
-          <path
-            d={edgePath}
-            fill="none"
-            stroke={stroke}
-            strokeWidth={strokeWidth + 2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray="20 30"
-            style={{
-              animation: "flowPulse 1s linear infinite",
-            }}
-          />
-        </>
+        </g>
       )}
 
       {/* Invisible wider path for easier selection */}

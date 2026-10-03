@@ -545,13 +545,66 @@ html {
   pointer-events: none !important;
 }
 
-/* Edge pulse animation for loading connectors */
-@keyframes flowPulse {
-  0% {
-    stroke-dashoffset: 50;
+/* Running noodle: while a node runs, a comet travels each noodle into it,
+   source to target. Both paths use pathLength 100, so every noodle takes one
+   1.8s beat whatever its length and the inputs of a node arrive together; the
+   last 18% of the beat is a rest. The head and tail share a leading edge
+   (their offsets differ by their length difference). */
+.edge-running {
+  pointer-events: none;
+}
+
+.edge-running path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  animation-duration: 1.8s;
+  animation-timing-function: cubic-bezier(0.45, 0, 0.25, 1);
+  animation-iteration-count: infinite;
+}
+
+.edge-running-tail {
+  stroke-dasharray: 18 200;
+  opacity: 0.3;
+  animation-name: edge-running-tail;
+}
+
+.edge-running-head {
+  stroke-dasharray: 6 200;
+  animation-name: edge-running-head;
+}
+
+@keyframes edge-running-tail {
+  0% { stroke-dashoffset: 20; }
+  82%, 100% { stroke-dashoffset: -100; }
+}
+
+@keyframes edge-running-head {
+  0% { stroke-dashoffset: 8; }
+  82%, 100% { stroke-dashoffset: -112; }
+}
+
+/* Hold the comet where it is while the canvas pans or a node drags */
+.canvas-interacting .edge-running path,
+.canvas-native-navigation-active .edge-running path,
+.canvas-wheel-navigation-active .edge-running path {
+  animation-play-state: paused;
+}
+
+/* Reduced motion: nothing travels; the noodle holds a static highlight, the
+   head drawn along its whole length over a faint glow from the tail */
+@media (prefers-reduced-motion: reduce) {
+  .edge-running path {
+    animation: none;
+    stroke-dasharray: none;
   }
-  100% {
-    stroke-dashoffset: 0;
+
+  .edge-running-tail {
+    opacity: 0.18;
+  }
+
+  .edge-running-head {
+    opacity: 0.85;
   }
 }
 
