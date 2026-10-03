@@ -1,0 +1,29 @@
+---
+import { FAQ } from "../lib/faq";
+
+// The same questions as FAQPage structured data, so an answer engine gets
+// them as data as well as as text.
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: FAQ.map(({ question, answer }) => ({
+    "@type": "Question",
+    name: question,
+    acceptedAnswer: { "@type": "Answer", text: answer },
+  })),
+};
+---
+<section class="section" id="faq">
+  <div class="section__inner">
+  <div class="section__head"><div class="section__copy"><h2 class="h2 reveal">Questions, answered.</h2></div><p class="lead reveal" style="--d: 1;">The short version of what Node Banana is, what it costs, where your files go, and what it runs on.</p></div>
+  <dl class="faq">
+    {FAQ.map(({ question, answer }, i) => (
+      <div class="faq__item reveal" style={`--d: ${2 + (i % 2)};`}>
+        <dt class="h3">{question}</dt>
+        <dd class="faq__answer">{answer}</dd>
+      </div>
+    ))}
+  </dl>
+  </div>
+  <script type="application/ld+json" set:html={JSON.stringify(structuredData)}></script>
+</section>
