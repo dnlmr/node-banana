@@ -23,6 +23,7 @@ const store = () => useWorkflowStore.getState();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  store().clearClipboard();
   vi.mocked(externalizeWorkflowMedia).mockImplementation(async (workflow) => workflow);
   vi.mocked(hydrateWorkflowMedia).mockImplementation(async (workflow) => workflow);
   store().clearWorkflow();
@@ -40,7 +41,73 @@ beforeEach(() => {
 
 afterEach(() => {
   store().clearWorkflow();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("media copied between workflows", () => {
+  it("is written into the destination's folder instead of keeping the source's file refs", async () => {
+    useWorkflowStore.setState({
+      nodes: [{ ...node("image-1", { image: "data:image/png;base64,copied", imageRef: "source-only" }), selected: true }],
+      imageRefBasePath: "/source",
+    });
+    store().copySelectedNodes();
+    store().newTab();
+    useWorkflowStore.setState({
+      imageRefBasePath: "/destination",
+      saveDirectoryPath: "/destination",
+      workflowName: "Destination",
+      workflowId: "destination-id",
+    });
+    store().pasteNodes();
+    await store().saveToFile();
+    const saved = vi.mocked(externalizeWorkflowMedia).mock.calls[0][0];
+    expect(saved.nodes[0].data.image).toBe("data:image/png;base64,copied");
+    expect(saved.nodes[0].data.imageRef).toBeUndefined();
+    // The source tab keeps its own ref
+    expect(store().tabs[0].snapshot?.nodes[0].data.imageRef).toBe("source-only");
+  });
+
+  it("keeps its file refs when pasted back into the same folder", () => {
+    useWorkflowStore.setState({
+      nodes: [{ ...node("image-1", { image: "data:image/png;base64,copied", imageRef: "here" }), selected: true }],
+      imageRefBasePath: "/project",
+    });
+    store().copySelectedNodes();
+    store().pasteNodes();
+    expect(store().nodes[1].data.imageRef).toBe("here");
+  });
+
+  it.each(["active", "parked"] as const)("survives closing its %s source tab", (which) => {
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    useWorkflowStore.setState({ nodes: [{ ...node("video-1", { outputVideo: "blob:shared" }, "videoTrim"), selected: true }] });
+    const sourceTab = store().activeTabId;
+    store().copySelectedNodes();
+    const targetTab = store().newTab()!;
+    store().pasteNodes();
+    store().clearClipboard();
+    if (which === "active") store().switchTab(sourceTab);
+    store().closeTab(sourceTab);
+    expect(revoke).not.toHaveBeenCalledWith("blob:shared");
+    expect(store().activeTabId).toBe(targetTab);
+    expect(store().nodes[0].data.outputVideo).toBe("blob:shared");
+    // Its last owner gone, it is released
+    store().clearWorkflow();
+    expect(revoke).toHaveBeenCalledWith("blob:shared");
+  });
+
+  it("survives clearing its source while it is still on the clipboard", () => {
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    useWorkflowStore.setState({ nodes: [{ ...node("video-1", { outputVideo: "blob:clipboard" }, "videoTrim"), selected: true }] });
+    store().copySelectedNodes();
+    store().clearWorkflow();
+    expect(revoke).not.toHaveBeenCalledWith("blob:clipboard");
+    store().pasteNodes();
+    expect(store().nodes[0].data.outputVideo).toBe("blob:clipboard");
+    store().clearClipboard();
+    store().clearWorkflow();
+    expect(revoke).toHaveBeenCalledWith("blob:clipboard");
+  });
 });
 
 describe("refs from a save that media changed under", () => {
