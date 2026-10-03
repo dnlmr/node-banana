@@ -192,6 +192,21 @@ describe("getModelSchema", () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
+    it("offers video_size as a setting, not a video input, and still finds clips by name or description (#135)", async () => {
+      mockFetch.mockResolvedValueOnce(
+        replicateSchemaResponse({
+          prompt: { type: "string" },
+          video_size: { type: "string", description: "Output resolution of the generated video", enum: ["720p", "1080p"], default: "720p" },
+          num_videos: { type: "integer", default: 1 },
+          ref_video_url: { type: "string", description: "Reference clip" },
+          media_reference: { type: "string", description: "URL of the source video to restyle" },
+        })
+      );
+      const result = expectOk(await getModelSchema("replicate", uniqueId("owner/model"), { replicate: "rep" }));
+      expect(result.parameters.map((p) => p.name).sort()).toEqual(["num_videos", "video_size"]);
+      expect(result.inputs.filter((i) => i.type === "video").map((i) => i.name).sort()).toEqual(["media_reference", "ref_video_url"]);
+    });
+
     it("passes the caller's abort signal to the request", async () => {
       mockFetch.mockResolvedValueOnce(replicateSchemaResponse({ prompt: { type: "string" } }));
       const controller = new AbortController();
