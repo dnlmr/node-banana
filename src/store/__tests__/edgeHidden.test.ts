@@ -34,6 +34,51 @@ describe("setEdgesHidden", () => {
   });
 });
 
+describe("hiding a noodle beside a labelled stack", () => {
+  const wire = (id: string, data: Record<string, unknown> = {}, sourceHandle = "image"): WorkflowEdge =>
+    ({ id, source: "img", sourceHandle, target: id, targetHandle: "image", data, selected: false });
+
+  beforeEach(() => {
+    useWorkflowStore.setState({ ...initial, nodes: [], groups: {}, edges: [
+      wire("m1", { hidden: true, label: "Model" }),
+      wire("m2", { hidden: true, label: "Model" }),
+      wire("fresh"),
+      wire("named", { label: "Backdrop" }),
+      wire("other-handle", {}, "reference"),
+    ] });
+  });
+
+  const label = (id: string) => useWorkflowStore.getState().edges.find((e) => e.id === id)?.data?.label;
+
+  it("takes the label every hidden noodle on that handle already carries", () => {
+    useWorkflowStore.getState().setEdgesHidden(["fresh"], true);
+    expect(label("fresh")).toBe("Model");
+  });
+
+  it("keeps its own label, and leaves a different handle alone", () => {
+    useWorkflowStore.getState().setEdgesHidden(["named", "other-handle"], true);
+    expect(label("named")).toBe("Backdrop");
+    expect(label("other-handle")).toBeUndefined();
+  });
+
+  it("inherits nothing when the hidden noodles disagree, or none is hidden", () => {
+    useWorkflowStore.setState({ edges: [wire("m1", { hidden: true, label: "Model" }), wire("m2", { hidden: true, label: "Look" }), wire("fresh")] });
+    useWorkflowStore.getState().setEdgesHidden(["fresh"], true);
+    expect(label("fresh")).toBeUndefined();
+    useWorkflowStore.setState({ edges: [wire("m1", { label: "Model" }), wire("fresh")] });
+    useWorkflowStore.getState().setEdgesHidden(["fresh"], true);
+    expect(label("fresh")).toBeUndefined();
+  });
+
+  it("is one undo step with the hide", () => {
+    useWorkflowStore.getState().setEdgesHidden(["fresh"], true);
+    useWorkflowStore.getState().undo();
+    const fresh = useWorkflowStore.getState().edges.find((e) => e.id === "fresh");
+    expect(fresh?.data?.hidden).toBeUndefined();
+    expect(fresh?.data?.label).toBeUndefined();
+  });
+});
+
 describe("setAllEdgesHidden", () => {
   beforeEach(() => {
     useWorkflowStore.setState({ ...initial, nodes: [], edges: [edge("b"), edge("c", { hidden: true })], groups: {} });

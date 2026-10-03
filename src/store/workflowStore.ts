@@ -1521,14 +1521,35 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const ids = new Set(edgeIds);
     if (!get().edges.some((e) => ids.has(e.id) && Boolean(e.data?.hidden) !== hidden)) return;
     pushUndoCheckpoint(get, set);
-    set((state) => ({
-      edges: state.edges.map((edge) =>
-        ids.has(edge.id)
-          ? { ...edge, data: { ...edge.data, hidden }, selected: hidden ? false : edge.selected }
-          : edge
-      ),
-      hasUnsavedChanges: true,
-    }));
+    set((state) => {
+      // A noodle hidden on a handle whose hidden noodles all carry one label
+      // joins that stack: it takes the label, so "Model" stays "Model" at the
+      // downstream node without being typed again. Its own label always wins.
+      const inherited = (edge: WorkflowEdge): string | undefined => {
+        if (!hidden || edge.data?.label?.trim()) return undefined;
+        const labels = new Set<string>();
+        for (const other of state.edges) {
+          if (ids.has(other.id) || !other.data?.hidden) continue;
+          if (other.source !== edge.source || (other.sourceHandle ?? null) !== (edge.sourceHandle ?? null)) continue;
+          labels.add(other.data.label?.trim() ?? "");
+        }
+        if (labels.size !== 1) return undefined;
+        const [label] = labels;
+        return label || undefined;
+      };
+      return {
+        edges: state.edges.map((edge) => {
+          if (!ids.has(edge.id)) return edge;
+          const label = inherited(edge);
+          return {
+            ...edge,
+            data: { ...edge.data, hidden, ...(label ? { label } : {}) },
+            selected: hidden ? false : edge.selected,
+          };
+        }),
+        hasUnsavedChanges: true,
+      };
+    });
   },
 
   setAllEdgesHidden: (hidden: boolean) => {
