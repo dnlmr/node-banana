@@ -72,6 +72,30 @@ function envConnection(): ComfyConnection | null {
 }
 
 /**
+ * Whether the request names the engine the environment configures. A request
+ * may pick any engine, but the server's own keys only ever go to that one.
+ * The whole endpoint is compared, not just the host: separate tenants can sit
+ * under different paths on one proxy.
+ */
+function isEnvironmentEngine(baseUrl: string): boolean {
+  const mode = process.env.COMFY_MODE ?? "cloud";
+  const configured = (
+    mode === "cloud"
+      ? process.env.COMFY_CLOUD_URL?.trim() || COMFY_CLOUD_URL
+      : mode === "local"
+        ? process.env.COMFY_LOCAL_URL
+        : process.env.COMFY_REMOTE_URL
+  )?.trim();
+  if (!configured) return false;
+  try {
+    const canonical = (url: string) => new URL(url).href.replace(/\/+$/, "");
+    return canonical(baseUrl) === canonical(configured);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The engine this request targets.
  *
  * @throws {ComfyConfigError} when neither the request nor the environment
@@ -93,13 +117,17 @@ export function connectionFromRequest(request: Request): ComfyConnection {
   const mode: ComfyBackendMode =
     rawMode === "local" || rawMode === "remote" || rawMode === "cloud" ? rawMode : "cloud";
   const timeout = headers.get(COMFY_HEADERS.jobTimeout);
+  const baseUrl = validateEngineUrl(rawBaseUrl);
 
   return {
     mode,
-    baseUrl: validateEngineUrl(rawBaseUrl),
+    baseUrl,
     // The browser holds the user's key; the env var is the fallback for a
     // headless deployment where no browser supplies one.
-    apiKey: headers.get(COMFY_HEADERS.apiKey) || process.env.COMFY_API_KEY?.trim() || null,
+    apiKey:
+      headers.get(COMFY_HEADERS.apiKey) ||
+      (isEnvironmentEngine(baseUrl) ? process.env.COMFY_API_KEY?.trim() : null) ||
+      null,
     useSdk: headers.get(COMFY_HEADERS.apiV2) === "1",
     jobTimeoutMs: clampJobTimeoutMs(timeout),
   };
@@ -114,7 +142,7 @@ export function connectionFromRequest(request: Request): ComfyConnection {
 export function orgKeyFromRequest(request: Request, connection: ComfyConnection): string | null {
   return (
     request.headers.get(COMFY_HEADERS.orgKey) ||
-    process.env.COMFY_ORG_API_KEY?.trim() ||
+    (isEnvironmentEngine(connection.baseUrl) ? process.env.COMFY_ORG_API_KEY?.trim() : null) ||
     connection.apiKey ||
     null
   );
