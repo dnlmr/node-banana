@@ -1,22 +1,47 @@
 ---
 import "../styles/global.css";
+import { version } from "../lib/release";
 
 // Astro.site comes from astro.config.mjs (SITE_URL or the production domain).
 const site = Astro.site ?? new URL("https://nodebanana.app");
 const pageUrl = new URL(Astro.url.pathname, site).href;
 const ogImage = new URL("/assets/og.png", site).href;
+
+const title = "Node Banana: free, open source generative media canvas for Mac and Windows";
+const description =
+  "Node Banana is a free, open source generative media canvas for Mac and Windows. Bring your own API keys and generate images, video, audio and 3D on one node graph, with an agent that builds workflows for you.";
+
+// What search engines show beside the result: a free desktop app, its platforms, where it comes from.
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Node Banana",
+  url: site.href,
+  description,
+  applicationCategory: "MultimediaApplication",
+  operatingSystem: "macOS 13 or later (Apple Silicon), Windows 10 or later (x64)",
+  softwareVersion: version,
+  downloadUrl: [new URL("/download/mac", site).href, new URL("/download/windows", site).href],
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  license: "https://github.com/shrimbly/node-banana/blob/master/LICENSE",
+  screenshot: ogImage,
+  image: ogImage,
+  sameAs: ["https://github.com/shrimbly/node-banana", "https://discord.com/invite/89Nr6EKkTf", "https://node-banana-docs.vercel.app/"],
+};
 ---
 <!DOCTYPE html>
 <html lang="en" class="no-js">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Node Banana</title>
-  <meta name="description" content="Node Banana is a free, open source generative media canvas for Mac and Windows. Bring your own API keys and generate images, video, audio and 3D on one node graph.">
+  <title>{title}</title>
+  <meta name="description" content={description}>
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0a0a0a">
 
   <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Node Banana">
+  <meta property="og:locale" content="en_US">
   <meta property="og:title" content="Node Banana">
   <meta property="og:description" content="Free, open source, bring your own key. A generative media canvas for Mac and Windows.">
   <link rel="canonical" href={pageUrl}>
@@ -31,6 +56,8 @@ const ogImage = new URL("/assets/og.png", site).href;
   <meta name="twitter:image" content={ogImage}>
   <meta name="twitter:image:alt" content="The Node Banana app window: a car photo feeds Generate Image and Generate Video nodes, above the NODE BANANA wordmark.">
 
+  <link rel="sitemap" href="/sitemap-index.xml">
+  <script type="application/ld+json" set:html={JSON.stringify(structuredData)}></script>
   <link rel="icon" type="image/png" href="/assets/banana.png">
   <link rel="apple-touch-icon" href="/assets/banana.png">
 
