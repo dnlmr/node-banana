@@ -3877,6 +3877,15 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             'capturedImageRef', 'videoRef', 'outputVideoRef', 'audioFileRef', 'outputAudioRef',
           ] as const;
           const ARRAY_REF_FIELDS = ['inputImageRefs', 'imageRefs', 'videoRefs'] as const;
+          // The media field each ref describes
+          const MEDIA_FIELD_BY_REF: Record<string, string> = {
+            imageRef: 'image', sourceImageRef: 'sourceImage', outputImageRef: 'outputImage',
+            imageARef: 'imageA', imageBRef: 'imageB', capturedImageRef: 'capturedImage',
+            videoRef: 'video', outputVideoRef: 'outputVideo', audioFileRef: 'audioFile',
+            outputAudioRef: 'outputAudio', inputImageRefs: 'inputImages',
+            imageRefs: 'images', videoRefs: 'videos',
+          };
+          const savedNodesById = new Map(savedNodesSnapshot.map((node) => [node.id, node]));
 
           // Index the externalized refs by node id (not array position) so the
           // merge is robust to nodes added/removed/reordered during the save.
@@ -3890,15 +3899,23 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           // returned untouched.
           const nodesWithRefs = freshNodes.map((node) => {
             const extData = extRefsById.get(node.id);
-            if (!extData) return node;
+            const savedNode = savedNodesById.get(node.id);
+            if (!extData || !savedNode || savedNode.type !== node.type) return node;
 
             const mergedData = { ...node.data } as Record<string, unknown>;
+            const savedData = savedNode.data as Record<string, unknown>;
+            // A ref names the file written for the media this save read. Media
+            // replaced since then must keep no ref, or the next save would point
+            // at the old file and the replacement would be lost on reopening.
+            const unchanged = (key: string) =>
+              mergedData[MEDIA_FIELD_BY_REF[key]] === savedData[MEDIA_FIELD_BY_REF[key]] &&
+              mergedData[key] === savedData[key];
             let touched = false;
             for (const key of STRING_REF_FIELDS) {
-              if (typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
             }
             for (const key of ARRAY_REF_FIELDS) {
-              if (Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
             }
             return touched ? ({ ...node, data: mergedData as WorkflowNodeData } as WorkflowNode) : node;
           });
