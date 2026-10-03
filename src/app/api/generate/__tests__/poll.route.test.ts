@@ -178,7 +178,7 @@ describe("/api/generate/poll route", () => {
       const data = await response.json();
 
       expect(response.status).toBe(500);
-      expect(data.error).toBe("Black Forest Labs: Content Moderated");
+      expect(data.error).toBe("FLUX.2 Pro: Black Forest Labs: Content Moderated");
       expect(mockFetch.mock.calls[0][1].headers["X-API-Key"]).toBe("env-comfy-key");
     });
   });

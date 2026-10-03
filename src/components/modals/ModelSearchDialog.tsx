@@ -235,6 +235,7 @@ const CAPABILITY_LABELS: Partial<Record<ModelCapability, string>> = {
   "text-to-video": "txt\u2192vid",
   "image-to-video": "img\u2192vid",
   "audio-to-video": "audio\u2192vid",
+  "video-to-video": "vid\u2192vid",
   "text-to-3d": "txt\u21923d",
   "image-to-3d": "img\u21923d",
   "text-to-audio": "txt\u2192audio",
@@ -254,7 +255,7 @@ interface ModelsResponse {
 /** The capabilities behind each Type filter. */
 const CAPABILITY_FILTER_SETS: Record<Exclude<CapabilityFilter, "all">, ModelCapability[]> = {
   image: ["text-to-image", "image-to-image"],
-  video: ["text-to-video", "image-to-video", "audio-to-video"],
+  video: ["text-to-video", "image-to-video", "audio-to-video", "video-to-video"],
   "3d": ["text-to-3d", "image-to-3d"],
   audio: ["text-to-audio"],
 };
@@ -568,7 +569,7 @@ export function ModelSearchDialog({
 
       // Determine node type based on model capabilities
       const isVideoModel = model.capabilities.some(
-        (cap) => cap === "text-to-video" || cap === "image-to-video" || cap === "audio-to-video"
+        (cap) => cap === "text-to-video" || cap === "image-to-video" || cap === "audio-to-video" || cap === "video-to-video"
       );
       const is3DModel = model.capabilities.some(
         (cap) => cap === "text-to-3d" || cap === "image-to-3d"

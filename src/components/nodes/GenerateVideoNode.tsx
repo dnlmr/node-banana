@@ -36,7 +36,7 @@ import {
 import { Download, X } from "lucide-react";
 
 // Video generation capabilities
-const VIDEO_CAPABILITIES: ModelCapability[] = ["text-to-video", "image-to-video", "audio-to-video"];
+const VIDEO_CAPABILITIES: ModelCapability[] = ["text-to-video", "image-to-video", "audio-to-video", "video-to-video"];
 
 const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "video", type: "video", label: "Video" }];
 
