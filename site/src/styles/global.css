@@ -53,9 +53,6 @@
   --radius-ui: 4px;
   --radius-window: 12px;
 
-  /* Release: one edit here at release time. */
-  --nb-version: "[VERSION]";
-
   /* Motion */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-draw: cubic-bezier(0.4, 0, 0.2, 1);
@@ -559,7 +556,6 @@ ul { margin: 0; padding: 0; list-style: none; }
 .menu__item[aria-current="true"] .menu__name::after { content: " ·"; color: var(--ink-3); }
 .menu__name { font-family: var(--font-display); font-size: 13px; line-height: 16px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
 .menu__meta { color: var(--ink-3); }
-.version::after { content: var(--nb-version); }
 
 /* ---------- Wordmark ---------------------------------------------------- */
 

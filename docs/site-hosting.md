@@ -22,7 +22,7 @@ So a download link works when the latest *published* release has the versionless
    - Build command: `npm run build`
    - Output directory: `dist`
 4. **Node.js version** (Settings → Build and Deployment): 22.x or later.
-5. **Environment variable:** add `SITE_URL` with the value `https://nodebanana.app` (no trailing slash). Select Production and Preview. The page uses it to make `og:image` and `og:url` absolute, so link previews in Slack, X and Discord show the image. It is not a secret.
+5. **Environment variable (optional):** the page makes `og:image`, `og:url` and its canonical link absolute with `https://nodebanana.app`, built into `site/astro.config.mjs`, so link previews in Slack, X and Discord show the image. `SITE_URL` (no trailing slash) overrides that address; set it only if the site moves, or for Preview if previews should point at themselves. It is not a secret.
 6. Select **Deploy**.
 
 Check:
@@ -73,7 +73,8 @@ Check:
 1. Push the tag `v<version>` (see [desktop-preview.md](desktop-preview.md#releases-and-updates)). The Release workflow uploads the versioned installers, the updater manifests, and the two versionless copies into a **draft** release.
 2. Check the draft has `Node-Banana-mac-arm64.dmg` and `Node-Banana-windows-x64.exe` beside the versioned files.
 3. Add the notes and select **Publish release**. Leave **Set as the latest release** on.
-4. From then on, `/download/mac` and `/download/windows` give the new installers. The site does not need a new deployment. Installed apps find the update at their next check.
+4. From then on, `/download/mac` and `/download/windows` give the new installers. Installed apps find the update at their next check.
+5. Redeploy the site so it shows the new version number: the page reads it from the repository's `package.json` when it builds (`site/src/lib/release.ts`), and the skip rule from section 2 means a push that changes only the root `package.json` builds nothing. Either **Redeploy** the latest production deployment from the Vercel dashboard, or let the release commit touch a file under `site/` (the CHANGELOG link, say). The download links do not depend on this.
 
 The workflow change must be in the tagged commit. If `v2.0.0` was tagged before this change reached it, upload the copies by hand as below.
 
