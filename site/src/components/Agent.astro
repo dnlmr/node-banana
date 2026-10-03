@@ -1,0 +1,11 @@
+---
+import agentBuilt from "../partials/agent-built.html?raw";
+import agentFacts from "../partials/agent-facts.html?raw";
+---
+<section class="section" id="agent">
+  <div class="section__inner">
+  <div class="section__head"><div class="section__copy"><h2 class="h2 reveal">Bring your own agent.</h2></div><p class="lead reveal" style="--d: 1;">Use your coding agent to create workflows, edit them, change node settings, and just build cool shit faster.</p></div>
+  <div class="reveal" style="--d: 2;"><Fragment set:html={agentBuilt} /></div>
+  <Fragment set:html={agentFacts} />
+  </div>
+</section>
