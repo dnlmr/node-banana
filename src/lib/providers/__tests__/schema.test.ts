@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getModelSchema, isSchemaProvider, type ModelSchemaResult, type ModelSchemaSuccess } from "../schema";
+import { primeRouterSchema } from "../comfyRouter/catalog";
 
 const mockFetch = vi.fn();
 
@@ -66,17 +67,43 @@ describe("getModelSchema", () => {
       expect(result.inputs).toContainEqual({ name: "image_urls", type: "image", required: true, label: "Image", isArray: true });
     });
 
-    it("serves a Comfy Router model", async () => {
+    it("serves a Comfy Router model's settings from its published schema", async () => {
+      primeRouterSchema("bfl/flux-2-pro", {
+        paths: {
+          "/v2/models/bfl/flux-2-pro": {
+            post: {
+              requestBody: {
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["prompt"],
+                      properties: {
+                        prompt: { type: "string" },
+                        input_image: { type: "string" },
+                        width: { type: "integer", minimum: 256, maximum: 2048, default: 1024 },
+                        height: { type: "integer", minimum: 256, maximum: 2048, default: 1024 },
+                        seed: { type: "integer" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
       const result = expectOk(await getModelSchema("comfy", "bfl/flux-2-pro", {}));
       expect(result.parameters.map((p) => p.name)).toEqual(expect.arrayContaining(["width", "height", "seed"]));
       expect(result.inputs.find((i) => i.name === "prompt")).toMatchObject({ type: "text", required: true });
+      // Served from the Router schema cache
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("needs no key and makes no request for static providers", async () => {
       await getModelSchema("gemini", "nano-banana", {});
       await getModelSchema("openai", "gpt-image-2", {});
       await getModelSchema("kie", "z-image", {});
-      await getModelSchema("comfy", "bfl/flux-2-pro", {});
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
