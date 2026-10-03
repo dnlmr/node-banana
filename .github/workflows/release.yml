@@ -71,6 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       # Made once, before the builds, so two uploads never race to create it.
       - name: Create the draft if it does not exist
         env:
@@ -80,7 +81,12 @@ jobs:
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists"
           else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" --target "$GITHUB_SHA" --notes "Release notes to come."
+            # docs/releases/<tag>.md is the release body when it exists.
+            if [ -f "docs/releases/$TAG.md" ]; then
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" --target "$GITHUB_SHA" --notes-file "docs/releases/$TAG.md"
+            else
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" --target "$GITHUB_SHA" --notes "Release notes to come."
+            fi
           fi
 
   mac:
@@ -136,6 +142,16 @@ jobs:
         run: |
           cp "dist-electron/Node-Banana-$VERSION-arm64.dmg" "$RUNNER_TEMP/Node-Banana-mac-arm64.dmg"
           gh release upload "$TAG" "$RUNNER_TEMP/Node-Banana-mac-arm64.dmg" --clobber --repo "$GITHUB_REPOSITORY"
+      # So a download can be checked against what the build produced.
+      - name: Checksums
+        if: ${{ env.PUBLISH == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          (cd dist-electron && shasum -a 256 *.dmg *.zip) > "$RUNNER_TEMP/SHA256SUMS-mac-arm64.txt"
+          cat "$RUNNER_TEMP/SHA256SUMS-mac-arm64.txt"
+          gh release upload "$TAG" "$RUNNER_TEMP/SHA256SUMS-mac-arm64.txt" --clobber --repo "$GITHUB_REPOSITORY"
       - name: Smoke test the packaged app
         continue-on-error: true
         run: npm run electron:smoke -- --executable "dist-electron/mac-arm64/Node Banana.app/Contents/MacOS/Node Banana"
@@ -199,6 +215,19 @@ jobs:
           $copy = Join-Path $env:RUNNER_TEMP 'Node-Banana-windows-x64.exe'
           Copy-Item "dist-electron/Node-Banana-$env:VERSION-x64.exe" $copy
           gh release upload $env:TAG $copy --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Checksums
+        if: ${{ env.PUBLISH == 'true' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          $sums = Join-Path $env:RUNNER_TEMP 'SHA256SUMS-windows-x64.txt'
+          $lines = Get-ChildItem dist-electron -Include *.exe,*.zip -File -Recurse | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+          Set-Content -Path $sums -Value $lines -Encoding ascii
+          Get-Content $sums
+          gh release upload $env:TAG $sums --clobber --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Keep the installers
         uses: actions/upload-artifact@v4
