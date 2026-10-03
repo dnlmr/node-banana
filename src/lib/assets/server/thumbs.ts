@@ -28,7 +28,7 @@ import { isSha256 } from "./validate";
 
 export type ThumbWidth = (typeof THUMB_WIDTHS)[number];
 
-type SharpModule = typeof import("sharp");
+type SharpModule = typeof import("sharp").default;
 
 let sharpModule: Promise<SharpModule | null> | null = null;
 

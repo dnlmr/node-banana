@@ -82,7 +82,7 @@ async function main() {
     }
     await fs.mkdir(source);
     await fs.mkdir(runtime);
-    for (const entry of ['src', 'public', 'package.json', 'package-lock.json', 'next.config.ts', 'next.config.shared.cjs', 'postcss.config.mjs', 'tsconfig.json']) {
+    for (const entry of ['src', 'public', 'package.json', 'package-lock.json', 'next.config.ts', 'next.config.shared.cjs', 'postcss.config.mjs', 'tsconfig.json', 'tsconfig.build.json']) {
       await fs.cp(path.join(root, entry), path.join(source, entry), { recursive: true, verbatimSymlinks: true, filter });
     }
     await run('npm', ['ci', '--no-audit', '--no-fund'], source, env);
