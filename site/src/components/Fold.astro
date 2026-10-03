@@ -1,4 +1,5 @@
 ---
+import { versionLabel } from "../lib/release";
 import appWindow from "../partials/app-window.html?raw";
 ---
 <main class="fold">
@@ -33,8 +34,8 @@ import appWindow from "../partials/app-window.html?raw";
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"></path></svg>
               </summary>
               <ul class="menu">
-                <li><a class="menu__item" href="/download/mac" data-platform="mac" data-label="Mac"><span class="menu__name">Mac</span><span class="menu__meta">Apple Silicon · <span class="version"></span></span></a></li>
-                <li><a class="menu__item" href="/download/windows" data-platform="windows" data-label="Windows"><span class="menu__name">Windows</span><span class="menu__meta">x64 · <span class="version"></span></span></a></li>
+                <li><a class="menu__item" href="/download/mac" data-platform="mac" data-label="Mac"><span class="menu__name">Mac</span><span class="menu__meta">Apple Silicon · <span class="version">{versionLabel}</span></span></a></li>
+                <li><a class="menu__item" href="/download/windows" data-platform="windows" data-label="Windows"><span class="menu__name">Windows</span><span class="menu__meta">x64 · <span class="version">{versionLabel}</span></span></a></li>
               </ul>
             </details>
           </div>
