@@ -90,3 +90,92 @@ describe("refs from a save that media changed under", () => {
     expect(store().hasUnsavedChanges).toBe(true);
   });
 });
+
+describe("a canvas replaced while a load or save is in flight", () => {
+  const file = (name: string): WorkflowFile => ({
+    version: 1,
+    name,
+    nodes: [node(`${name}-node`, { image: name })],
+    edges: [],
+    edgeStyle: "angular",
+  });
+
+  it("is not overwritten when a slow load into another tab finishes", async () => {
+    useWorkflowStore.setState({ nodes: [node("keep-me", { image: "unsaved" })], hasUnsavedChanges: true });
+    const originalTab = store().activeTabId;
+    store().newTab();
+    const pending = deferred<WorkflowFile>();
+    vi.mocked(hydrateWorkflowMedia).mockReturnValueOnce(pending.promise);
+    const loading = store().loadWorkflow(file("Slow"), "/slow");
+
+    expect(store().switchTab(originalTab)).toBe(true);
+    pending.resolve(file("Slow"));
+    await loading;
+    expect(store().nodes[0].id).toBe("keep-me");
+    expect(store().hasUnsavedChanges).toBe(true);
+  });
+
+  it("keeps the newest of two loads when the older one's media arrives last", async () => {
+    const pending = deferred<WorkflowFile>();
+    vi.mocked(hydrateWorkflowMedia).mockReturnValueOnce(pending.promise);
+    const oldLoad = store().loadWorkflow(file("Old"), "/old");
+    await store().loadWorkflow(file("New"), "/new");
+    pending.resolve(file("Old"));
+    await oldLoad;
+    expect(store().workflowName).toBe("New");
+    expect(store().nodes[0].id).toBe("New-node");
+  });
+
+  it("stays clear when it was cleared during a load", async () => {
+    const pending = deferred<WorkflowFile>();
+    vi.mocked(hydrateWorkflowMedia).mockReturnValueOnce(pending.promise);
+    const loading = store().loadWorkflow(file("Old"), "/old");
+    store().clearWorkflow();
+    pending.resolve(file("Old"));
+    await loading;
+    expect(store().nodes).toEqual([]);
+    expect(store().workflowName).toBeNull();
+  });
+
+  it("gets none of a finished save's refs or metadata", async () => {
+    const pending = deferred<{ json: () => Promise<{ success: boolean }> }>();
+    vi.mocked(fetch).mockReturnValueOnce(pending.promise as Promise<Response>);
+    useWorkflowStore.setState({ nodes: [node("same-id", { image: "old" })] });
+    const saving = store().saveToFile();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    await store().loadWorkflow(file("Replacement"), "/replacement");
+    pending.resolve({ json: async () => ({ success: true }) });
+    expect(await saving).toBe(false);
+    expect(store().workflowName).toBe("Replacement");
+    expect(store().imageRefBasePath).toBe("/replacement");
+    expect(store().lastSavedAt).toBeNull();
+    expect(store().isSaving).toBe(false);
+  });
+});
+
+describe("overlapping saves", () => {
+  it("run one after the other, and Save As takes the new name only after the first", async () => {
+    const pending = deferred<WorkflowFile>();
+    useWorkflowStore.setState({ nodes: [node("media-1", { image: "a" })] });
+    vi.mocked(externalizeWorkflowMedia).mockReturnValueOnce(pending.promise);
+    const first = store().saveToFile();
+    await vi.waitFor(() => expect(externalizeWorkflowMedia).toHaveBeenCalledOnce());
+
+    const second = store().saveToFile();
+    const saveAs = store().saveAsFile("Different");
+    await Promise.resolve();
+    // Neither starts, and the identity the first save is writing stays put
+    expect(externalizeWorkflowMedia).toHaveBeenCalledOnce();
+    expect(store().workflowName).toBe("Original");
+
+    pending.resolve(vi.mocked(externalizeWorkflowMedia).mock.calls[0][0]);
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(await saveAs).toBe(true);
+    expect(store().workflowName).toBe("Different");
+    expect(store().isSaving).toBe(false);
+    // Each save posted the identity it was started with
+    const posted = vi.mocked(fetch).mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string).filename);
+    expect(posted).toEqual(["Original", "Original", "Different"]);
+  });
+});

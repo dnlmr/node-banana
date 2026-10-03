@@ -586,6 +586,10 @@ function syncIdCounters(nodes: WorkflowNode[], groups: Record<string, NodeGroup>
 }
 let autoSave: AutoSave | null = null;
 let autoSaveWindowListeners: (() => void) | null = null;
+// The save in flight, if any. Saves run one at a time: a manual save that
+// overlapped an autosave could finish first and be overwritten on disk by the
+// older snapshot, or have its isSaving cleared from under it.
+let activeSave: Promise<void> | null = null;
 
 // Undo/redo state (module-level, not in Zustand to avoid serialization)
 const undoManager = new UndoManager();
@@ -3280,10 +3284,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const inflight = get()._abortController;
     if (inflight) inflight.abort("workflow-replaced");
     abortNodeRuns(get(), "workflow-replaced");
-    set({ isRunning: false, pausedAtNodeId: null, currentNodeIds: [], _abortController: null });
-
-    // Keep generated ids clear of the loaded graph's ids
-    syncIdCounters(workflow.nodes, workflow.groups);
+    // The canvas is being replaced from now on, not only once the media has
+    // loaded: a save or another load that finishes meanwhile must see it
+    const generation = get().canvasGeneration + 1;
+    set({ isRunning: false, pausedAtNodeId: null, currentNodeIds: [], _abortController: null, canvasGeneration: generation });
 
     // Migrate legacy nanoBanana nodes: derive selectedModel from model field if missing
     workflow.nodes = workflow.nodes.map((node) => {
@@ -3375,6 +3379,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         // Continue with original workflow if hydration fails
       }
     }
+
+    // A newer load, a clear or a tab switch took the canvas while the media
+    // loaded. This graph must not replace that one (or another tab's unsaved work).
+    if (get().canvasGeneration !== generation) return;
+    // Keep generated ids clear of the loaded graph's ids
+    syncIdCounters(hydratedWorkflow.nodes, hydratedWorkflow.groups);
 
     // Load cost data for this workflow
     const costData = workflow.id ? loadWorkflowCostData(workflow.id) : null;
@@ -3742,6 +3752,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   saveToFile: async (options = {}) => {
+    while (activeSave) await activeSave;
     const reason = options.reason ?? "manual";
     let {
       nodes,
@@ -3761,12 +3772,19 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       return false;
     }
 
+    // The canvas this save belongs to. If another replaces it meanwhile (a
+    // load, a clear, a tab switch), the save must not touch the new one.
+    const generation = get().canvasGeneration;
+    const replaced = () => get().canvasGeneration !== generation;
+    let finishSave!: () => void;
+    activeSave = new Promise((resolve) => (finishSave = resolve));
     set({ isSaving: true });
 
     try {
       // Wait for any pending image/video saves to complete so their IDs are synced
       // This prevents saving workflows with temporary IDs that don't match saved files
       await waitForPendingImageSyncs();
+      if (replaced()) return false;
 
       // Re-fetch nodes after waiting, as imageHistory IDs may have been updated
       let currentNodes = get().nodes;
@@ -3836,6 +3854,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       if (useExternalImageStorage) {
         workflow = await externalizeWorkflowMedia(workflow, saveDirectoryPath);
       }
+      if (replaced()) return false;
 
       const response = await fetch("/api/workflow", {
         method: "POST",
@@ -3848,6 +3867,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       });
 
       const result = await response.json();
+      if (replaced()) return false;
 
       if (result.success) {
         const timestamp = Date.now();
@@ -3963,6 +3983,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       return false;
     } finally {
       set({ isSaving: false });
+      activeSave = null;
+      finishSave();
     }
   },
 
@@ -3971,6 +3993,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (!trimmedName) {
       return false;
     }
+    // Change the identity only once a save in flight has finished with the old one
+    while (activeSave) await activeSave;
 
     const { saveDirectoryPath, workflowId: prevId, workflowName: prevName, hasUnsavedChanges: prevUnsaved } = get();
     if (!saveDirectoryPath) {
@@ -3985,9 +4009,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       hasUnsavedChanges: true,
     });
 
+    const generation = get().canvasGeneration;
     const success = await get().saveToFile();
-    if (!success) {
-      // Rollback to previous identity on failure
+    if (!success && get().canvasGeneration === generation && get().workflowId === newWorkflowId) {
+      // Rollback to previous identity on failure (never onto a canvas that replaced it)
       set({ workflowId: prevId, workflowName: prevName, hasUnsavedChanges: prevUnsaved });
     }
     return success;
