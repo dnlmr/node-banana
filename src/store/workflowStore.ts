@@ -3424,6 +3424,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     // A newer load, a clear or a tab switch took the canvas while the media
     // loaded. This graph must not replace that one (or another tab's unsaved work).
     if (get().canvasGeneration !== generation) return;
+    // The outgoing graph stayed on screen while the media loaded, so a run
+    // may have started on it since. That run goes with its graph.
+    get()._abortController?.abort("workflow-replaced");
+    abortNodeRuns(get(), "workflow-replaced");
     // Keep generated ids clear of the loaded graph's ids
     syncIdCounters(hydratedWorkflow.nodes, hydratedWorkflow.groups);
 
@@ -3461,6 +3465,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       batch: null,
       isRunning: false,
       currentNodeIds: [],
+      _abortController: null,
       // Restore workflow ID and paths from localStorage if available
       workflowId: workflow.id || null,
       workflowName: workflow.name,

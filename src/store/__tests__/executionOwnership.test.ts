@@ -8,7 +8,12 @@ import { useWorkflowStore } from "../workflowStore";
 import { executeNanoBanana, executeGlbViewer, executeVideoTrim } from "../execution";
 import type { NodeExecutionContext } from "../execution";
 import type { WorkflowNode } from "@/types";
+import { hydrateWorkflowMedia } from "@/utils/mediaStorage";
 
+vi.mock("@/utils/mediaStorage", () => ({
+  externalizeWorkflowMedia: vi.fn(async (workflow) => workflow),
+  hydrateWorkflowMedia: vi.fn(async (workflow) => workflow),
+}));
 vi.mock("../execution", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../execution")>()),
   executeNanoBanana: vi.fn(),
@@ -44,6 +49,7 @@ const node = (id: string, type = "nanoBanana"): WorkflowNode =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(hydrateWorkflowMedia).mockImplementation(async (workflow) => workflow);
   store().clearWorkflow();
   useWorkflowStore.setState({ nodes: [node("generate-1")], isSaving: false });
 });
@@ -145,6 +151,47 @@ describe("a stopped run with nothing started after it", () => {
     await run;
     expect(store().nodes[0].data.status).toBe("idle");
     expect(store().isRunning).toBe(false);
+  });
+});
+
+describe("a run started while a workflow's media loads", () => {
+  it("is cancelled when the loaded workflow replaces its graph, and writes nothing to it", async () => {
+    const hydration = deferred();
+    const generation = deferred();
+    vi.mocked(hydrateWorkflowMedia).mockImplementationOnce(async (workflow) => {
+      await hydration.promise;
+      return workflow;
+    });
+    vi.mocked(executeNanoBanana).mockImplementationOnce(async (ctx) => {
+      await generation.promise;
+      ctx.updateNodeData(ctx.node.id, { outputImage: "outgoing-graph-result" });
+    });
+    // The loaded file reuses the outgoing graph's node id
+    const loading = store().loadWorkflow(
+      {
+        version: 1,
+        name: "Loaded",
+        edgeStyle: "angular",
+        edges: [],
+        nodes: [{ ...node("generate-1"), data: { status: "idle", outputImage: "loaded-image" } } as WorkflowNode],
+      },
+      "/loaded",
+    );
+    const running = store().executeWorkflow();
+    await vi.waitFor(() => expect(executeNanoBanana).toHaveBeenCalledOnce());
+    const controller = store()._abortController!;
+
+    hydration.resolve();
+    await loading;
+    expect(controller.signal.aborted).toBe(true);
+    expect(store()._abortController).toBeNull();
+    expect(store().isRunning).toBe(false);
+
+    generation.resolve();
+    await running;
+    expect(store().nodes[0].data.outputImage).toBe("loaded-image");
+    expect(store().workflowName).toBe("Loaded");
+    expect(store().hasUnsavedChanges).toBe(false);
   });
 });
 
