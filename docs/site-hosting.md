@@ -22,7 +22,7 @@ So a download link works when the latest *published* release has the versionless
    - Build command: `npm run build`
    - Output directory: `dist`
 4. **Node.js version** (Settings → Build and Deployment): 22.x or later.
-5. **Environment variable:** add `SITE_URL` with the final address, for example `https://nodebanana.app` (no trailing slash). Select Production and Preview. The page uses it to make `og:image` and `og:url` absolute, so link previews in Slack, X and Discord show the image. It is not a secret.
+5. **Environment variable:** add `SITE_URL` with the value `https://nodebanana.app` (no trailing slash). Select Production and Preview. The page uses it to make `og:image` and `og:url` absolute, so link previews in Slack, X and Discord show the image. It is not a secret.
 6. Select **Deploy**.
 
 Check:
@@ -44,35 +44,27 @@ Check: push a branch that changes a file in `site/`. A preview appears under **D
 
 ## 3. Add the custom domain
 
-1. **Settings → Domains → Add**, then type the domain, for example `nodebanana.app`. Vercel offers to add `www.nodebanana.app` too and to redirect one to the other. Accept it. Pick the apex (no `www`) as the main address, so it matches `SITE_URL`.
-2. Vercel then shows the DNS records to create. Use the exact values it shows, because Vercel now gives each project its own values. They look like this:
+`nodebanana.app` was bought through Vercel, so Vercel is its registrar and its DNS host (nameservers `ns1.vercel-dns.com` and `ns2.vercel-dns.com`). There are no records to create at another registrar.
 
-   | Name (host) | Type | Value |
-   |-------------|------|-------|
-   | `@` (the apex) | `A` | the IP address Vercel shows, for example `76.76.21.21` |
-   | `www` | `CNAME` | the host Vercel shows, for example `cname.vercel-dns.com` |
-
-   - If the registrar supports `ALIAS` or `ANAME` records on the apex, you can use one pointing at the CNAME value instead of the `A` record.
-   - Delete any other `A`, `AAAA` or `CNAME` records on `@` and `www`, for example a parking page. An old `AAAA` record sends some visitors to the old host.
-   - Do not change the `MX` or `TXT` records. Email keeps working.
-   - If Vercel asks for a `TXT` record named `_vercel`, the domain is already used by another Vercel account. Add that record to prove ownership.
-   - As an alternative, you can move the domain's nameservers to Vercel (`ns1.vercel-dns.com`, `ns2.vercel-dns.com`). Then Vercel manages all records, including email. Only do this if you want Vercel to be the DNS host.
-3. Wait for propagation. A new record usually appears within minutes. An old record that you replaced can take as long as its TTL (often 1 hour, sometimes up to 48 hours). The Domains page shows **Valid Configuration** when Vercel sees the records.
+1. In the project, select **Settings → Domains → Add** and type `nodebanana.app`. Vercel offers to add `www.nodebanana.app` and to redirect one to the other. Accept it, and keep the apex (no `www`) as the main address, so it matches `SITE_URL`.
+2. Vercel creates the DNS records by itself, because it hosts the domain's DNS. The Domains page shows **Valid Configuration** within a minute or two.
+3. In the team's **Domains** page (outside the project), check that **Auto Renew** is on for `nodebanana.app`.
+4. If you later want email on the domain, add the mail provider's `MX` and `TXT` records under the team's **Domains → nodebanana.app → DNS Records**. They do not affect the site.
 
 Check:
 
-- `dig +short nodebanana.app A` returns Vercel's IP address.
-- `dig +short www.nodebanana.app CNAME` returns Vercel's host.
-- The Domains page shows both names with a green check.
+- `dig +short nodebanana.app NS` returns `ns1.vercel-dns.com` and `ns2.vercel-dns.com`.
+- `dig +short nodebanana.app A` returns Vercel addresses (`216.150.…` today).
+- The project's Domains page shows `nodebanana.app` and `www.nodebanana.app` with a green check.
 
 ## 4. HTTPS
 
-Vercel issues a Let's Encrypt certificate for each domain after the DNS check passes, usually within a few minutes, and renews it by itself. It also redirects HTTP to HTTPS. `site/vercel.json` sends `Strict-Transport-Security: max-age=63072000` (two years, no `includeSubDomains`, so other subdomains on plain HTTP are not affected).
+Vercel issues a Let's Encrypt certificate for each domain after the DNS check passes, usually within a few minutes, and renews it by itself. `.app` domains are HTTPS-only in every major browser (the whole `.app` ending is on the browsers' HSTS preload list), so the site cannot be visited before the certificate exists. It also redirects HTTP to HTTPS. `site/vercel.json` sends `Strict-Transport-Security: max-age=63072000` (two years, no `includeSubDomains`, so other subdomains on plain HTTP are not affected).
 
 Check:
 
-- `curl -sI http://nodebanana.app` returns `308` to `https://nodebanana.app/`.
-- `curl -sI https://www.nodebanana.app` returns `308` to `https://nodebanana.app/` (or the other way round, if you chose `www` as main).
+- `curl -sI http://nodebanana.app` returns a redirect to `https://nodebanana.app/` (browsers never request the `http://` address).
+- `curl -sI https://www.nodebanana.app` returns a redirect (`307` or `308`) to `https://nodebanana.app/`.
 - `curl -sI https://nodebanana.app | grep -i strict-transport` prints the header.
 - The page's link preview shows the image: paste the address into the [opengraph.xyz](https://www.opengraph.xyz/) checker or a Slack message.
 
