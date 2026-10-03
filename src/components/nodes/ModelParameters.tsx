@@ -284,8 +284,10 @@ function ParameterInputInner({ param, name, value, onChange }: ParameterInputPro
   const handleChange = useCallback((value: unknown) => {
     onChange(name, value);
   }, [name, onChange]);
+  // snake_case and camelCase (Google's aspectRatio, imageSize) both read as words.
   const displayName = (param.name === "output_compression" ? "compression" : param.name)
     .replace(/_/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/\b\w/g, (c) => c.toUpperCase());
   const description = param.description || undefined;
 

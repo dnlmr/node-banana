@@ -490,7 +490,7 @@ export const NODE_CATALOG: Record<NodeType, NodeCatalogEntry> = {
     displayName: title("nanoBanana"),
     purpose: "Generates an image from a prompt (text, required) and optional reference images (image, accepts many).",
     inputs: [
-      img("image", "Image", { multi: true, note: "optional reference/edit images, whatever the model" }),
+      img("image", "Image", { multi: true, note: "optional reference/edit images, whatever the model; a ComfyUI (Comfy Router) model's further image inputs (a mask, a garment) get their own image-1, image-2… handles" }),
       txt("text", "Prompt", { note: "required" }),
     ],
     outputs: [img("image", "Image")],

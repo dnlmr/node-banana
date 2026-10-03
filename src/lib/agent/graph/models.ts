@@ -23,7 +23,7 @@ export { GENERATE_NODE_TYPES, isGenerateNodeType };
 /** What the browse dialog filters on per node type (ModelSearchDialog's capability filter). */
 export const NODE_TYPE_CAPABILITIES: Record<GenerateNodeType, readonly ModelCapability[]> = {
   nanoBanana: ["text-to-image", "image-to-image"],
-  generateVideo: ["text-to-video", "image-to-video", "audio-to-video"],
+  generateVideo: ["text-to-video", "image-to-video", "audio-to-video", "video-to-video"],
   generate3d: ["text-to-3d", "image-to-3d"],
   generateAudio: ["text-to-audio"],
 };

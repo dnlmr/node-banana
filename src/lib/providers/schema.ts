@@ -22,7 +22,7 @@ import {
   setCachedWaveSpeedSchemas,
   WaveSpeedApiSchema,
 } from "./cache";
-import { comfyRouterSchema } from "./comfyRouter";
+import { comfyRouterNodeSchema } from "./comfyRouter/catalog";
 import { isValidReplicateModelId } from "./ids";
 import type { ProviderKeys } from "./keys";
 
@@ -1665,8 +1665,8 @@ export async function getModelSchema(
       // OpenAI uses hardcoded schemas (no schema discovery API for image models)
       result = getOpenAiSchema(modelId);
     } else if (provider === "comfy") {
-      // Comfy Router uses the curated catalog (src/lib/providers/comfyRouter.ts)
-      const comfySchema = comfyRouterSchema(modelId);
+      // Comfy Router: settings from the model's published schema, handles from its binding
+      const comfySchema = await comfyRouterNodeSchema(modelId, keys.comfy || null);
       if (!comfySchema) {
         return { ok: false, error: "Unknown Comfy Router model", status: 404 };
       }

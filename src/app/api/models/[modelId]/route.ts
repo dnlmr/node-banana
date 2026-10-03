@@ -13,8 +13,12 @@
  *   - X-Fal-Key: Optional for fal.ai models
  *   - X-WaveSpeed-Key: Optional for WaveSpeed models
  *
- * Kie.ai, OpenAI, Gemini and Comfy Router schemas are static; no key or API
- * call is needed. Comfy Router ids contain a slash and arrive URL-encoded.
+ *   - X-Comfy-Router-Key: Optional for Comfy Router models
+ *
+ * Kie.ai, OpenAI and Gemini schemas are static; no key or API call is needed.
+ * Comfy Router settings come from the model's published schema (with the key,
+ * or the public copy without). Comfy Router ids contain a slash and arrive
+ * URL-encoded.
  *
  * Response:
  *   {

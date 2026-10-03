@@ -5,7 +5,6 @@ import path from "node:path";
 import { listModels, PROVIDER_TIMEOUT_MS, REPLICATE_COLLECTIONS, type ListModelsResult, type ListModelsSuccess } from "../registry";
 import { getModelSchema } from "../schema";
 import { CATALOG_DIR_ENV, resetCatalog } from "../catalog";
-import { COMFY_ROUTER_MODELS } from "../comfyRouter";
 
 const mockFetch = vi.fn();
 let catalogDir: string;
@@ -90,13 +89,23 @@ describe("listModels", () => {
       expect(result.models.every((m) => m.provider === "openai")).toBe(true);
     });
 
-    it("lists the Comfy Router catalog with a key", async () => {
+    it("lists the bound Comfy Router models the Router serves, with the key", async () => {
+      // The Router's live list: two bound models and one the app does not drive.
+      const live = ["bfl/flux-2-pro", "veo/veo-3.1-generate-001", "anthropic/claude-opus-5"];
+      mockFetch.mockImplementation((url: string) =>
+        Promise.resolve(
+          String(url).startsWith("https://api.comfy.org/v2/models")
+            ? jsonResponse({ data: live.map((id) => ({ id })), has_more: false, next_cursor: null })
+            : jsonResponse({}, false, 404)
+        )
+      );
       const result = expectOk(await listModels({ provider: "comfy" }, { comfy: "comfyui-key" }));
-      expect(result.models).toHaveLength(COMFY_ROUTER_MODELS.length);
+      expect(result.models.map((m) => m.id).sort()).toEqual(["bfl/flux-2-pro", "veo/veo-3.1-generate-001"]);
       expect(result.availableProviders).toEqual(["gemini", "comfy"]);
+      expect(mockFetch.mock.calls[0][1].headers["X-API-Key"]).toBe("comfyui-key");
     });
 
-    it("aggregates every keyed static provider, sorted by provider then name", async () => {
+    it("aggregates every keyed static provider and Comfy Router, sorted by provider then name", async () => {
       const result = expectOk(await listModels({}, { kie: "k", openai: "o", comfy: "c" }));
 
       expect(Object.keys(result.providers)).toEqual(["gemini", "kie", "openai", "comfy"]);
@@ -108,7 +117,8 @@ describe("listModels", () => {
         a.provider !== b.provider ? a.provider.localeCompare(b.provider) : a.name.localeCompare(b.name)
       );
       expect(result.models.map((m) => `${m.provider}:${m.id}`)).toEqual(sorted.map((m) => `${m.provider}:${m.id}`));
-      expect(mockFetch).not.toHaveBeenCalled();
+      // Only the Router's model list is asked for (cached ten minutes)
+      expect(fetchedUrls().every((url) => url.startsWith("https://api.comfy.org/v2/models"))).toBe(true);
     });
 
     it("ignores a Gemini key for listing (Gemini is listed either way)", async () => {

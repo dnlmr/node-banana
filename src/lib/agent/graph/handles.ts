@@ -305,9 +305,20 @@ export function getInputHandles(node: GraphNodeLike, edges: readonly GraphEdgeLi
       return [h("text", "text", "Text")];
     case "promptConstructor":
       return [h("text", "text", "Text", true)];
-    case "nanoBanana":
-      // Static sockets whatever the model: every connected image is collected.
+    case "nanoBanana": {
+      // A Comfy Router model's further image inputs (a mask, a garment) get
+      // their own `image-N` sockets after the fixed "image" one, as the node
+      // renders them. Otherwise static sockets: every connected image is collected.
+      const provider = (node.data.selectedModel as { provider?: unknown } | null | undefined)?.provider;
+      const images = provider === "comfy" ? schemaOf(node).filter((input) => input.type === "image") : [];
+      if (images.length > 0) {
+        return [
+          ...images.map((input, index) => h(index === 0 ? "image" : `image-${index}`, "image", input.label ?? input.name, !!input.isArray)),
+          h("text", "text", "Prompt"),
+        ];
+      }
       return [h("image", "image", "Image", true), h("text", "text", "Prompt")];
+    }
     case "generateVideo":
       return schemaIndexedInputs(node, { videoPlaceholder: true, collectImages: true });
     case "generate3d":

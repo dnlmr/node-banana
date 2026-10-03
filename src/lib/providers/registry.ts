@@ -6,7 +6,8 @@
  * GET /api/models, kept here so other server code (the in-app agent) can list
  * models with the same keys, caching, filtering and sorting as the route.
  *
- * Gemini, Kie.ai, OpenAI and Comfy Router are static catalogs; Replicate,
+ * Gemini, Kie.ai and OpenAI are static catalogs; Comfy Router offers its
+ * bound models the Router currently serves (./comfyRouter/catalog); Replicate,
  * fal.ai and WaveSpeed come from the model catalog (./catalog): their lists
  * are fetched at once, each under its own deadline, kept on disk, served
  * straight away and refreshed behind the request when they age. Replicate's
@@ -24,7 +25,7 @@ import { ProviderModel, ModelCapability } from "./types";
 import { setCachedWaveSpeedSchemas, WaveSpeedApiSchema } from "./cache";
 import { getProviderCatalog, type CatalogFetcher, type CatalogStatus } from "./catalog";
 import { startDeadline } from "./deadline";
-import { comfyRouterProviderModels } from "./comfyRouter";
+import { comfyRouterBoundModels, comfyRouterProviderModels } from "./comfyRouter/catalog";
 import { isValidReplicateModelId } from "./ids";
 import type { ProviderKeys } from "./keys";
 
@@ -1296,7 +1297,7 @@ export function staticCatalogModels(provider: StaticCatalogProvider): ProviderMo
     case "openai":
       return [...OPENAI_IMAGE_MODELS];
     case "comfy":
-      return comfyRouterProviderModels();
+      return comfyRouterBoundModels();
   }
 }
 
@@ -1494,7 +1495,7 @@ export async function listModels(
         };
       }
     } else if (providerFilter === "comfy") {
-      // Only Comfy Router requested - curated catalog, no external API call needed
+      // Only Comfy Router requested - the bound models the Router serves
       if (comfyKey) {
         includeComfy = true;
       } else {
@@ -1590,10 +1591,10 @@ export async function listModels(
     anyFromCache = true;
   }
 
-  // Add Comfy Router models if included (curated catalog, no API call needed)
+  // Add Comfy Router models if included: every bound model the Router serves (list cached ten minutes)
   if (includeComfy) {
     // Filter by search query if provided
-    let comfyModels = comfyRouterProviderModels();
+    let comfyModels = await comfyRouterProviderModels(comfyKey);
     if (searchQuery) {
       comfyModels = filterModelsBySearch(comfyModels, searchQuery);
     }
