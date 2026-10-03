@@ -82,7 +82,7 @@ describe("rendered handles", () => {
     expect(ids(getInputHandles(node("d", "generate3d", { inputSchema: schema }), []))).toEqual(["image-0", "text"]);
   });
 
-  it("nanoBanana renders image and prompt whatever the model", () => {
+  it("nanoBanana renders image and prompt, plus a Comfy Router model's further image inputs", () => {
     const schema = [
       { name: "image", type: "image", label: "Garment" },
       { name: "mask", type: "image", label: "Mask" },
@@ -90,7 +90,7 @@ describe("rendered handles", () => {
     ];
     expect(ids(getInputHandles(node("g", "nanoBanana", { selectedModel: { provider: "fal" }, inputSchema: schema }), []))).toEqual(["image", "text"]);
     const comfy = getInputHandles(node("g", "nanoBanana", { selectedModel: { provider: "comfy" }, inputSchema: schema }), []);
-    expect(comfy.map((h) => `${h.id}:${h.label}:${h.multi}`)).toEqual(["image:Image:true", "text:Prompt:false"]);
+    expect(comfy.map((h) => `${h.id}:${h.label}:${h.multi}`)).toEqual(["image:Garment:false", "image-1:Mask:false", "text:Prompt:false"]);
   });
 
   it("labels handles as the node sockets do", () => {

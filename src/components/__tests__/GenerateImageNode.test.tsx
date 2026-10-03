@@ -535,6 +535,28 @@ describe("GenerateImageNode", () => {
       });
     });
 
+    describe("Comfy Router image inputs", () => {
+      it("gives each image input its own socket after the fixed image socket", () => {
+        const { container } = render(
+          <TestWrapper>
+            <GenerateImageNode {...createNodeProps({
+              selectedModel: { provider: "comfy", modelId: "bfl/flux-pro-1.0-fill", displayName: "FLUX.1 Fill" },
+              inputSchema: [
+                { name: "image", type: "image", required: true, label: "Image" },
+                { name: "mask", type: "image", required: false, label: "Mask" },
+                { name: "prompt", type: "text", required: false, label: "Prompt" },
+              ],
+            })} />
+          </TestWrapper>
+        );
+
+        const imageHandles = [...container.querySelectorAll('[data-handletype="image"][class*="target"]')];
+        expect(imageHandles.map((h) => h.getAttribute("data-handleid"))).toEqual(["image", "image-1"]);
+        expect(screen.getByText("Mask")).toBeInTheDocument();
+        expect(container.querySelectorAll('[data-handletype="text"]').length).toBe(1);
+      });
+    });
+
     describe("Handle Ordering", () => {
       it("should render image handle above text handle", () => {
         const { container } = render(
