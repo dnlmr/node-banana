@@ -28,7 +28,8 @@ import {
   upsertWorkflowEntry,
 } from "../index";
 import type { JobContext } from "../jobs";
-import { PROJECT_MOVE_MARKER, recoverProjectMove, runProjectsMove } from "../projectMove";
+import { PROJECT_MOVE_MARKER, recoverProjectMove,
+  unfinishedProjectCopy, runProjectsMove } from "../projectMove";
 import { ProjectRegistry, readRegistry } from "../registry";
 import { installBridge, makePng, meta, sha256, streamOf, tempDir } from "./helpers";
 
@@ -252,7 +253,10 @@ describe("the projects move", () => {
     const dest = project(path.join(defaultRoot, "Half"), "Half", 1);
     const marker = path.join(defaultRoot, ".nodebanana", PROJECT_MOVE_MARKER);
     fs.writeFileSync(marker, JSON.stringify({ from: source, dest, phase: "copying" }));
-    expect((await listProjects()).projects.map((known) => known.dir)).not.toContain(dest);
+    const listed = (await listProjects()).projects.map((known) => known.dir);
+    // On a loaded run the half copy has been listed; say what the library took as its root and its marker.
+    const seen = `root=${(await getLibraryStatus()).root} copying=${await unfinishedProjectCopy(defaultRoot)} marker=${fs.existsSync(marker)}`;
+    expect(listed, seen).not.toContain(dest);
 
     await recoverProjectMove(defaultRoot);
     expect(fs.existsSync(dest)).toBe(false);
