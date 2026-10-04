@@ -2192,9 +2192,9 @@ export function WorkflowCanvas() {
 
   const handlePaneClick = useCallback(() => setExpandedStubGroup?.(null), [setExpandedStubGroup]);
 
-  // Fix for React Flow selection bug where nodes with undefined bounds get incorrectly selected.
-  // Uses statistical outlier detection to identify and deselect nodes that are clearly
-  // outside the actual selection area.
+  // The selection's side effects on the edge menu and on edges. Which nodes a
+  // marquee takes is decided by NodeMarqueeSelection and handleNodesChange,
+  // which measure each node's real box.
   const handleSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedConnections = [] }: OnSelectionChangeParams) => {
     const anchor = useWorkflowStore.getState().edgeMenuAnchor;
     if (anchor && !selectedConnections.some((edge) => edge.id === anchor.edgeId)) {
@@ -2205,47 +2205,7 @@ export function WorkflowCanvas() {
       const selectedEdges = useWorkflowStore.getState().edges.filter((edge) => edge.selected);
       if (selectedEdges.length) onEdgesChange(selectedEdges.map((edge) => ({ type: "select", id: edge.id, selected: false })));
     }
-    if (selectedNodes.length <= 1) return;
-
-    // Get positions of all selected nodes
-    const positions = selectedNodes.map(n => ({
-      id: n.id,
-      x: n.position.x,
-      y: n.position.y,
-    }));
-
-    // Calculate IQR-based bounds for outlier detection
-    const sortedX = [...positions].sort((a, b) => a.x - b.x);
-    const sortedY = [...positions].sort((a, b) => a.y - b.y);
-
-    const q1X = sortedX[Math.floor(sortedX.length * 0.25)].x;
-    const q3X = sortedX[Math.floor(sortedX.length * 0.75)].x;
-    const q1Y = sortedY[Math.floor(sortedY.length * 0.25)].y;
-    const q3Y = sortedY[Math.floor(sortedY.length * 0.75)].y;
-    const iqrX = q3X - q1X;
-    const iqrY = q3Y - q1Y;
-
-    // Outlier threshold: 3x IQR from quartiles
-    const minX = q1X - iqrX * 3;
-    const maxX = q3X + iqrX * 3;
-    const minY = q1Y - iqrY * 3;
-    const maxY = q3Y + iqrY * 3;
-
-    // Find and deselect outliers
-    const outliers = positions.filter(p =>
-      p.x < minX || p.x > maxX || p.y < minY || p.y > maxY
-    );
-
-    if (outliers.length > 0) {
-      onNodesChange(
-        outliers.map(o => ({
-          type: 'select' as const,
-          id: o.id,
-          selected: false,
-        }))
-      );
-    }
-  }, [onNodesChange, onEdgesChange]);
+  }, [onEdgesChange]);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();

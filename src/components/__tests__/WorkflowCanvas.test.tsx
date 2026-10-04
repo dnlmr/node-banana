@@ -201,6 +201,19 @@ describe("WorkflowCanvas", () => {
     expect(mockOnEdgesChange).toHaveBeenLastCalledWith(select);
   });
 
+  it("keeps a node the marquee took beside a column of aligned nodes", () => {
+    // CANVAS-5: an Array feeding three Generate nodes stacked at one x. The
+    // column's x spread is zero, so an outlier test on positions read the Array
+    // as stray and dropped it whenever the selection changed.
+    const array = { ...createMockNode("array-1", "array"), position: { x: 0, y: 300 }, selected: true };
+    const generates = [0, 350, 700].map((y, index) => ({ ...createMockNode(`generate-${index}`, "nanoBanana"), position: { x: 500, y }, selected: true }));
+    mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ nodes: [array, ...generates] })));
+    render(<TestWrapper><WorkflowCanvas /></TestWrapper>);
+    mockOnNodesChange.mockClear();
+    act(() => (mockReactFlowProps.current!.onSelectionChange as (params: unknown) => void)({ nodes: [array, ...generates], edges: [] }));
+    expect(mockOnNodesChange).not.toHaveBeenCalled();
+  });
+
   it("anchors noodle selection above the release point converted to flow coordinates", () => {
     mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({
       nodes: [], edges: [{ id: "edge-1", source: "a", target: "b", selected: true }],
