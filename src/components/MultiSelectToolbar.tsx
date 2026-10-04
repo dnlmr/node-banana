@@ -36,6 +36,9 @@ const ARRANGEMENTS: { mode: Arrangement; label: string; shortcut?: string; Icon:
   { mode: "grid", label: "Arrange as grid", shortcut: "G", Icon: LayoutGrid },
 ];
 /** Keeps a press inside the menu or slider from panning, dragging or deselecting on the canvas beneath. */
+/** The closest the bar comes to the canvas's top edge, in px. */
+const TOOLBAR_TOP_MIN = 8;
+
 const stopCanvasEvents = {
   onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
   onKeyDown: (event: React.KeyboardEvent) => event.stopPropagation(),
@@ -148,7 +151,10 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
     // Convert flow coordinates to screen coordinates
     const centerX = (minX + maxX) / 2;
     const screenX = centerX * viewport.zoom + viewport.x;
-    const screenY = minY * viewport.zoom + viewport.y - 50; // 50px above the top
+    // 50px above the selection, but never above the canvas: a selection scrolled
+    // up past the top would put the bar under the tab strip, where it cannot be
+    // clicked. It stays at the canvas's top edge instead, over the nodes.
+    const screenY = Math.max(TOOLBAR_TOP_MIN, minY * viewport.zoom + viewport.y - 50);
 
     return { x: screenX, y: screenY };
   }, [selectedNodes, getViewport]);

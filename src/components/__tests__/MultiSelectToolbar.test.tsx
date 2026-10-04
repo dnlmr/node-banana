@@ -146,6 +146,30 @@ describe("MultiSelectToolbar", () => {
       expect(screen.getByRole("button", { name: "Arrange nodes" })).toBeInTheDocument();
     });
 
+    it("stays at the canvas's top edge when the selection is scrolled above it", () => {
+      // 50px above a selection whose top is 600px above the canvas would be
+      // under the tab strip, where the bar cannot be clicked.
+      mockGetViewport.mockReturnValueOnce({ x: 0, y: -600, zoom: 1 });
+      mockUseWorkflowStore.mockImplementation((selector) => {
+        return selector(createDefaultState({
+          nodes: [
+            createMockNode("node-1", { position: { x: 0, y: 0 } }),
+            createMockNode("node-2", { position: { x: 300, y: 0 } }),
+          ],
+        }));
+      });
+
+      render(
+        <TestWrapper>
+          <MultiSelectToolbar />
+        </TestWrapper>
+      );
+
+      let bar: HTMLElement | null = screen.getByRole("button", { name: "Arrange nodes" });
+      while (bar && !bar.style.top) bar = bar.parentElement;
+      expect(bar?.style.top).toBe("8px");
+    });
+
     it("should not render when nodes are selected but less than 2", () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
