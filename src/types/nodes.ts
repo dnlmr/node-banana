@@ -16,6 +16,7 @@ import type {
 export type { AnnotationNodeData, BaseNodeData };
 
 // Import from domain files to avoid circular dependencies
+import type { ImageGenerationMetadata } from "./api";
 import type { AspectRatio, Resolution, ModelType } from "./models";
 import type { LLMProvider, LLMModelType, SelectedModel, ProviderType } from "./providers";
 import type { ComfyAppDefinition, ComfyWorkflowInspection } from "@/lib/comfy/types";
@@ -103,6 +104,7 @@ export interface PromptNodeData extends BaseNodeData {
   prompt: string;
   variableName?: string; // Optional variable name for use in PromptConstructor templates
   isOptional?: boolean;
+  mediaHeight?: number; // Height of the text surface, set by dragging its grip
 }
 
 export type ArraySplitMode = "delimiter" | "newline" | "regex";
@@ -131,6 +133,7 @@ export interface PromptConstructorNodeData extends BaseNodeData {
   template: string;
   outputText: string | null;
   unresolvedVars: string[];
+  mediaHeight?: number; // Height of the text surface, set by dragging its grip
 }
 
 /**
@@ -143,9 +146,22 @@ export interface AvailableVariable {
 }
 
 /**
+ * Which run of a batch ("Run 10×") an output came from. Absent on outputs of
+ * a single run.
+ */
+export interface RunBatchTag {
+  /** Shared by every run of one batch. */
+  id: string;
+  /** 1-based. */
+  index: number;
+  count: number;
+}
+
+/**
  * Image history item for tracking generated images
  */
 export interface ImageHistoryItem {
+  generation?: ImageGenerationMetadata;
   id: string;
   image: string; // Base64 data URL
   timestamp: number; // For display & sorting
@@ -153,17 +169,22 @@ export interface ImageHistoryItem {
   aspectRatio: AspectRatio;
   /** A Gemini model, or a free-form producer name (e.g. a ComfyUI app). */
   model: ModelType | string;
+  batch?: RunBatchTag;
 }
 
 /**
  * Carousel image item for per-node history (IDs only, images stored externally)
  */
 export interface CarouselImageItem {
+  generation?: ImageGenerationMetadata;
   id: string;
+  /** The asset library's id for this output; the carousel loads it from the library first. */
+  assetId?: string;
   timestamp: number;
   prompt: string;
   aspectRatio: AspectRatio;
-  model: ModelType;
+  model: ModelType | string;
+  batch?: RunBatchTag;
 }
 
 /**
@@ -171,9 +192,12 @@ export interface CarouselImageItem {
  */
 export interface CarouselVideoItem {
   id: string;
+  /** The asset library's id for this output; the carousel loads it from the library first. */
+  assetId?: string;
   timestamp: number;
   prompt: string;
   model: string; // Model ID for video (not ModelType since external providers)
+  batch?: RunBatchTag;
 }
 
 /**
@@ -206,7 +230,6 @@ export interface NanoBananaNodeData extends BaseNodeData {
   fallbackParameters?: Record<string, unknown>; // Parameters for fallback model
   inputSchema?: ModelInputDef[]; // Model's input schema for dynamic handles
   parametersExpanded?: boolean; // Collapse state for inline parameter display
-  _settingsPanelHeight?: number; // Measured settings panel height for reload correction
   status: NodeStatus;
   error: string | null;
   imageHistory: CarouselImageItem[]; // Carousel history (IDs only)
@@ -231,7 +254,6 @@ export interface GenerateVideoNodeData extends BaseNodeData {
   fallbackParameters?: Record<string, unknown>; // Parameters for fallback model
   inputSchema?: ModelInputDef[]; // Model's input schema for dynamic handles
   parametersExpanded?: boolean; // Collapse state for inline parameter display
-  _settingsPanelHeight?: number; // Measured settings panel height for reload correction
   status: NodeStatus;
   error: string | null;
   videoHistory: CarouselVideoItem[]; // Carousel history (IDs only)
@@ -257,7 +279,6 @@ export interface Generate3DNodeData extends BaseNodeData {
   fallbackParameters?: Record<string, unknown>; // Parameters for fallback model
   inputSchema?: ModelInputDef[];
   parametersExpanded?: boolean; // Collapse state for inline parameter display
-  _settingsPanelHeight?: number; // Measured settings panel height for reload correction
   status: NodeStatus;
   error: string | null;
   fallbackModel?: SelectedModel; // JSON-compatible with Node Banana Pro
@@ -271,9 +292,12 @@ export interface Generate3DNodeData extends BaseNodeData {
  */
 export interface CarouselAudioItem {
   id: string;
+  /** The asset library's id for this output; the carousel loads it from the library first. */
+  assetId?: string;
   timestamp: number;
   prompt: string;
   model: string; // Model ID for audio (not ModelType since external providers)
+  batch?: RunBatchTag;
 }
 
 /**
@@ -288,7 +312,6 @@ export interface GenerateAudioNodeData extends BaseNodeData {
   fallbackParameters?: Record<string, unknown>; // Parameters for fallback model
   inputSchema?: ModelInputDef[]; // Model's input schema for dynamic handles
   parametersExpanded?: boolean; // Collapse state for inline parameter display
-  _settingsPanelHeight?: number; // Measured settings panel height for reload correction
   status: NodeStatus;
   error: string | null;
   audioHistory: CarouselAudioItem[]; // Carousel history (IDs only)
@@ -315,13 +338,14 @@ export interface LLMGenerateNodeData extends BaseNodeData {
   maxTokens: number;
   fallbackParameters?: Record<string, unknown>; // Parameters for fallback model (temperature, maxTokens)
   parametersExpanded?: boolean; // Collapse state for inline parameter display
-  _settingsPanelHeight?: number; // Measured settings panel height for reload correction
+  mediaHeight?: number; // Height of the text surface, set by dragging its grip
   status: NodeStatus;
   error: string | null;
   fallbackModel?: SelectedModel; // JSON-compatible with Node Banana Pro
   __usedFallback?: boolean; // Set by runWithFallback on successful fallback
   __fallbackModelUsed?: string; // Display name of fallback model that succeeded
   __primaryError?: string; // Error message from the primary attempt
+  __modelNote?: string; // Set when /api/llm replaced a retired model id
 }
 
 /**
@@ -344,6 +368,7 @@ export interface OutputGalleryNodeData extends BaseNodeData {
   imageRefs?: string[]; // External storage refs for images
   videos?: string[]; // Array of video URLs from connected nodes
   videoRefs?: string[]; // External storage refs for videos
+  mediaHeight?: number; // Height of the grid, set by dragging its grip
 }
 
 /**
@@ -440,9 +465,8 @@ export interface RemoveBackgroundNodeData extends BaseNodeData {
 /**
  * Router node - pure passthrough routing node with dynamic multi-type handles
  */
-export interface RouterNodeData extends BaseNodeData {
-  // No internal state - all routing is derived from edge connections
-}
+// No internal state: all routing is derived from edge connections.
+export type RouterNodeData = BaseNodeData;
 
 /**
  * Switch node - toggle-controlled routing with named outputs
@@ -523,6 +547,8 @@ export interface SplitGridTemplateRouterConnection {
  */
 export interface SplitGridTemplate {
   baseNodeId: string;
+  /** Arrangement of the generated cell groups; omitted on older saves means grid. */
+  layout?: "grid" | "vertical" | "horizontal";
   nodes: SplitGridTemplateNode[];
   edges: SplitGridTemplateEdge[];
   /**
@@ -705,7 +731,7 @@ export interface ComfyAppNodeData extends BaseNodeData {
   /** Engine-reported status while running (e.g. "queued", "in_progress"). */
   runStatus?: string | null;
   parametersExpanded?: boolean;
-  _settingsPanelHeight?: number;
+  mediaHeight?: number; // Height of the text preview, set by dragging its grip
   /** Set when the node is created from the connection menu, so it opens the
    *  import dialog immediately — it has no handles until a workflow is chosen. */
   _autoOpenImport?: boolean;

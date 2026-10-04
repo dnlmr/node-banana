@@ -7,7 +7,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 const mockUpdateNodeData = vi.fn();
 
 vi.mock("@/store/workflowStore", () => ({
-  useWorkflowStore: vi.fn((selector) => {
+  useWorkflowStore: Object.assign(vi.fn((selector) => {
     const state = {
       updateNodeData: mockUpdateNodeData,
       currentNodeIds: [],
@@ -18,7 +18,7 @@ vi.mock("@/store/workflowStore", () => ({
       setNavigationTarget: vi.fn(),
     };
     return selector(state);
-  }),
+  }), { getState: () => ({ canvasGeneration: 0 }) }),
 }));
 
 // Mock alert
@@ -367,7 +367,7 @@ describe("ImageInputNode", () => {
       const buttons = container.querySelectorAll("button");
       // The remove button is the one that appears when image is present
       const removeButton = Array.from(buttons).find((btn) =>
-        btn.querySelector('svg path[d*="M6 18"]')
+        btn.querySelector('svg.lucide-x')
       );
       expect(removeButton).toBeInTheDocument();
 

@@ -1,8 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { executeVideoStitch, executeEaseCurve } from "../videoProcessingExecutors";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { executeVideoStitch, executeEaseCurve, executeVideoTrim } from "../videoProcessingExecutors";
 import type { NodeExecutionContext } from "../types";
 import type { WorkflowNode } from "@/types";
 import { stitchVideosAsync } from "@/hooks/useStitchVideos";
+import { trimVideoAsync } from "@/hooks/useTrimVideo";
+import { applySpeedCurveAsync } from "@/hooks/useApplySpeedCurve";
+
+vi.mock("@/hooks/useTrimVideo", () => ({ trimVideoAsync: vi.fn() }));
+vi.mock("@/hooks/useApplySpeedCurve", () => ({ applySpeedCurveAsync: vi.fn() }));
 
 // Mock the stitch helper so the executor's cancellation wiring can be asserted
 // without running the real mediabunny encode.
@@ -70,6 +75,96 @@ beforeEach(() => {
   // resolving fetch would make video-metadata probing hang other cases).
   mockFetch.mockReset();
   mockStitchVideosAsync.mockReset();
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("replacing a video output", () => {
+  it("keeps the previous video when the replacement cannot be read", async () => {
+    const oldUrl = "blob:http://localhost/last-good-output";
+    const node = {
+      id: "stitch",
+      type: "videoStitch",
+      position: { x: 0, y: 0 },
+      data: { outputVideo: oldUrl, encoderSupported: true, loopCount: 1 },
+    } as WorkflowNode;
+    mockFetch.mockResolvedValue({ blob: async () => new Blob(["video"]) });
+    mockStitchVideosAsync.mockResolvedValue(new Blob(["new video"]));
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(() => {
+      throw new Error("Could not read replacement");
+    });
+    const releaseMediaUrl = vi.fn();
+    const ctx = makeCtx(node, {
+      getConnectedInputs: vi.fn().mockReturnValue({ videos: ["v1", "v2"], audio: [] }),
+      updateNodeData: (_id, data) => {
+        Object.assign(node.data, data);
+      },
+      releaseMediaUrl,
+    });
+
+    await expect(executeVideoStitch(ctx)).rejects.toThrow("Could not read replacement");
+
+    expect(node.data.outputVideo).toBe(oldUrl);
+    expect(releaseMediaUrl).not.toHaveBeenCalled();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(oldUrl);
+  });
+
+  it.each([
+    ["videoStitch", executeVideoStitch],
+    ["videoTrim", executeVideoTrim],
+    ["easeCurve", executeEaseCurve],
+  ] as const)("(%s) hands the previous URL to the store once the new one is in place", async (type, execute) => {
+    const oldUrl = "blob:http://localhost/copied-to-another-tab";
+    const node = {
+      id: "video-1",
+      type,
+      position: { x: 0, y: 0 },
+      data: {
+        outputVideo: oldUrl,
+        encoderSupported: true,
+        loopCount: 1,
+        startTime: 0,
+        endTime: 5,
+        bezierHandles: [0, 0, 1, 1],
+        easingPreset: "linear",
+        outputDuration: 5,
+      },
+    } as WorkflowNode;
+    // Large enough to be kept as an object URL rather than read into a data URL
+    const output = { size: 21 * 1024 * 1024, type: "video/mp4" } as Blob;
+    mockFetch.mockResolvedValue({ blob: async () => new Blob(["video"]) });
+    mockStitchVideosAsync.mockResolvedValue(output);
+    vi.mocked(trimVideoAsync).mockResolvedValue(output);
+    vi.mocked(applySpeedCurveAsync).mockResolvedValue(output);
+    // The ease curve reads the source's duration first; answer that browser callback
+    const createElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+      if (tagName !== "video") return createElement(tagName, options);
+      const video = { duration: 5, onloadedmetadata: null as (() => void) | null, src: "" };
+      Object.defineProperty(video, "src", {
+        get: () => "blob:http://localhost/metadata",
+        set: () => queueMicrotask(() => video.onloadedmetadata?.()),
+      });
+      return video as unknown as HTMLVideoElement;
+    });
+    const releaseMediaUrl = vi.fn(() => {
+      // The store judges owners with the new output already on the node
+      expect(node.data.outputVideo).toBe("blob:http://localhost/mock");
+    });
+    const ctx = makeCtx(node, {
+      getConnectedInputs: vi.fn().mockReturnValue({ videos: ["v1", "v2"], audio: [], easeCurve: null }),
+      updateNodeData: (_id, data) => {
+        Object.assign(node.data, data);
+      },
+      releaseMediaUrl,
+    });
+
+    await execute(ctx);
+
+    expect(releaseMediaUrl).toHaveBeenCalledWith(oldUrl);
+    // Only the store knows whether a copy elsewhere still shows it
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(oldUrl);
+  });
 });
 
 describe("executeVideoStitch", () => {

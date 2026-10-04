@@ -30,12 +30,14 @@ import {
   GLBViewerNodeData,
   ComfyAppNodeData,
   WorkflowNodeData,
+  WorkflowNode,
   GroupColor,
   SelectedModel,
   MODEL_DISPLAY_NAMES,
 } from "@/types";
 import { loadGenerateImageDefaults, loadNodeDefaults } from "./localStorage";
 import { getEasingBezier } from "@/lib/easing-presets";
+import { DEFAULT_LLM_MODEL, DEFAULT_LLM_PROVIDER } from "@/lib/llm/catalog";
 
 /**
  * Default dimensions for each node type.
@@ -73,15 +75,55 @@ export const defaultNodeDimensions: Record<NodeType, { width: number; height: nu
 };
 
 /**
- * Group color palette (dark mode tints).
+ * Normalise a node's stored geometry for the width-driven layout.
+ *
+ * Height is derived from content at render time and only mirrored back into
+ * the node, so a saved or copied height is stale by definition; measurements
+ * belong to the DOM that produced them; and the settings-panel bookkeeping
+ * from the previous node chrome is gone. Width survives, in both the places
+ * React Flow reads it.
+ */
+export function migrateNodeGeometry<T extends WorkflowNode>(node: T): T {
+  const defaults = defaultNodeDimensions[node.type as NodeType] ?? { width: 300, height: 280 };
+  const styleWidth = typeof node.style?.width === "number" ? node.style.width : undefined;
+  const width = node.width ?? styleWidth ?? defaults.width;
+
+  const { height: _height, measured: _measured, ...rest } = node;
+  const { height: _styleHeight, ...styleRest } = (node.style ?? {}) as Record<string, unknown>;
+  const { _settingsPanelHeight, ...dataRest } = (node.data ?? {}) as Record<string, unknown>;
+  void _height; void _measured; void _styleHeight; void _settingsPanelHeight;
+
+  return {
+    ...rest,
+    width,
+    style: { ...styleRest, width },
+    data: dataRest,
+  } as T;
+}
+
+/**
+ * Group hues: the "Earth" set, one base colour per key. The keys are what
+ * saved workflows and the agent carry, so they stay as they are; only the
+ * hue behind each has changed. `src/utils/groupColors.ts` turns a hue into
+ * the group's fill and label colour.
  */
 export const GROUP_COLORS: Record<GroupColor, string> = {
-  neutral: "#262626",
-  blue: "#1e3a5f",
-  green: "#1a3d2e",
-  purple: "#2d2458",
-  orange: "#3d2a1a",
-  red: "#3d1a1a",
+  neutral: "#8a929c",
+  blue: "#4f9d93",
+  green: "#8fa34a",
+  purple: "#a66a8f",
+  orange: "#d08c34",
+  red: "#c4604f",
+};
+
+/** What the colour picker calls each key. */
+export const GROUP_COLOR_LABELS: Record<GroupColor, string> = {
+  neutral: "Slate",
+  blue: "Teal",
+  green: "Olive",
+  purple: "Plum",
+  orange: "Amber",
+  red: "Terracotta",
 };
 
 /**
@@ -253,8 +295,8 @@ export const createDefaultNodeData = (type: NodeType): WorkflowNodeData => {
         inputPrompt: null,
         inputImages: [],
         outputText: null,
-        provider: llmDefaults?.provider ?? "google",
-        model: llmDefaults?.model ?? "gemini-3-flash-preview",
+        provider: llmDefaults?.provider ?? DEFAULT_LLM_PROVIDER,
+        model: llmDefaults?.model ?? DEFAULT_LLM_MODEL,
         temperature: llmDefaults?.temperature ?? 0.7,
         maxTokens: llmDefaults?.maxTokens ?? 8192,
         status: "idle",

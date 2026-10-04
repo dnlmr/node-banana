@@ -1,14 +1,90 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Handle, Node, NodeProps, Position, useReactFlow } from "@xyflow/react";
-import { BaseNode } from "./BaseNode";
+import { ChevronRight, CircleAlert, SlidersHorizontal, Split } from "lucide-react";
+import { Node, NodeProps, useReactFlow } from "@xyflow/react";
+import { NodeShell } from "./NodeShell";
+import { LogicRow, LogicRows, PanelButton, SelectWell, cn, ellipsisClass, useLocalEdit, wellClass, type SocketSpec } from "./ui";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { nodeGraphIndex } from "@/lib/edges/graphIndex";
 import { ArrayNodeData } from "@/types";
 import { getConnectedInputsPure } from "@/store/utils/connectedInputs";
 import { parseTextToArray } from "@/utils/arrayParser";
+import { arrayItemWireCounts } from "@/lib/edges/arrayItems";
 
 type ArrayNodeType = Node<ArrayNodeData, "array">;
+
+const INPUT_SOCKETS: SocketSpec[] = [{ id: "text", type: "text", label: "Text" }];
+const OUTPUT_SOCKETS: SocketSpec[] = [{ id: "text", type: "text", label: "Items" }];
+const SPLIT_OPTIONS = [
+  { value: "delimiter", label: "By delimiter" },
+  { value: "newline", label: "By line" },
+  { value: "regex", label: "By regex" },
+];
+/** Items listed before the rest fold behind "n more". */
+const PREVIEW_ITEMS = 5;
+
+function itemCount(n: number): string {
+  if (n === 0) return "No items";
+  return n === 1 ? "1 item" : `${n} items`;
+}
+
+/** The delimiter or pattern, in a compact well beside the mode. Written on blur or Enter. */
+function SplitParam({
+  value,
+  label,
+  placeholder,
+  invalid,
+  onChange,
+}: {
+  value: string;
+  label: string;
+  placeholder: string;
+  invalid?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const { text, setText, onFocus, onBlur } = useLocalEdit(value);
+  return (
+    <input
+      type="text"
+      aria-label={label}
+      aria-invalid={invalid || undefined}
+      value={text}
+      placeholder={placeholder}
+      onFocus={onFocus}
+      onChange={(e) => {
+        setText(e.target.value);
+        if (window.nodeBananaDesktop) onChange(e.target.value);
+      }}
+      onBlur={() => {
+        onBlur();
+        onChange(text);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+      className={cn(wellClass, "font-mono", invalid && "ring-1 ring-red-500")}
+    />
+  );
+}
+
+/** One on/off chip in a shared well (the Advanced clean-up options). */
+function ToggleChip({ label, pressed, onChange }: { label: string; pressed: boolean; onChange: (pressed: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={() => onChange(!pressed)}
+      className={cn(
+        "flex-1 min-w-0 h-full px-1.5 rounded-[6px] squircle text-node transition-colors",
+        ellipsisClass,
+        pressed ? "bg-neutral-600 text-white" : "text-neutral-400 hover:text-neutral-200"
+      )}
+    >
+      {label}
+    </button>
+  );
+}
 
 function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
@@ -22,19 +98,19 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
   const updateNodeData = useWorkflowStore((state) => state.updateNodeData);
   const addNode = useWorkflowStore((state) => state.addNode);
   const onConnect = useWorkflowStore((state) => state.onConnect);
-  const nodes = useWorkflowStore((state) => state.nodes);
   const edges = useWorkflowStore((state) => state.edges);
 
-  // Derive nodeData from the Zustand store (already subscribed via `nodes`)
-  // rather than React Flow props, so settings changes are reflected immediately.
-  const nodeData = useMemo(() => {
-    const n = nodes.find((nd) => nd.id === id);
-    return (n?.data as ArrayNodeData) ?? data;
-  }, [nodes, id, data]);
-  const { setNodes, getNodes } = useReactFlow();
+  // Derive nodeData from the Zustand store rather than React Flow props, so
+  // settings changes are reflected immediately. Only this node's data: the
+  // nodes array changes on every frame of a drag.
+  const nodeData = useWorkflowStore((state) => (nodeGraphIndex(state.nodes).byId.get(id)?.data as ArrayNodeData | undefined) ?? data);
+  const { getNodes } = useReactFlow();
   const lastSyncedInputRef = useRef<string | null>(null);
   const lastDerivedWriteRef = useRef<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAllItems, setShowAllItems] = useState(false);
+  // The item shown in full; the others stay one truncated line
+  const [openItem, setOpenItem] = useState<number | null>(null);
 
   const hasIncomingTextConnection = useMemo(
     () =>
@@ -46,10 +122,9 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
     [edges, id]
   );
 
-  const connectedText = useMemo(() => {
-    if (!hasIncomingTextConnection) return null;
-    return getConnectedInputsPure(id, nodes, edges).text;
-  }, [edges, hasIncomingTextConnection, id, nodes]);
+  const connectedText = useWorkflowStore((state) =>
+    hasIncomingTextConnection ? getConnectedInputsPure(id, state.nodes, state.edges).text : null
+  );
 
   // Pull upstream text into this node whenever the connected input changes.
   useEffect(() => {
@@ -135,8 +210,8 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
   );
 
   const handleBasicModeChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      updateSettingsAndReparse({ splitMode: e.target.value as ArrayNodeData["splitMode"] });
+    (value: string) => {
+      updateSettingsAndReparse({ splitMode: value as ArrayNodeData["splitMode"] });
     },
     [updateSettingsAndReparse]
   );
@@ -197,182 +272,204 @@ export function ArrayNode({ id, data, selected }: NodeProps<ArrayNodeType>) {
     }
   }, [id, nodeData.selectedOutputIndex, previewItems.length, updateNodeData]);
 
-  // Auto-resize node height to fit all parsed lines so users don't need to scroll.
+  // A new split closes the open item rather than opening whatever now sits at its index
   useEffect(() => {
-    const headerHeight = 180;
-    const perItemHeight = 28;
-    const itemsMinHeight = 60;
-    const newHeight = headerHeight + Math.max(itemsMinHeight, previewItems.length * perItemHeight + 8);
+    setOpenItem(null);
+  }, [parsed.items]);
 
-    setNodes((nodes) =>
-      nodes.map((node) => {
-        if (node.id !== id) return node;
-        if ((node.style?.height as number) === newHeight) return node;
-        return { ...node, style: { ...node.style, height: newHeight } };
-      })
-    );
-  }, [id, previewItems.length, setNodes]);
+  const itemTotal = previewItems.length;
+  const batch = nodeData.batchMode;
+  const wireCounts = useMemo(() => arrayItemWireCounts(id, itemTotal, edges), [edges, id, itemTotal]);
+  const visibleItems = showAllItems ? previewItems : previewItems.slice(0, PREVIEW_ITEMS);
+  const hiddenCount = itemTotal - visibleItems.length;
 
   return (
-    <BaseNode
+    <NodeShell
       id={id}
       selected={selected}
       hasError={!!nodeData.error}
-      minWidth={300}
-      minHeight={220}
+      media={{ kind: "auto" }}
+      inputs={INPUT_SOCKETS}
+      outputs={OUTPUT_SOCKETS}
+      minWidth={280}
+      cardClassName="rounded-controls"
     >
-      <Handle type="target" position={Position.Left} id="text" data-handletype="text" />
-
-      {/* Single text output point (each outgoing edge receives a separate item) */}
-      <Handle type="source" position={Position.Right} id="text" data-handletype="text" style={{ top: 48 }} />
-
-      <div className="flex flex-col gap-2 pt-3 flex-1 min-h-0">
-        <div className="flex items-center gap-2">
-          <label className="shrink-0 text-[11px] text-neutral-400">Split</label>
-          <select
+      <LogicRows>
+        {/* Row 0, where the sockets land: how to split, and what comes out */}
+        <LogicRow>
+          <SelectWell
+            className="w-[104px] shrink-0"
             value={nodeData.splitMode}
+            options={SPLIT_OPTIONS}
             onChange={handleBasicModeChange}
-            className="nodrag nopan flex-1 min-w-0 text-[11px] py-1 px-2 bg-[#1a1a1a] rounded-md focus:outline-none focus:ring-1 focus:ring-neutral-600 text-white"
-          >
-            <option value="delimiter">Delimiter</option>
-            <option value="newline">Newline</option>
-            <option value="regex">Regex (Advanced)</option>
-          </select>
-          {/* Batch mode toggle */}
-          <button
-            type="button"
-            onClick={() => updateNodeData(id, { batchMode: !nodeData.batchMode })}
-            className={`nodrag nopan shrink-0 py-1 px-2 rounded-md text-[11px] font-medium transition-colors ${
-              nodeData.batchMode
-                ? "bg-blue-600/80 text-blue-100"
-                : "bg-[#1a1a1a] text-neutral-500 hover:text-neutral-300"
-            }`}
-            title={nodeData.batchMode ? "Batch mode: all items sent to one downstream node" : "Enable batch mode"}
-          >
-            Batch
-          </button>
-          {/* Auto-route button (hidden in batch mode) */}
-          {!nodeData.batchMode && (
-            <button
-              type="button"
-              onClick={handleAutoRouteToPrompts}
-              disabled={previewItems.length === 0}
-              className="nodrag nopan shrink-0 py-1 px-1.5 bg-[#1a1a1a] rounded-md text-neutral-400 hover:text-neutral-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Auto-route to Prompts"
-            >
-              <svg className="w-3.5 h-3.5 rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M16 3h5v5" />
-                <path d="M8 3H3v5" />
-                <path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3" />
-                <path d="m15 9 6-6" />
-              </svg>
-            </button>
+          />
+          {nodeData.splitMode === "delimiter" && (
+            <div className="w-[44px] shrink-0">
+              <SplitParam
+                label="Delimiter"
+                value={nodeData.delimiter}
+                placeholder="*"
+                onChange={(v) => updateSettingsAndReparse({ delimiter: v })}
+              />
+            </div>
           )}
-        </div>
-
-        {nodeData.splitMode === "delimiter" && (
-          <div className="flex items-center gap-2 max-w-[75%]">
-            <label className="shrink-0 text-[11px] text-neutral-400">By</label>
-            <input
-              value={nodeData.delimiter}
-              onChange={(e) => updateSettingsAndReparse({ delimiter: e.target.value })}
-              placeholder="*"
-              className="nodrag nopan flex-1 min-w-0 text-[11px] py-1 px-2 bg-[#1a1a1a] rounded-md focus:outline-none focus:ring-1 focus:ring-neutral-600 text-white"
-            />
-          </div>
-        )}
-
-        {nodeData.splitMode === "regex" && (
-          <div className="flex items-center gap-2 max-w-[75%]">
-            <label className="shrink-0 text-[11px] text-neutral-400">By</label>
-            <input
-              value={nodeData.regexPattern}
-              onChange={(e) => updateSettingsAndReparse({ regexPattern: e.target.value })}
-              placeholder="/\\n+/"
-              className="nodrag nopan flex-1 min-w-0 text-[11px] py-1 px-2 bg-[#1a1a1a] rounded-md focus:outline-none focus:ring-1 focus:ring-neutral-600 text-white"
-            />
-          </div>
-        )}
-
-        <div>
+          {nodeData.splitMode === "regex" && (
+            <div className="flex-1 min-w-0">
+              <SplitParam
+                label="Regex pattern"
+                value={nodeData.regexPattern}
+                placeholder="/\\n+/"
+                invalid={!!nodeData.error}
+                onChange={(v) => updateSettingsAndReparse({ regexPattern: v })}
+              />
+            </div>
+          )}
+          {nodeData.splitMode !== "regex" && <span className="flex-1" />}
+          <span
+            className={cn("shrink-0 text-node tabular-nums", itemTotal > 0 ? "text-neutral-200 font-medium" : "text-neutral-500")}
+            data-testid="array-item-count"
+          >
+            {itemCount(itemTotal)}
+          </span>
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
-            className="nodrag nopan flex items-center gap-1 text-[11px] text-neutral-500 hover:text-neutral-300 transition-colors"
+            aria-expanded={showAdvanced}
+            aria-label="Clean-up options"
+            title="Clean-up options"
+            className={cn(
+              "nodrag nopan shrink-0 w-[22px] h-[22px] flex items-center justify-center rounded-well squircle transition-colors",
+              showAdvanced ? "bg-neutral-700 text-neutral-100" : "bg-well shadow-well text-neutral-400 hover:text-neutral-100"
+            )}
           >
-            <svg className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
-            <span>Advanced</span>
+            <SlidersHorizontal size={12} strokeWidth={2} />
           </button>
+        </LogicRow>
 
+        <div className="px-2 flex flex-col gap-1">
           {showAdvanced && (
-            <div className="px-2 pt-1.5 pb-0.5 flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-[11px] text-neutral-300">
-                <input
-                  type="checkbox"
-                  checked={nodeData.trimItems}
-                  onChange={(e) => updateSettingsAndReparse({ trimItems: e.target.checked })}
-                  className="nodrag nopan w-3 h-3 rounded bg-[#1a1a1a] text-neutral-600 focus:ring-1 focus:ring-neutral-600 focus:ring-offset-0"
-                />
-                Trim
-              </label>
-              <label className="flex items-center gap-1.5 text-[11px] text-neutral-300">
-                <input
-                  type="checkbox"
-                  checked={nodeData.removeEmpty}
-                  onChange={(e) => updateSettingsAndReparse({ removeEmpty: e.target.checked })}
-                  className="nodrag nopan w-3 h-3 rounded bg-[#1a1a1a] text-neutral-600 focus:ring-1 focus:ring-neutral-600 focus:ring-offset-0"
-                />
-                Remove empty
-              </label>
+            <div
+              role="group"
+              aria-label="Clean up"
+              className="nodrag nopan flex items-center h-[22px] p-[2px] gap-[2px] rounded-well squircle bg-well shadow-well"
+            >
+              <ToggleChip label="Trim spaces" pressed={nodeData.trimItems} onChange={(v) => updateSettingsAndReparse({ trimItems: v })} />
+              <ToggleChip label="Drop empty" pressed={nodeData.removeEmpty} onChange={(v) => updateSettingsAndReparse({ removeEmpty: v })} />
             </div>
           )}
-        </div>
 
-        <div className="mt-1 text-[10px] uppercase tracking-wide text-neutral-500">
-          Parsed Items ({previewItems.length})
-        </div>
-        <div className="relative min-h-[50px] border border-neutral-700/40 rounded-md bg-[#1a1a1a]">
-          {nodeData.error ? (
-            <div className="p-2 text-[11px] text-red-400">{nodeData.error}</div>
-          ) : previewItems.length === 0 ? (
-            <div className="p-2 text-[11px] text-neutral-500">No items parsed</div>
-          ) : (
-            <div className="py-1">
-              {previewItems.map((item, index) => {
-                const isSelected = nodeData.selectedOutputIndex === index;
-                return (
+          <div className="relative rounded-well squircle bg-well shadow-well" data-testid="array-items">
+            {nodeData.error ? (
+              <div className="flex items-start gap-1.5 p-2 text-node text-red-400" role="alert">
+                <CircleAlert size={12} strokeWidth={2} className="shrink-0 mt-px" />
+                <span className="break-words min-w-0">{nodeData.error}</span>
+              </div>
+            ) : itemTotal === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-0.5 min-h-[56px] px-2 text-node text-center">
+                {hasIncomingTextConnection ? (
+                  <span className="text-neutral-500">Nothing to split yet</span>
+                ) : (
+                  <>
+                    <span className="text-neutral-400">Connect text to split it</span>
+                    <span className="text-neutral-500">A Prompt or LLM output, cut into one item per piece</span>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className={cn("py-1", showAllItems && "max-h-[240px] overflow-y-auto nowheel")}>
+                {visibleItems.map((item, index) => {
+                  const open = openItem === index;
+                  const wires = batch ? 0 : wireCounts.get(index) ?? 0;
+                  return (
+                    <button
+                      key={`${index}-${item}`}
+                      type="button"
+                      onClick={() => setOpenItem(open ? null : index)}
+                      aria-expanded={open}
+                      className={cn(
+                        "nodrag nopan w-[calc(100%-0.5rem)] mx-1 my-0.5 rounded-[6px] squircle pl-1.5 pr-1 flex gap-1.5 text-node text-left transition-colors",
+                        open ? "items-start py-[4px] bg-neutral-700/60 text-neutral-100" : "items-center h-[22px] bg-neutral-800/60 text-neutral-300 hover:bg-neutral-700/60"
+                      )}
+                      title={open ? "Collapse" : "Show the full text"}
+                    >
+                      <span className="w-3 shrink-0 text-right text-neutral-500 tabular-nums">{index + 1}</span>
+                      {open ? (
+                        <span className="flex-1 min-w-0 max-h-[160px] overflow-y-auto nowheel whitespace-pre-wrap break-words" data-testid="array-item-full">
+                          {item}
+                        </span>
+                      ) : (
+                        <span className={cn("flex-1 min-w-0", ellipsisClass)}>{item}</span>
+                      )}
+                      {wires > 0 && (
+                        <span
+                          className={cn("shrink-0 w-1.5 h-1.5 mx-0.5 rounded-full bg-handle-text", open && "mt-[4px]")}
+                          title={wires === 1 ? "On 1 connection" : `On ${wires} connections`}
+                          data-testid="array-item-wired"
+                        />
+                      )}
+                      <ChevronRight
+                        size={12}
+                        strokeWidth={2}
+                        className={cn("shrink-0 text-neutral-500 transition-transform", open && "rotate-90 mt-px")}
+                        aria-hidden
+                      />
+                    </button>
+                  );
+                })}
+                {(hiddenCount > 0 || showAllItems) && itemTotal > PREVIEW_ITEMS && (
                   <button
-                    key={`${index}-${item}`}
                     type="button"
-                    onClick={() =>
-                      updateNodeData(id, {
-                        selectedOutputIndex: isSelected ? null : index,
-                      })
-                    }
-                    className={`nodrag nopan w-[calc(100%-1rem)] mx-2 my-0.5 rounded-md px-2 py-1 text-[11px] text-left truncate transition-colors ${
-                      isSelected
-                        ? "bg-blue-900/40 text-blue-200 ring-1 ring-blue-500/60"
-                        : "bg-neutral-800/60 text-neutral-300 hover:bg-neutral-700/60"
-                    }`}
-                    title={isSelected ? "Selected for next connection (click to unselect)" : "Click to select for next connection"}
+                    onClick={() => setShowAllItems((v) => !v)}
+                    className="nodrag nopan w-full h-[22px] flex items-center justify-center text-node text-neutral-500 hover:text-neutral-300 transition-colors"
                   >
-                    {index + 1}. {item}
+                    {showAllItems ? "Show fewer" : `${hiddenCount} more`}
                   </button>
-                );
-              })}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Footer: what happens downstream */}
+          <div className="flex items-center gap-1.5 mt-0.5 pt-1.5 border-t border-white/[0.06]">
+            <label className="nodrag nopan relative inline-flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                role="switch"
+                className="sr-only peer"
+                checked={batch}
+                onChange={() => updateNodeData(id, { batchMode: !batch })}
+              />
+              <span className="w-7 h-3.5 bg-neutral-600 peer-checked:bg-blue-500 rounded-full transition-colors relative">
+                <span className={cn("absolute top-0.5 left-0.5 bg-white h-2.5 w-2.5 rounded-full transition-transform", batch && "translate-x-3.5")} />
+              </span>
+              <span className={cn("text-node", batch ? "text-neutral-200" : "text-neutral-400")}>Batch</span>
+            </label>
+            <span className="flex-1" />
+            {!batch && (
+              <PanelButton
+                onClick={handleAutoRouteToPrompts}
+                disabled={itemTotal === 0}
+                className="flex items-center gap-1"
+                title={
+                  itemTotal > 0
+                    ? `Creates ${itemTotal} Prompt ${itemTotal === 1 ? "node" : "nodes"}, each wired to its item`
+                    : "Connect text to make Prompt nodes"
+                }
+              >
+                <Split size={12} strokeWidth={2} className="rotate-90" />
+                {itemTotal > 0 ? `Make ${itemTotal} ${itemTotal === 1 ? "Prompt" : "Prompts"}` : "Make Prompts"}
+              </PanelButton>
+            )}
+          </div>
+          <div className="text-node text-neutral-500 pb-1">
+            {!batch
+              ? "Each connection carries one item."
+              : itemTotal > 1
+                ? `Each connected Generate or LLM node runs ${itemTotal} times, once per item.`
+                : "Each connected Generate or LLM node runs once per item."}
+          </div>
         </div>
-        <div className="text-[10px] text-neutral-500">
-          {nodeData.batchMode
-            ? "Batch: all items sent to downstream node"
-            : nodeData.selectedOutputIndex !== null
-              ? `Next wire uses item ${nodeData.selectedOutputIndex + 1}`
-              : "No selection: wires advance in order from item 1"}
-        </div>
-      </div>
-    </BaseNode>
+      </LogicRows>
+    </NodeShell>
   );
 }

@@ -8,12 +8,12 @@ const mockUpdateNodeData = vi.fn();
 const mockUseWorkflowStore = vi.fn();
 
 vi.mock("@/store/workflowStore", () => ({
-  useWorkflowStore: (selector?: (state: unknown) => unknown) => {
+  useWorkflowStore: Object.assign((selector?: (state: unknown) => unknown) => {
     if (selector) {
       return mockUseWorkflowStore(selector);
     }
     return mockUseWorkflowStore((s: unknown) => s);
-  },
+  }, { getState: () => ({ canvasGeneration: 0 }) }),
 }));
 
 // Mock @xyflow/react
@@ -32,6 +32,11 @@ vi.mock("@xyflow/react", () => {
   return {
     Handle: MockHandle,
     NodeResizer: () => null,
+    NodeResizeControl: () => null,
+    useNodeConnections: () => [],
+    useStore: () => undefined,
+    useStoreApi: () => ({ getState: () => ({ nodeLookup: new Map() }), subscribe: () => () => {} }),
+    useUpdateNodeInternals: () => () => {},
     Position: { Left: "left", Right: "right", Top: "top", Bottom: "bottom" },
     ReactFlowProvider: ({ children }: { children: React.ReactNode }) => children,
     useReactFlow: () => ({
@@ -40,6 +45,7 @@ vi.mock("@xyflow/react", () => {
       screenToFlowPosition: (pos: unknown) => pos,
     }),
     useConnection: (selector: (state: { inProgress: boolean }) => boolean) => selector({ inProgress: false }),
+    useNodeId: () => "node-1",
   };
 });
 
@@ -326,7 +332,7 @@ describe("AudioInputNode", () => {
       const buttons = container.querySelectorAll("button");
       // Find the remove button (has the X SVG icon, positioned absolute top right)
       const removeButton = Array.from(buttons).find((btn) =>
-        btn.querySelector("path[d*='M6 18L18 6']")
+        btn.querySelector("svg.lucide-x")
       );
       expect(removeButton).toBeTruthy();
 

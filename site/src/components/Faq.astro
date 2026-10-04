@@ -1,0 +1,34 @@
+---
+import { FAQ, faqAnswerText } from "../lib/faq";
+
+// The same questions as FAQPage structured data, so an answer engine gets
+// them as data as well as as text.
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: FAQ.map((entry) => ({
+    "@type": "Question",
+    name: entry.question,
+    acceptedAnswer: { "@type": "Answer", text: faqAnswerText(entry) },
+  })),
+};
+---
+<section class="section" id="faq">
+  <div class="section__inner">
+  <div class="section__split section__split--faq">
+    <div class="section__copy">
+      <h2 class="h2 reveal">FAQ</h2>
+      <p class="lead reveal" style="--d: 1;">The short version of what Node Banana is, what it costs, where your files go, and what it runs on.</p>
+    </div>
+  <div class="faq">
+    {FAQ.map(({ question, answer, links }, i) => (
+      <details class="faq__item reveal" style={`--d: ${2 + (i % 3)};`} open={i === 0}>
+        <summary class="faq__q"><span class="h3">{question}</span><span class="faq__icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M10 3v14M3 10h14"></path></svg></span></summary>
+        <p class="faq__answer">{answer}{links && <> {links.lead} {links.items.map((link, j) => <>{j > 0 && (j === links.items.length - 1 ? " and " : ", ")}<a class="faq__link" href={link.href}>{link.label}</a></>)}.</>}</p>
+      </details>
+    ))}
+  </div>
+  </div>
+  </div>
+  <script type="application/ld+json" set:html={JSON.stringify(structuredData)}></script>
+</section>

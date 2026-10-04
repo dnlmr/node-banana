@@ -182,6 +182,11 @@ export async function comfyRouterProviderModels(apiKey: string | null): Promise<
     .map(providerModel);
 }
 
+/** Every bound model, without asking the Router which it serves (no request). */
+export function comfyRouterBoundModels(): ProviderModel[] {
+  return routerBindings().map(providerModel);
+}
+
 export async function comfyRouterNodeSchema(
   id: string,
   apiKey: string | null

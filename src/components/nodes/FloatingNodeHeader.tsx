@@ -5,8 +5,26 @@ import { createPortal } from "react-dom";
 import { useReactFlow } from "@xyflow/react";
 import { NodeType, ProviderType } from "@/types";
 import { useWorkflowStore } from "@/store/workflowStore";
-import { defaultNodeDimensions } from "@/store/utils/nodeDefaults";
+import { getNodeSize } from "@/utils/nodeDimensions";
 import { ProviderBadge } from "./ProviderBadge";
+import { menuSurfaceClass } from "@/components/ui/Menu";
+import { KbdGroup } from "@/components/ui/Kbd";
+import { cn } from "./ui/cn";
+import {
+  Box,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  EllipsisVertical,
+  LifeBuoy,
+  Lock,
+  Maximize2,
+  MessageSquare,
+  Pencil,
+  Play,
+  ToggleLeft,
+  ToggleRight,
+} from "lucide-react";
 
 export interface CommentNavigationProps {
   currentIndex: number;
@@ -37,13 +55,18 @@ interface FloatingNodeHeaderProps {
   selected: boolean;
   onExpandNode?: (nodeId: string, nodeType: string) => void;
   onRunNode?: (nodeId: string) => void;
-  headerAction?: ReactNode;
-  headerButtons?: ReactNode;
-  /**
-   * Buttons that should remain visible regardless of hover/selected state.
-   * Rendered to the left of the hover-fade control cluster.
-   */
-  alwaysVisibleButtons?: ReactNode;
+  /** Opens the model browser. Present, the title becomes the model picker. */
+  onBrowse?: (nodeId: string) => void;
+  /** The node can take a fallback model; `fallbackName` is the one set, if any. */
+  canFallback?: boolean;
+  fallbackName?: string;
+  onOpenFallback?: (nodeId: string, nodeType: string) => void;
+  /** Input nodes: whether an empty input skips the branch instead of blocking. */
+  canToggleOptional?: boolean;
+  isOptional?: boolean;
+  onToggleOptional?: (nodeId: string, isOptional: boolean) => void;
+  /** Short reason the node cannot run as wired ("needs a prompt"). Never fades. */
+  hint?: string;
   provider?: ProviderType;
   title: string;
   /**
@@ -69,9 +92,14 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
   selected,
   onExpandNode,
   onRunNode,
-  headerAction,
-  headerButtons,
-  alwaysVisibleButtons,
+  onBrowse,
+  canFallback = false,
+  fallbackName,
+  onOpenFallback,
+  canToggleOptional = false,
+  isOptional = false,
+  onToggleOptional,
+  hint,
   provider,
   title,
   titleLogo,
@@ -89,6 +117,8 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState(customTitle || (titleLogo ? title : ""));
   const [isEditingComment, setIsEditingComment] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [editCommentValue, setEditCommentValue] = useState(comment || "");
   const [showCommentTooltip, setShowCommentTooltip] = useState(false);
   const [tooltipPosition, setTooltipPosition] = useState<{ top: number; left: number } | null>(null);
@@ -220,8 +250,30 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isEditingComment, handleCommentSubmit]);
 
-  // Determine if controls should be visible
-  const showControls = isHovered || selected;
+  // Run and the kebab arrive on hover or selection and stay while the menu is up.
+  const showControls = isHovered || selected || isMenuOpen;
+
+  // The kebab menu closes on an outside press or Escape.
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setIsMenuOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [isMenuOpen]);
+
+  const runMenuAction = useCallback((action: () => void) => {
+    setIsMenuOpen(false);
+    action();
+  }, []);
 
   // Drag-to-move: allow repositioning nodes by dragging the header
   const { setNodes, getNodes, getViewport } = useReactFlow();
@@ -306,10 +358,7 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
           const storeNode = store.nodes.find(n => n.id === nodeId);
           if (!storeNode) continue;
 
-          const nodeType = storeNode.type as NodeType;
-          const defaults = defaultNodeDimensions[nodeType] || { width: 300, height: 280 };
-          const nodeWidth = storeNode.measured?.width || (storeNode.style?.width as number) || defaults.width;
-          const nodeHeight = storeNode.measured?.height || (storeNode.style?.height as number) || defaults.height;
+          const { width: nodeWidth, height: nodeHeight } = getNodeSize(storeNode);
 
           // Calculate node center
           const nodeCenterX = finalX + nodeWidth / 2;
@@ -348,7 +397,8 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
         left: `${position.x}px`,
         top: `${position.y - 26}px`,
         width: `${width}px`,
-        zIndex: selected ? 10000 : 9000,
+        // Above nodes/group controls (1000), below noodle context menus (2100).
+        zIndex: selected ? 2000 : 1500,
       }}
     >
       <div
@@ -357,8 +407,8 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
         onMouseLeave={() => setIsHeaderHovered(false)}
         onPointerDown={handleHeaderPointerDown}
       >
-        {/* Title Section */}
-        <div className="flex-1 min-w-0 max-w-[60%] flex items-center gap-1.5 pl-2">
+        {/* Title: the model picker on generate nodes, otherwise the name (double-click renames). */}
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 pl-2">
           {provider && <ProviderBadge provider={provider} />}
           {isEditingTitle ? (
             <>
@@ -378,11 +428,22 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
                 }`}
               />
             </>
+          ) : onBrowse ? (
+            <button
+              type="button"
+              onClick={() => onBrowse(id)}
+              title="Browse models"
+              data-testid="node-title-picker"
+              className="nodrag nopan group/picker flex items-center gap-1.5 min-w-0 h-[22px] pl-1.5 -ml-1.5 pr-1.5 rounded-[6px] text-xs font-semibold uppercase tracking-wide text-neutral-400 hover:text-neutral-200 hover:bg-white/8 transition-colors cursor-pointer"
+            >
+              <span className="truncate">{customTitle ? `${customTitle} - ${title}` : title}</span>
+              <ChevronDown size={14} strokeWidth={2.25} className="shrink-0 text-neutral-400 group-hover/picker:text-neutral-200" />
+            </button>
           ) : (
             <span
-              className="nodrag flex items-center gap-1.5 min-w-0 text-xs font-semibold uppercase tracking-wide text-neutral-400 cursor-text truncate"
-              onClick={() => setIsEditingTitle(true)}
-              title="Click to edit title"
+              className="nodrag flex items-center gap-1.5 min-w-0 text-xs font-semibold uppercase tracking-wide text-neutral-400 cursor-default truncate"
+              onDoubleClick={() => setIsEditingTitle(true)}
+              title="Double-click to rename"
             >
               {titleLogo}
               {/* With a logo standing in for the kind of node, the text beside
@@ -398,56 +459,41 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
           )}
         </div>
 
-        {/* Right-aligned controls wrapper: always-visible buttons + hover-fade cluster */}
-        <div className="shrink-0 flex items-center gap-1 pr-1 -translate-y-1">
-          {/* Always-visible buttons (e.g. fallback shield) — do NOT fade with hover */}
-          {alwaysVisibleButtons && (
-            <div className="shrink-0 flex items-center gap-1">
-              {alwaysVisibleButtons}
-            </div>
-          )}
-
-        {/* Controls - right-aligned, fade in on hover/selected */}
-        <div className={`shrink-0 flex items-center gap-1 transition-opacity duration-200 ${showControls ? 'opacity-100' : 'opacity-0'}`}>
-          {/* Header Action (e.g. Browse button) */}
-          {headerAction}
-
-          {/* Lock Badge for nodes in locked groups */}
-          {isInLockedGroup && (
-            <div className="shrink-0 flex items-center" title="This node is in a locked group and will be skipped during execution">
-              <svg className="w-3.5 h-3.5 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-          )}
-
-          {/* Custom Header Buttons */}
-          {headerButtons}
-
-          {/* Comment Icon */}
-          <div className="relative shrink-0 flex items-center gap-1" ref={commentPopoverRef}>
-            <button
-              ref={commentButtonRef}
-              onClick={() => setIsEditingComment(!isEditingComment)}
-              onMouseEnter={() => comment && !isCommentFocused && setShowCommentTooltip(true)}
-              onMouseLeave={() => setShowCommentTooltip(false)}
-              className={`nodrag nopan p-0.5 rounded transition-colors ${
-                comment
-                  ? "text-blue-400 hover:text-blue-200"
-                  : "text-neutral-500 hover:text-neutral-200 border border-neutral-600"
-              }`}
-              title={comment ? "Edit comment" : "Add comment"}
+        {/* Right cluster: what never fades, then Run and the kebab. */}
+        <div className="shrink-0 flex items-center gap-0.5 pr-1">
+          {hint && (
+            <span
+              data-testid="node-readiness-hint"
+              title={`${hint}: this node will be skipped when the workflow runs`}
+              className="mr-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] leading-4 text-amber-200/90 whitespace-nowrap"
             >
-              {comment ? (
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                  <path fillRule="evenodd" d="M4.848 2.771A49.144 49.144 0 0112 2.25c2.43 0 4.817.178 7.152.52 1.978.292 3.348 2.024 3.348 3.97v6.02c0 1.946-1.37 3.678-3.348 3.97a48.901 48.901 0 01-3.476.383.39.39 0 00-.297.17l-2.755 4.133a.75.75 0 01-1.248 0l-2.755-4.133a.39.39 0 00-.297-.17 48.9 48.9 0 01-3.476-.384c-1.978-.29-3.348-2.024-3.348-3.97V6.741c0-1.946 1.37-3.68 3.348-3.97z" clipRule="evenodd" />
-                </svg>
-              ) : (
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z" />
-                </svg>
-              )}
-            </button>
+              {hint}
+            </span>
+          )}
+
+          {isInLockedGroup && (
+            <div className="shrink-0 flex items-center px-0.5" title="This node is in a locked group and will be skipped during execution">
+              <Lock size={14} strokeWidth={2} className="text-yellow-500" />
+            </div>
+          )}
+
+          {/* A comment shows as a glyph: hover reads it, click edits it. */}
+          <div className="relative shrink-0 flex items-center" ref={commentPopoverRef}>
+            {comment && (
+              <button
+                ref={commentButtonRef}
+                type="button"
+                onClick={() => setIsEditingComment(!isEditingComment)}
+                onMouseEnter={() => !isCommentFocused && setShowCommentTooltip(true)}
+                onMouseLeave={() => setShowCommentTooltip(false)}
+                className="nodrag nopan w-5 h-5 rounded-[5px] flex items-center justify-center text-blue-400 hover:text-blue-200 hover:bg-white/8 transition-colors"
+                title="Edit comment"
+                aria-label="Edit comment"
+                data-testid="node-comment-glyph"
+              >
+                <MessageSquare size={12} strokeWidth={0} fill="currentColor" />
+              </button>
+            )}
 
             {/* Comment Tooltip with Navigation */}
             {(showCommentTooltip || isCommentFocused) && comment && !isEditingComment && tooltipPosition && createPortal(
@@ -470,9 +516,7 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
                       className="nodrag nopan w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700 rounded transition-colors"
                       title="Previous comment"
                     >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                      </svg>
+                      <ChevronLeft size={16} strokeWidth={2} />
                     </button>
                     <span className="text-xs text-neutral-400 min-w-[32px] text-center">
                       {commentNavigation.currentIndex}/{commentNavigation.totalCount}
@@ -485,9 +529,7 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
                       className="nodrag nopan w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700 rounded transition-colors"
                       title="Next comment"
                     >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                      </svg>
+                      <ChevronRight size={16} strokeWidth={2} />
                     </button>
                   </div>
                 )}
@@ -500,14 +542,15 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
 
             {/* Comment Edit Popover */}
             {isEditingComment && (
-              <div className="absolute z-[60] right-0 top-full mt-1 w-64 p-2 bg-neutral-800 border border-neutral-600 rounded shadow-lg">
+              <div className={cn(menuSurfaceClass, "absolute z-[60] right-0 top-full mt-1 w-64 p-2")}>
                 <textarea
                   value={editCommentValue}
                   onChange={(e) => setEditCommentValue(e.target.value)}
                   onKeyDown={handleCommentKeyDown}
                   placeholder="Add a comment..."
                   autoFocus
-                  className="nodrag nopan nowheel w-full h-20 p-2 text-xs text-neutral-100 bg-neutral-900/50 border border-neutral-700 rounded resize-none focus:outline-none focus:ring-1 focus:ring-neutral-600"
+                  aria-label="Comment"
+                  className="nodrag nopan nowheel w-full h-20 p-2 text-xs text-neutral-100 bg-well border border-card-border rounded-well resize-none focus:outline-none focus:ring-1 focus:ring-neutral-600"
                 />
                 <div className="flex justify-end gap-2 mt-2">
                   <button
@@ -530,56 +573,155 @@ export const FloatingNodeHeader = memo(function FloatingNodeHeader({
             )}
           </div>
 
-          {/* Expand Button */}
-          {canExpand && onExpandNode && (
-            <div className="relative shrink-0 group">
+          {/* Expand, Run and the kebab fade in together and never change width. */}
+          <div className={`shrink-0 flex items-center gap-0.5 transition-opacity duration-200 ${showControls ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
+            {canExpand && onExpandNode && (
+              <GhostButton label="Expand editor" onClick={() => onExpandNode(id, type)}>
+                <Maximize2 size={12} strokeWidth={2} />
+              </GhostButton>
+            )}
+            {/* Run carries a short permanent label so it reads as a button, and never resizes. */}
+            {canRun && onRunNode && (
               <button
-                onClick={() => onExpandNode(id, type)}
-                className="nodrag nopan p-0.5 rounded transition-all duration-200 ease-in-out text-neutral-500 group-hover:text-neutral-200 border border-neutral-600 flex items-center overflow-hidden group-hover:pr-2"
-                title="Expand editor"
-              >
-                <svg
-                  className="w-3.5 h-3.5 flex-shrink-0"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  viewBox="0 0 24 24"
-                >
-                  <polyline points="15 3 21 3 21 9" />
-                  <polyline points="9 21 3 21 3 15" />
-                  <line x1="21" y1="3" x2="14" y2="10" />
-                  <line x1="3" y1="21" x2="10" y2="14" />
-                </svg>
-                <span className="max-w-0 opacity-0 whitespace-nowrap text-[10px] transition-all duration-200 ease-in-out overflow-hidden group-hover:max-w-[60px] group-hover:opacity-100 group-hover:ml-1">
-                  Expand
-                </span>
-              </button>
-            </div>
-          )}
-
-          {/* Run Button */}
-          {canRun && onRunNode && (
-            <div className="relative shrink-0 group">
-              <button
+                type="button"
                 onClick={() => onRunNode(id)}
                 disabled={isExecuting}
-                className="nodrag nopan p-0.5 rounded transition-all duration-200 ease-in-out text-neutral-500 group-hover:text-neutral-200 border border-neutral-600 flex items-center overflow-hidden group-hover:pr-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Run this node"
+                aria-label="Run node"
+                title="Run node"
+                className="nodrag nopan h-5 pl-1 pr-1.5 mr-0.5 rounded-[5px] flex items-center gap-1 bg-white/8 hover:bg-white/14 text-neutral-200 hover:text-white text-[10px] font-semibold leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/8"
               >
-                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-                <span className="max-w-0 opacity-0 whitespace-nowrap text-[10px] transition-all duration-200 ease-in-out overflow-hidden group-hover:max-w-[60px] group-hover:opacity-100 group-hover:ml-1">
-                  Run node
-                </span>
+                <Play size={11} strokeWidth={0} fill="currentColor" />
+                Run
               </button>
+            )}
+
+            <div className="relative shrink-0" ref={menuRef}>
+              <GhostButton
+                label="More"
+                onClick={() => setIsMenuOpen((open) => !open)}
+                active={isMenuOpen}
+                aria-haspopup="menu"
+                aria-expanded={isMenuOpen}
+                badge={Boolean(fallbackName)}
+              >
+                <EllipsisVertical size={12} strokeWidth={2} />
+              </GhostButton>
+
+              {isMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label="Node actions"
+                  className={cn(menuSurfaceClass, "nodrag nopan nowheel absolute right-0 top-full mt-1 z-[60] min-w-[168px] py-1")}
+                >
+                  {onBrowse && (
+                    <MenuRow icon={<Box size={11} strokeWidth={1.75} />} onClick={() => runMenuAction(() => onBrowse(id))}>
+                      Browse models…
+                    </MenuRow>
+                  )}
+                  {canRun && onRunNode && (
+                    <MenuRow icon={<Play size={11} strokeWidth={0} fill="currentColor" />} keys={["⌥", "↵"]} disabled={isExecuting} onClick={() => runMenuAction(() => onRunNode(id))}>
+                      Run node
+                    </MenuRow>
+                  )}
+                  <MenuRow icon={<Pencil size={11} strokeWidth={1.75} />} meta={onBrowse ? undefined : "dbl-click"} onClick={() => runMenuAction(() => setIsEditingTitle(true))}>
+                    Rename
+                  </MenuRow>
+                  {(canFallback || canToggleOptional || onCommentChange) && <div className="my-1 border-t border-chrome-border" />}
+                  {canFallback && onOpenFallback && (
+                    <MenuRow icon={<LifeBuoy size={11} strokeWidth={1.75} />} set={Boolean(fallbackName)} onClick={() => runMenuAction(() => onOpenFallback(id, type))}>
+                      {fallbackName ? `Fallback: ${fallbackName}` : "Set fallback model…"}
+                    </MenuRow>
+                  )}
+                  {canToggleOptional && onToggleOptional && (
+                    <MenuRow
+                      icon={isOptional ? <ToggleRight size={11} strokeWidth={1.75} /> : <ToggleLeft size={11} strokeWidth={1.75} />}
+                      meta={isOptional ? "on" : "off"}
+                      onClick={() => runMenuAction(() => onToggleOptional(id, !isOptional))}
+                    >
+                      Optional input
+                    </MenuRow>
+                  )}
+                  {onCommentChange && (
+                    <MenuRow icon={<MessageSquare size={11} strokeWidth={1.75} />} set={Boolean(comment)} onClick={() => runMenuAction(() => setIsEditingComment(true))}>
+                      {comment ? "Edit comment…" : "Add comment…"}
+                    </MenuRow>
+                  )}
+                </div>
+              )}
             </div>
-          )}
           </div>
         </div>
       </div>
     </div>
   );
 });
+
+/** 20px flat icon button with the chrome tooltip; the header's one button style. */
+function GhostButton({
+  label,
+  active = false,
+  badge = false,
+  className,
+  children,
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; active?: boolean; badge?: boolean }) {
+  return (
+    <span className="group/ghost relative shrink-0 flex">
+      <button
+        {...rest}
+        type="button"
+        aria-label={label}
+        className={cn(
+          "nodrag nopan w-5 h-5 rounded-[5px] flex items-center justify-center transition-colors",
+          "text-neutral-400 hover:text-neutral-100 hover:bg-white/8 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent",
+          active && "bg-white/10 text-neutral-100",
+          className
+        )}
+      >
+        {children}
+      </button>
+      {badge && (
+        <span className="pointer-events-none absolute -top-px -right-px w-[5px] h-[5px] rounded-full bg-blue-400 ring-[1.5px] ring-canvas-bg" />
+      )}
+      {!active && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-1.5 z-10 whitespace-nowrap rounded-md squircle border border-white/10 bg-neutral-950 px-2 py-1 text-[10px] font-medium leading-3 text-neutral-200 opacity-0 shadow-[0_4px_12px_rgba(0,0,0,0.5)] transition-opacity delay-300 duration-[120ms] group-hover/ghost:opacity-100"
+        >
+          {label}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** A row of the kebab menu at node density: 22px, 10px type, meta in mono. */
+function MenuRow({
+  icon,
+  meta,
+  keys,
+  set = false,
+  className,
+  children,
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: ReactNode; meta?: string; keys?: string[]; set?: boolean }) {
+  return (
+    <button
+      {...rest}
+      type="button"
+      role="menuitem"
+      className={cn(
+        "w-full h-[22px] px-2 flex items-center gap-1.5 text-node text-left whitespace-nowrap transition-colors",
+        "text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100 focus-visible:outline-none focus-visible:bg-neutral-700",
+        "disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent",
+        className
+      )}
+    >
+      <span className="shrink-0 flex items-center justify-center w-[11px] text-current">{icon}</span>
+      <span className="flex-1 min-w-0 overflow-hidden text-ellipsis">{children}</span>
+      {meta && <span className="font-mono text-[9px] text-ink-3">{meta}</span>}
+      {keys && <KbdGroup keys={keys} size="xs" className="gap-0.5 [&_kbd]:text-neutral-400" />}
+      {set && <span className="w-[5px] h-[5px] rounded-full bg-blue-400" />}
+    </button>
+  );
+}

@@ -1,13 +1,60 @@
 "use client";
 
+import { Check, X } from "lucide-react";
+import {
+  Dialog,
+  DialogButton,
+  DialogEyebrow,
+  DialogPage,
+  DialogPageBody,
+  DialogPageFooter,
+  DialogPageHead,
+  DialogPageTitle,
+  DialogPane,
+  DialogWordmark,
+  splitPanelClass,
+} from "@/components/ui/Dialog";
+import { cn } from "@/components/nodes/ui/cn";
 import { useState } from "react";
 import { FTUXModalProps, FTUXStep } from "@/types/ftux";
 import { setFTUXCompleted } from "@/store/utils/localStorage";
+import { isDesktop } from "@/lib/desktop/credentials";
 import { FTUXWelcomeStep } from "./FTUXWelcomeStep";
 import { FTUXApiKeysStep } from "./FTUXApiKeysStep";
 import { FTUXModelDefaultsStep } from "./FTUXModelDefaultsStep";
 import { FTUXReadyStep } from "./FTUXReadyStep";
 
+const STEPS: readonly FTUXStep[] = [1, 2, 3, 4];
+
+/** Rail label, page heading and lead for each step, as drawn on the design canvas. */
+const STEP_COPY: Record<FTUXStep, { rail: string; heading: string; lead: string }> = {
+  1: {
+    rail: "Welcome",
+    heading: "Let's get started.",
+    lead: "Connect AI models like building blocks to generate images, videos, and more.",
+  },
+  2: {
+    rail: "API keys",
+    heading: "API keys",
+    lead: "",
+  },
+  3: {
+    rail: "Model defaults",
+    heading: "Choose your models",
+    lead: "Pick your default AI models for images and videos. You can change these later.",
+  },
+  4: {
+    rail: "Ready",
+    heading: "You're ready!",
+    lead: "Want a quick tutorial?",
+  },
+};
+
+/**
+ * First use is a split dialog: the pane carries the mark, the wordmark and
+ * the four steps as a static rail; the page carries one step at a time. It
+ * cannot be dismissed — the X asks before skipping.
+ */
 export function FTUXModal({ onComplete, onStartTutorial }: FTUXModalProps) {
   const [currentStep, setCurrentStep] = useState<FTUXStep>(1);
   const [showSkipConfirm, setShowSkipConfirm] = useState(false);
@@ -38,80 +85,59 @@ export function FTUXModal({ onComplete, onStartTutorial }: FTUXModalProps) {
     onStartTutorial();
   };
 
-  const getStepTitle = () => {
-    switch (currentStep) {
-      case 1:
-        return "Welcome";
-      case 2:
-        return "API Keys";
-      case 3:
-        return "Model Defaults";
-      case 4:
-        return "Ready";
-      default:
-        return "";
-    }
-  };
-
-  const getButtonText = () => {
-    if (currentStep === 4) return "Get Started";
-    return "Next";
-  };
+  const copy = STEP_COPY[currentStep];
+  const lead =
+    currentStep === 2
+      ? isDesktop()
+        ? "Add keys to use AI providers. Keys are encrypted and saved in your desktop profile."
+        : "Add keys here to use AI providers (stored in browser), or configure them in your server environment."
+      : copy.lead;
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
-      onWheelCapture={(e) => e.stopPropagation()}
+    <Dialog
+      open
+      className={cn(splitPanelClass, "w-[760px] h-[540px] max-w-[92vw] max-h-[85vh]")}
     >
-      <div className={`relative bg-neutral-800 rounded-xl w-full ${currentStep === 4 ? 'max-w-[420px]' : 'max-w-[640px]'} mx-4 border border-neutral-700 shadow-2xl overflow-clip flex flex-col ${currentStep === 4 ? '' : 'max-h-[80vh]'}`}>
-        {/* Header */}
-        {currentStep !== 4 && (
-          <div className="px-8 pt-8 pb-4 border-b border-neutral-700/50 shrink-0">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <img src="/banana_icon.png" alt="" className="w-6 h-6" />
-                <h2 className="text-xl font-medium text-neutral-100">
-                  Welcome to Node Banana
-                </h2>
-              </div>
+      <DialogPane width={240}>
+        <div className="flex flex-col gap-[22px]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/banana_icon.png" alt="" className="w-8 h-8 rounded-lg" />
+          <DialogWordmark size={34} />
+        </div>
+        <div>
+          <DialogEyebrow className="block mb-1.5 text-neutral-500">Setup</DialogEyebrow>
+          <ol aria-label="Setup steps">
+            {STEPS.map((step) => (
+              <StepRailItem
+                key={step}
+                label={STEP_COPY[step].rail}
+                state={step < currentStep ? "done" : step === currentStep ? "current" : "later"}
+              />
+            ))}
+          </ol>
+        </div>
+      </DialogPane>
+
+      <DialogPage>
+        <DialogPageHead
+          eyebrow={`Step ${currentStep} of 4`}
+          closeButton={false}
+          actions={
+            currentStep !== 4 ? (
               <button
                 type="button"
                 onClick={() => setShowSkipConfirm(true)}
-                className="text-neutral-400 hover:text-neutral-100 transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-md text-neutral-500 hover:text-neutral-200 hover:bg-neutral-700/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
                 aria-label="Close"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
+                <X size={16} strokeWidth={2} />
               </button>
-            </div>
+            ) : undefined
+          }
+        />
+        <DialogPageTitle heading={copy.heading} lead={lead} />
 
-            {/* Step indicators */}
-            <div className="flex gap-2 mt-4">
-              {([1, 2, 3, 4] as const).map((step) => (
-                <div
-                  key={step}
-                  className={`h-1 flex-1 rounded-full transition-colors ${
-                    step <= currentStep ? "bg-white" : "bg-neutral-700"
-                  }`}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Content area */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <DialogPageBody className="pt-[18px]">
           {currentStep === 1 && <FTUXWelcomeStep />}
           {currentStep === 2 && <FTUXApiKeysStep />}
           {currentStep === 3 && <FTUXModelDefaultsStep />}
@@ -121,61 +147,84 @@ export function FTUXModal({ onComplete, onStartTutorial }: FTUXModalProps) {
               onComplete={handleSkip}
             />
           )}
-        </div>
+        </DialogPageBody>
 
-        {/* Footer */}
         {currentStep !== 4 && (
-          <div className="flex justify-between gap-2 px-8 py-5 border-t border-neutral-700/50 shrink-0">
-            <button
-              type="button"
+          <DialogPageFooter between>
+            <DialogButton
+              variant="ghost"
+              size="md"
               onClick={handleBack}
               disabled={currentStep === 1}
-              className={`px-4 py-2 text-sm text-neutral-400 hover:text-neutral-100 transition-all ${
-                currentStep === 1 ? "opacity-0 pointer-events-none" : ""
-              }`}
+              className={currentStep === 1 ? "opacity-0 pointer-events-none" : ""}
             >
               Back
-            </button>
-            <button
-              type="button"
-              onClick={handleNext}
-              className="px-4 py-2 text-sm bg-white text-neutral-900 rounded-lg hover:bg-neutral-200 transition-colors font-medium"
-            >
-              {getButtonText()}
-            </button>
-          </div>
+            </DialogButton>
+            <DialogButton variant="primary" size="md" onClick={handleNext}>
+              Next
+            </DialogButton>
+          </DialogPageFooter>
         )}
 
-        {/* Skip confirmation dialog */}
+        {/* Skip confirmation */}
         {showSkipConfirm && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10">
-            <div className="bg-neutral-800 rounded-xl p-6 border border-neutral-700 shadow-2xl max-w-sm mx-4">
-              <h3 className="text-lg font-semibold text-neutral-100 mb-2">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-scrim">
+            <div
+              role="alertdialog"
+              aria-labelledby="ftux-skip-title"
+              className="w-[360px] max-w-[calc(100%-32px)] bg-[#0f0f0f] border border-white/10 rounded-card shadow-dialog p-6"
+            >
+              <h3
+                id="ftux-skip-title"
+                className="font-display text-xl leading-6 font-bold tracking-[-0.02em] text-neutral-100"
+              >
                 Skip setup?
               </h3>
-              <p className="text-sm text-neutral-400 mb-4">
+              <p className="mt-2 text-[13px] leading-[19px] text-neutral-400">
                 You can configure API keys and model defaults later in settings.
               </p>
-              <div className="flex gap-2 justify-end">
-                <button
-                  type="button"
-                  onClick={() => setShowSkipConfirm(false)}
-                  className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-100 transition-colors"
-                >
+              <div className="mt-5 flex justify-end gap-2">
+                <DialogButton variant="ghost" size="md" onClick={() => setShowSkipConfirm(false)}>
                   Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSkip}
-                  className="px-4 py-2 text-sm bg-white text-neutral-900 rounded-lg hover:bg-neutral-200 transition-colors"
-                >
+                </DialogButton>
+                <DialogButton variant="primary" size="md" onClick={handleSkip}>
                   Skip
-                </button>
+                </DialogButton>
               </div>
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </DialogPage>
+    </Dialog>
+  );
+}
+
+/** One row of the static step rail: a check once done, an ink dot for now, a dim dot for later. */
+function StepRailItem({ label, state }: { label: string; state: "done" | "current" | "later" }) {
+  return (
+    <li
+      aria-current={state === "current" ? "step" : undefined}
+      className={cn(
+        "flex items-center gap-2.5 h-8 font-display text-sm leading-[18px] font-medium tracking-[-0.01em]",
+        state === "done" && "text-neutral-400",
+        state === "current" && "text-neutral-100",
+        state === "later" && "text-neutral-600"
+      )}
+    >
+      {state === "done" ? (
+        <span aria-hidden="true" className="flex w-3.5 shrink-0">
+          <Check size={14} strokeWidth={2} />
+        </span>
+      ) : (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "w-1.5 h-1.5 mx-1 rounded-full shrink-0",
+            state === "current" ? "bg-neutral-200" : "bg-chrome-border"
+          )}
+        />
+      )}
+      {label}
+    </li>
   );
 }

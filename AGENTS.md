@@ -69,9 +69,7 @@ Image generation models (these exist and are recently released):
 - `gemini-2.5-flash-image` → internal name: `nano-banana`
 - `gemini-3-pro-image-preview` → internal name: `nano-banana-pro`
 
-LLM models:
-- Google: `gemini-2.5-flash`, `gemini-3-flash-preview`, `gemini-3-pro-preview`
-- OpenAI: `gpt-4.1-mini`, `gpt-4.1-nano`
+LLM models are defined once in `src/lib/llm/catalog.ts`: the current list per provider, legacy ids saved workflows may carry, their replacements, and the defaults. Add or retire a model there; every dropdown, `/api/llm` and the assistant read it.
 
 ## Node Types
 
@@ -132,7 +130,7 @@ Returns `{ images: string[], text: string | null }`.
 - `Shift + L` - Add LLM node
 - `Shift + A` - Add annotation node
 - `Shift + T` - Add audio (generateAudio) node
-- `H` - Stack selected nodes horizontally
+- Hold `H` and drag - Hook edges into one movable bundle
 - `V` - Stack selected nodes vertically
 - `G` - Arrange selected nodes in grid
 - `?` - Show keyboard shortcuts
@@ -203,7 +201,7 @@ If the model uses different endpoints than `/api/v1/jobs/createTask` and `/api/v
 
 ## Adding Comfy Router Models
 
-Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~240 partner models behind one Comfy key and forwards each partner's native request and response. Provider id is `comfy`, shown as "ComfyUI"; the key falls back to the Comfy Cloud key from the ComfyUI settings.
+Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~240 partner models behind one Comfy key and forwards each partner's native request and response. Provider id is `comfy`, shown as "ComfyUI". Its key on the Providers page is the one Comfy key: Comfy Cloud runs and partner nodes use it too (`comfyAccountKey()` in `src/lib/comfy/settings.ts`; a Cloud key an older build stored on the ComfyUI tab is moved there on start by `migrateLegacyComfyCloudKey`).
 
 Discovery and settings are live; wire formats are data:
 
@@ -213,7 +211,7 @@ Discovery and settings are live; wire formats are data:
 - **New model of a known format:** add it to that family's `models` (id, name, description, capabilities, any per-model overrides). **New format:** add a family.
 - **Checks:** `npm run comfy:router-sync` downloads every schema into `.scratch/comfy-router-schemas` and lists Router models that are neither bound nor excluded. Then `npx vitest run src/lib/providers/comfyRouter/__tests__/routerSchemas.test.ts` validates the smallest and fullest request of every bound model against its schema (Ajv) and checks each result path exists in the response schema. `src/app/api/generate/providers/__tests__/comfy.test.ts` pins bodies and result readings for the main formats.
 - **Transport:** always the queue (`POST …/requests` → poll `…/requests/{id}/status` respecting `Retry-After` → `GET …/requests/{id}`), with an `Idempotency-Key` per submit — synchronous partners (OpenAI, Qwen) work through it too. The generate route returns the polling envelope with `pollProvider: "comfy"` and `/api/generate/poll` finishes the run. Binary answers (ElevenLabs) become audio; 3D models return as their URL.
-- **Masks:** partners disagree. OpenAI edits where the mask is transparent; FLUX Fill and Bria edit where it is white.
+- **Masks:** partners disagree. OpenAI edits where the mask is transparent; FLUX Fill and Bria edit where it is white; Ideogram 4.5 edits where it is black.
 
 ## API Routes
 
@@ -250,4 +248,3 @@ All routes in `src/app/api/`:
 - Commit after each logical task or unit of work is complete. When implementing a multi-task plan, commit after finishing each task — do NOT batch all tasks into a single commit at the end.
 - Each commit should be atomic and self-contained: one task = one commit.
 - The .planning directory is untracked, do not attempt to commit any changes to the files in this directory.
-

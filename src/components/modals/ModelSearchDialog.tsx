@@ -1,24 +1,80 @@
 "use client";
 
+import { ArrowUpRight, CircleAlert, Image, RefreshCw, Search, X } from "lucide-react";
+import {
+  Dialog,
+  DialogButton,
+  DialogChip,
+  DialogEyebrow,
+  DialogFilterGroup,
+  DialogFilterItem,
+  DialogPage,
+  DialogPageBody,
+  DialogPageHead,
+  DialogPane,
+  DialogPaneRule,
+  DialogPaneTitle,
+  DialogRowTitle,
+  DialogSearchField,
+  DialogSearchGlyph,
+  DialogSpinner,
+  DialogStatus,
+  DialogTextButton,
+  dialogCardClass,
+  filterPaneClass,
+  splitPanelClass,
+} from "@/components/ui/Dialog";
+import { cn } from "@/components/nodes/ui/cn";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { createPortal } from "react-dom";
 import { useWorkflowStore, useProviderApiKeys } from "@/store/workflowStore";
 import { deduplicatedFetch, clearFetchCache } from "@/utils/deduplicatedFetch";
 import { useReactFlow } from "@xyflow/react";
 import { ProviderType, RecentModel } from "@/types";
 import { ProviderModel, ModelCapability } from "@/lib/providers/types";
+import type { ProviderListResult } from "@/lib/providers/registry";
 import { ComfyMark } from "@/components/icons/ComfyMark";
 
-// localStorage cache for models (persists across dev server restarts)
+// localStorage cache: the whole list, one entry per set of configured
+// providers, so the dialog opens on it while the server answers. Filters and
+// search are applied locally, so there is nothing else to key on.
 const MODELS_CACHE_KEY = "node-banana-models-cache";
+// Bump when the built-in OpenAI catalogue changes so existing users see new models.
+const OPENAI_CATALOGUE_VERSION = 1;
+const GEMINI_CATALOGUE_VERSION = 1;
 const MODELS_CACHE_TTL = 48 * 60 * 60 * 1000; // 48 hours
-// Cap the number of cached entries to avoid unbounded localStorage growth.
-// Entries are pruned LRU-style (oldest timestamp first) on write.
-const MODELS_CACHE_MAX_ENTRIES = 20;
+// A few provider sets at most; the lists are big.
+const MODELS_CACHE_MAX_ENTRIES = 3;
+/** Provider notices the user closed, by provider: the error text they closed. A different error shows again. */
+const NOTICES_DISMISSED_KEY = "node-banana-models-notices-dismissed";
+
+function readDismissedNotices(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NOTICES_DISMISSED_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDismissedNotices(value: Record<string, string>) {
+  try {
+    if (Object.keys(value).length === 0) localStorage.removeItem(NOTICES_DISMISSED_KEY);
+    else localStorage.setItem(NOTICES_DISMISSED_KEY, JSON.stringify(value));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/** While a provider refreshes behind the server's answer, ask again this often. */
+const REFRESH_POLL_MS = 3000;
+const REFRESH_POLL_LIMIT = 12;
 
 interface ModelsCacheEntry {
+  geminiCatalogueVersion?: number;
+  openaiCatalogueVersion?: number;
   models: ProviderModel[];
   availableProviders?: string[];
+  providers?: Record<string, ProviderListResult>;
   timestamp: number;
 }
 
@@ -26,6 +82,11 @@ function getCachedModels(cacheKey: string): ModelsCacheEntry | null {
   try {
     const cache = JSON.parse(localStorage.getItem(MODELS_CACHE_KEY) || "{}");
     const entry = cache[cacheKey];
+    const provider = "all";
+    const includesOpenAI = provider === "all" || provider === "openai";
+    if (includesOpenAI && entry?.openaiCatalogueVersion !== OPENAI_CATALOGUE_VERSION) return null;
+    // Gemini models are included in the combined catalogue and the Gemini filter.
+    if ((provider === "all" || provider === "gemini") && entry?.geminiCatalogueVersion !== GEMINI_CATALOGUE_VERSION) return null;
     if (entry && Date.now() - entry.timestamp < MODELS_CACHE_TTL) {
       return entry;
     }
@@ -35,7 +96,7 @@ function getCachedModels(cacheKey: string): ModelsCacheEntry | null {
   return null;
 }
 
-function setCachedModels(cacheKey: string, models: ProviderModel[], availableProviders?: string[]) {
+function setCachedModels(cacheKey: string, models: ProviderModel[], availableProviders?: string[], providers?: Record<string, ProviderListResult>) {
   try {
     const cache: Record<string, ModelsCacheEntry> = JSON.parse(
       localStorage.getItem(MODELS_CACHE_KEY) || "{}"
@@ -50,7 +111,7 @@ function setCachedModels(cacheKey: string, models: ProviderModel[], availablePro
       }
     }
 
-    cache[cacheKey] = { models, availableProviders, timestamp: now };
+    cache[cacheKey] = { models, availableProviders, providers, timestamp: now, openaiCatalogueVersion: OPENAI_CATALOGUE_VERSION, geminiCatalogueVersion: GEMINI_CATALOGUE_VERSION };
 
     // Cap total entries (LRU): drop oldest by timestamp until under the limit.
     const keys = Object.keys(cache);
@@ -132,6 +193,17 @@ const OpenAIIcon = () => (
 
 const ComfyIcon = () => <ComfyMark className="w-3.5 h-3.5" />;
 
+/** Provider rail order, names and marks. Monochrome: the chrome keeps colour for status. */
+const PROVIDER_OPTIONS: { id: ProviderType; label: string; Icon: () => React.ReactElement }[] = [
+  { id: "gemini", label: "Gemini", Icon: GeminiIcon },
+  { id: "replicate", label: "Replicate", Icon: ReplicateIcon },
+  { id: "fal", label: "fal.ai", Icon: FalIcon },
+  { id: "kie", label: "Kie.ai", Icon: KieIcon },
+  { id: "wavespeed", label: "WaveSpeed", Icon: WaveSpeedIcon },
+  { id: "openai", label: "OpenAI", Icon: OpenAIIcon },
+  { id: "comfy", label: "ComfyUI", Icon: ComfyIcon },
+];
+
 // Get the center of the React Flow pane in screen coordinates
 function getPaneCenter() {
   const pane = document.querySelector(".react-flow");
@@ -148,13 +220,74 @@ function getPaneCenter() {
 // Capability filter options
 type CapabilityFilter = "all" | "image" | "video" | "3d" | "audio";
 
+const CAPABILITY_OPTIONS: { id: CapabilityFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "image", label: "Image" },
+  { id: "video", label: "Video" },
+  { id: "3d", label: "3D" },
+  { id: "audio", label: "Audio" },
+];
+
+/** Short input→output chip per capability, so similar models can be told apart. */
+const CAPABILITY_LABELS: Partial<Record<ModelCapability, string>> = {
+  "text-to-image": "txt\u2192img",
+  "image-to-image": "img\u2192img",
+  "text-to-video": "txt\u2192vid",
+  "image-to-video": "img\u2192vid",
+  "audio-to-video": "audio\u2192vid",
+  "video-to-video": "vid\u2192vid",
+  "text-to-3d": "txt\u21923d",
+  "image-to-3d": "img\u21923d",
+  "text-to-audio": "txt\u2192audio",
+};
+
 // API response type
 interface ModelsResponse {
   success: boolean;
   models?: ProviderModel[];
   /** Providers with API keys configured (env or client header) */
   availableProviders?: string[];
+  /** Per provider: count, when it was fetched, stale, refreshing, error */
+  providers?: Record<string, ProviderListResult>;
   error?: string;
+}
+
+/** The capabilities behind each Type filter. */
+const CAPABILITY_FILTER_SETS: Record<Exclude<CapabilityFilter, "all">, ModelCapability[]> = {
+  image: ["text-to-image", "image-to-image"],
+  video: ["text-to-video", "image-to-video", "audio-to-video", "video-to-video"],
+  "3d": ["text-to-3d", "image-to-3d"],
+  audio: ["text-to-audio"],
+};
+
+function matchesCapabilityFilter(model: ProviderModel, filter: CapabilityFilter): boolean {
+  if (filter === "all") return true;
+  const wanted = CAPABILITY_FILTER_SETS[filter];
+  return model.capabilities.some((cap) => wanted.includes(cap));
+}
+
+function matchesSearch(model: ProviderModel, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return model.name.toLowerCase().includes(q) || model.id.toLowerCase().includes(q) || (model.description?.toLowerCase().includes(q) ?? false);
+}
+
+/** "2h ago" for a provider's fetched-at time. */
+function formatAge(fetchedAt: number): string {
+  const minutes = Math.round((Date.now() - fetchedAt) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** What to do about a provider's error, in a few words. */
+function providerErrorHint(error: string): string {
+  if (/\b40[13]\b/.test(error)) return "The key was rejected. Check it in Settings.";
+  if (/timed out/i.test(error)) return "It did not answer in time.";
+  if (/\b429\b/.test(error)) return "It is rate limiting requests.";
+  return "";
 }
 
 interface ModelSearchDialogProps {
@@ -169,7 +302,7 @@ interface ModelSearchDialogProps {
   showClearOption?: boolean;
   /** Callback when the "Remove fallback" row is clicked */
   onClearSelection?: () => void;
-  /** Custom dialog title (defaults to "Browse Models") */
+  /** Custom dialog title (defaults to "Browse models") */
   title?: string;
 }
 
@@ -181,12 +314,10 @@ export function ModelSearchDialog({
   initialCapabilityFilter,
   showClearOption,
   onClearSelection,
-  title = "Browse Models",
+  title = "Browse models",
 }: ModelSearchDialogProps) {
   const {
     addNode,
-    incrementModalCount,
-    decrementModalCount,
     recentModels,
     trackModelUsage,
   } = useWorkflowStore();
@@ -202,30 +333,28 @@ export function ModelSearchDialog({
   );
   const [capabilityFilter, setCapabilityFilter] =
     useState<CapabilityFilter>(initialCapabilityFilter || "all");
-  const [models, setModels] = useState<ProviderModel[]>([]);
+  /** Every model the server lists; the filters and the search narrow it here. */
+  const [catalog, setCatalog] = useState<ProviderModel[]>([]);
+  const [providerStatus, setProviderStatus] = useState<Record<string, ProviderListResult>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [serverAvailableProviders, setServerAvailableProviders] = useState<string[]>([]);
+  /** The providers' own search, run on request for one query. */
+  const [deep, setDeep] = useState<{ query: string; models: ProviderModel[]; state: "searching" | "done" | "failed" } | null>(null);
+  const [dismissedNotices, setDismissedNotices] = useState<Record<string, string>>(readDismissedNotices);
 
   // Refs
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Track request version to ignore stale responses
   const requestVersionRef = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Register modal with store
-  useEffect(() => {
-    if (isOpen) {
-      incrementModalCount();
-      return () => decrementModalCount();
-    }
-  }, [isOpen, incrementModalCount, decrementModalCount]);
-
-  // Debounce search query
+  // The search is local, so the debounce only smooths typing
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(searchQuery);
-    }, 300);
+    }, 120);
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
@@ -236,131 +365,109 @@ export function ModelSearchDialog({
     }
   }, [initialProvider]);
 
-  // Fetch models
-  const fetchModels = useCallback(async (bypassCache = false) => {
-    // Increment version to track this request
+  // Headers with the client-side keys; the server falls back to its env
+  const buildHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    if (replicateApiKey) headers["X-Replicate-Key"] = replicateApiKey;
+    if (falApiKey) headers["X-Fal-Key"] = falApiKey;
+    if (kieApiKey) headers["X-Kie-Key"] = kieApiKey;
+    if (wavespeedApiKey) headers["X-WaveSpeed-Key"] = wavespeedApiKey;
+    if (openaiApiKey) headers["X-OpenAI-API-Key"] = openaiApiKey;
+    if (comfyApiKey) headers["X-Comfy-Router-Key"] = comfyApiKey;
+    return headers;
+  }, [replicateApiKey, falApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey]);
+
+  const providersHash = getProvidersHash({
+    replicate: !!replicateApiKey,
+    fal: !!falApiKey,
+    kie: !!kieApiKey,
+    wavespeed: !!wavespeedApiKey,
+    openai: !!openaiApiKey,
+    comfy: !!comfyApiKey,
+  });
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * The whole list, once. `mode`:
+   * - "open": the cached list first, then the server's;
+   * - "refresh": wait for every provider to be fetched anew;
+   * - "poll": ask again while a provider refreshes behind the last answer.
+   */
+  const fetchModels = useCallback(async (mode: "open" | "refresh" | "poll" = "open", polls = 0) => {
     const thisVersion = ++requestVersionRef.current;
+    stopPolling();
 
-    // Build cache key from filters + configured providers (so the key changes
-    // when an API key is added/removed and the "all" view can't go stale).
-    const providersHash = getProvidersHash({
-      replicate: !!replicateApiKey,
-      fal: !!falApiKey,
-      kie: !!kieApiKey,
-      wavespeed: !!wavespeedApiKey,
-      openai: !!openaiApiKey,
-      comfy: !!comfyApiKey,
-    });
-    const cacheKey = `${providersHash}:${providerFilter}:${capabilityFilter}:${debouncedSearch}`;
-
-    // Check localStorage cache first (skip when bypassing)
-    if (!bypassCache) {
-      const cached = getCachedModels(cacheKey);
+    if (mode === "open") {
+      const cached = getCachedModels(providersHash);
       if (cached) {
-        setModels(cached.models);
-        if (cached.availableProviders) {
-          setServerAvailableProviders(cached.availableProviders);
-        }
-        return;
+        setCatalog(cached.models);
+        if (cached.availableProviders) setServerAvailableProviders(cached.availableProviders);
+        if (cached.providers) setProviderStatus(cached.providers);
+      } else {
+        setIsLoading(true);
       }
+      setError(null);
+    } else if (mode === "refresh") {
+      setIsLoading(catalog.length === 0);
+      setError(null);
     }
 
-    setIsLoading(true);
-    setError(null);
-
     try {
-      // Build query params
       const params = new URLSearchParams();
-      if (debouncedSearch) {
-        params.set("search", debouncedSearch);
-      }
-      if (providerFilter !== "all") {
-        params.set("provider", providerFilter);
-      }
-      if (capabilityFilter !== "all") {
-        const capabilities =
-          capabilityFilter === "image"
-            ? "text-to-image,image-to-image"
-            : capabilityFilter === "video"
-            ? "text-to-video,image-to-video,audio-to-video,video-to-video"
-            : capabilityFilter === "3d"
-            ? "text-to-3d,image-to-3d"
-            : "text-to-audio";
-        params.set("capabilities", capabilities);
-      }
-      if (bypassCache) {
-        params.set("refresh", "true");
-      }
-
-      // Build headers with API keys
-      const headers: Record<string, string> = {};
-      if (replicateApiKey) {
-        headers["X-Replicate-Key"] = replicateApiKey;
-      }
-      if (falApiKey) {
-        headers["X-Fal-Key"] = falApiKey;
-      }
-      if (kieApiKey) {
-        headers["X-Kie-Key"] = kieApiKey;
-      }
-      if (wavespeedApiKey) {
-        headers["X-WaveSpeed-Key"] = wavespeedApiKey;
-      }
-      if (openaiApiKey) {
-        headers["X-OpenAI-API-Key"] = openaiApiKey;
-      }
-      if (comfyApiKey) {
-        headers["X-Comfy-Router-Key"] = comfyApiKey;
-      }
-
-      const response = await deduplicatedFetch(`/api/models?${params.toString()}`, {
-        headers,
-      });
-
-      // Check if this request is still current
-      if (thisVersion !== requestVersionRef.current) {
-        return; // Ignore stale response
-      }
-
+      if (mode === "refresh") params.set("refresh", "true");
+      const query = params.toString();
+      const response = await deduplicatedFetch(`/api/models${query ? `?${query}` : ""}`, { headers: buildHeaders() });
+      if (thisVersion !== requestVersionRef.current) return;
       const data: ModelsResponse = await response.json();
+      if (thisVersion !== requestVersionRef.current) return;
 
       if (data.success && data.models) {
-        setModels(data.models);
-        // Only cache browse results (empty search), not per-keystroke search
-        // fragments — otherwise every distinct debounced string stores a full
-        // model list and the cache grows unbounded.
-        if (!debouncedSearch) {
-          setCachedModels(cacheKey, data.models, data.availableProviders);
-        }
-        // Update server-reported available providers
-        if (data.availableProviders) {
-          setServerAvailableProviders(data.availableProviders);
+        setCatalog(data.models);
+        setProviderStatus(data.providers ?? {});
+        if (data.availableProviders) setServerAvailableProviders(data.availableProviders);
+        setCachedModels(providersHash, data.models, data.availableProviders, data.providers);
+        // A provider still refreshing behind this answer: ask again shortly
+        const refreshing = Object.values(data.providers ?? {}).some((p) => p.refreshing);
+        if (refreshing && polls < REFRESH_POLL_LIMIT) {
+          pollTimerRef.current = setTimeout(() => {
+            pollTimerRef.current = null;
+            void fetchModels("poll", polls + 1);
+          }, REFRESH_POLL_MS);
         }
       } else {
         setError(data.error || "Failed to fetch models");
-        setModels([]);
+        if (mode !== "poll") setCatalog([]);
       }
     } catch (err) {
-      // Check if this request is still current
-      if (thisVersion !== requestVersionRef.current) {
-        return; // Ignore stale error
+      if (thisVersion !== requestVersionRef.current) return;
+      if (mode !== "poll") {
+        setError(err instanceof Error ? err.message : "Failed to fetch models");
+        setCatalog([]);
       }
-      setError(err instanceof Error ? err.message : "Failed to fetch models");
-      setModels([]);
     } finally {
-      // Only update loading state if this is still the current request
-      if (thisVersion === requestVersionRef.current) {
-        setIsLoading(false);
-      }
+      if (thisVersion === requestVersionRef.current) setIsLoading(false);
     }
-  }, [debouncedSearch, providerFilter, capabilityFilter, replicateApiKey, falApiKey, kieApiKey, wavespeedApiKey, openaiApiKey, comfyApiKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providersHash, buildHeaders, stopPolling]);
 
-  // Fetch models when filters change
+  // Load on open; stop asking again on close
   useEffect(() => {
     if (isOpen) {
-      fetchModels();
+      void fetchModels("open");
     }
-  }, [isOpen, fetchModels]);
+    return stopPolling;
+  }, [isOpen, fetchModels, stopPolling]);
+
+  // The list a new query is typed into is not the one a past deep search found
+  useEffect(() => {
+    setDeep((current) => (current && current.query !== debouncedSearch ? null : current));
+  }, [debouncedSearch]);
 
   // Clear all caches and re-fetch models from scratch
   const handleRefresh = useCallback(async () => {
@@ -372,12 +479,62 @@ export function ModelSearchDialog({
       localStorage.removeItem("node-banana-schema-cache");
       // Clear in-memory deduplicatedFetch cache
       clearFetchCache();
-      // Re-fetch with cache bypass
-      await fetchModels(true);
+      setDeep(null);
+      // Asking again is asking to see how it went
+      setDismissedNotices({});
+      writeDismissedNotices({});
+      await fetchModels("refresh");
     } finally {
       setIsRefreshing(false);
     }
   }, [fetchModels]);
+
+  /** Ask Replicate's and fal.ai's own search for models the stored lists lack. */
+  const handleDeepSearch = useCallback(async () => {
+    const query = debouncedSearch;
+    if (!query) return;
+    setDeep({ query, models: [], state: "searching" });
+    try {
+      const params = new URLSearchParams({ search: query, deep: "true" });
+      const response = await deduplicatedFetch(`/api/models?${params.toString()}`, { headers: buildHeaders() });
+      const data: ModelsResponse = await response.json();
+      setDeep((current) => (current?.query === query ? { query, models: data.success && data.models ? data.models : [], state: data.success ? "done" : "failed" } : current));
+    } catch {
+      setDeep((current) => (current?.query === query ? { query, models: [], state: "failed" } : current));
+    }
+  }, [debouncedSearch, buildHeaders]);
+
+  // Everything the filters and the search apply to: the catalog plus what a deep search found
+  const models = useMemo(() => {
+    const seen = new Set(catalog.map((m) => `${m.provider}:${m.id}`));
+    const extra = deep && deep.query === debouncedSearch ? deep.models.filter((m) => !seen.has(`${m.provider}:${m.id}`)) : [];
+    return [...catalog, ...extra].filter(
+      (model) =>
+        (providerFilter === "all" || model.provider === providerFilter) &&
+        matchesCapabilityFilter(model, capabilityFilter) &&
+        matchesSearch(model, debouncedSearch),
+    );
+  }, [catalog, deep, providerFilter, capabilityFilter, debouncedSearch]);
+
+  // Providers that failed outright, or whose last refresh failed; shown above the list until closed
+  const providerNotices = useMemo(
+    () =>
+      Object.entries(providerStatus)
+        .filter(([provider, status]) => status.error && dismissedNotices[provider] !== status.error && (providerFilter === "all" || providerFilter === provider))
+        .map(([provider, status]) => ({ provider: provider as ProviderType, status })),
+    [providerStatus, providerFilter, dismissedNotices],
+  );
+  const dismissNotice = useCallback((provider: ProviderType, error: string) => {
+    setDismissedNotices((current) => {
+      const next = { ...current, [provider]: error };
+      writeDismissedNotices(next);
+      return next;
+    });
+  }, []);
+  const refreshingProviders = useMemo(
+    () => Object.entries(providerStatus).filter(([, status]) => status.refreshing).map(([provider]) => getProviderDisplayName(provider as ProviderType)),
+    [providerStatus],
+  );
 
   // Focus search input when dialog opens
   useEffect(() => {
@@ -437,77 +594,6 @@ export function ModelSearchDialog({
     [screenToFlowPosition, addNode, onClose, onModelSelected, trackModelUsage]
   );
 
-  // Handle escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
-    };
-
-    if (isOpen) {
-      window.addEventListener("keydown", handleKeyDown);
-    }
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isOpen, onClose]);
-
-  // Handle backdrop click
-  const handleBackdropClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (e.target === e.currentTarget) {
-        onClose();
-      }
-    },
-    [onClose]
-  );
-
-  // Get provider badge color
-  const getProviderBadgeColor = (provider: ProviderType) => {
-    switch (provider) {
-      case "gemini":
-        return "bg-green-500/20 text-green-300";
-      case "replicate":
-        return "bg-blue-500/20 text-blue-300";
-      case "fal":
-        return "bg-yellow-500/20 text-yellow-300";
-      case "kie":
-        return "bg-orange-500/20 text-orange-300";
-      case "wavespeed":
-        return "bg-purple-500/20 text-purple-300";
-      case "openai":
-        return "bg-teal-500/20 text-teal-300";
-      case "comfy":
-        return "bg-neutral-500/20 text-neutral-200";
-      default:
-        return "bg-neutral-500/20 text-neutral-300";
-    }
-  };
-
-  // Get provider display name
-  const getProviderDisplayName = (provider: ProviderType) => {
-    switch (provider) {
-      case "gemini":
-        return "Gemini";
-      case "replicate":
-        return "Replicate";
-      case "fal":
-        return "fal.ai";
-      case "kie":
-        return "Kie.ai";
-      case "wavespeed":
-        return "WaveSpeed";
-      case "openai":
-        return "OpenAI";
-      case "comfy":
-        return "ComfyUI";
-      default:
-        return provider;
-    }
-  };
-
   // Compute which providers are available based on client API keys + server env vars
   const availableProviders = useMemo(() => {
     const providers = new Set<ProviderType>(["gemini", "fal"]); // Always available
@@ -531,40 +617,18 @@ export function ModelSearchDialog({
     }
   }, [providerFilter, availableProviders]);
 
-  // Filter recent models by capability
+  // Recent models, kept to the Type filter (and the provider tab) by what the catalog says of them
   const filteredRecentModels = useMemo(() => {
     return recentModels
       .filter((recent) => {
-        // Find matching model in current models list to check capabilities
-        const matchingModel = models.find((m) => m.id === recent.modelId);
-        if (!matchingModel && capabilityFilter !== "all") {
-          // If model not loaded yet and filter is active, exclude it
-          return false;
-        }
+        if (providerFilter !== "all" && recent.provider !== providerFilter) return false;
         if (capabilityFilter === "all") return true;
-        if (!matchingModel) return true; // Show if we can't verify capabilities
-
-        const isImage = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-image" || cap === "image-to-image"
-        );
-        const isVideo = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-video" || cap === "image-to-video" || cap === "audio-to-video" || cap === "video-to-video"
-        );
-        const is3D = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-3d" || cap === "image-to-3d"
-        );
-        const isAudio = matchingModel.capabilities.some(
-          (cap) => cap === "text-to-audio"
-        );
-
-        if (capabilityFilter === "image") return isImage;
-        if (capabilityFilter === "video") return isVideo;
-        if (capabilityFilter === "3d") return is3D;
-        if (capabilityFilter === "audio") return isAudio;
-        return true;
+        const matchingModel = catalog.find((m) => m.id === recent.modelId);
+        // Not in the catalog: nothing to check it against, so it is left out of a narrowed view
+        return matchingModel ? matchesCapabilityFilter(matchingModel, capabilityFilter) : false;
       })
       .slice(0, 4); // Show max 4
-  }, [recentModels, models, capabilityFilter]);
+  }, [recentModels, catalog, capabilityFilter, providerFilter]);
 
   // Get display name with suffix for fal.ai models to differentiate variants
   const getDisplayName = (model: ProviderModel): string => {
@@ -598,391 +662,226 @@ export function ModelSearchDialog({
     }
   };
 
-  // Get capability badges - show all capabilities to differentiate similar models
-  const getCapabilityBadges = (capabilities: ModelCapability[]) => {
-    const badges: React.ReactNode[] = [];
+  const hasActiveFilters = searchQuery !== "" || providerFilter !== "all" || capabilityFilter !== "all";
 
-    capabilities.forEach((cap) => {
-      let color = "";
-      let label = "";
-
-      switch (cap) {
-        case "text-to-image":
-          color = "bg-green-500/20 text-green-300";
-          label = "txt→img";
-          break;
-        case "image-to-image":
-          color = "bg-cyan-500/20 text-cyan-300";
-          label = "img→img";
-          break;
-        case "text-to-video":
-          color = "bg-purple-500/20 text-purple-300";
-          label = "txt→vid";
-          break;
-        case "image-to-video":
-          color = "bg-pink-500/20 text-pink-300";
-          label = "img→vid";
-          break;
-        case "text-to-3d":
-          color = "bg-orange-500/20 text-orange-300";
-          label = "txt→3d";
-          break;
-        case "image-to-3d":
-          color = "bg-amber-500/20 text-amber-300";
-          label = "img→3d";
-          break;
-        case "text-to-audio":
-          color = "bg-fuchsia-500/20 text-fuchsia-300";
-          label = "txt→audio";
-          break;
-        case "audio-to-video":
-          color = "bg-violet-500/20 text-violet-300";
-          label = "audio→vid";
-          break;
-        case "video-to-video":
-          color = "bg-rose-500/20 text-rose-300";
-          label = "vid→vid";
-          break;
-      }
-
-      if (label) {
-        badges.push(
-          <span
-            key={cap}
-            className={`text-[10px] px-1.5 py-0.5 rounded ${color}`}
-          >
-            {label}
-          </span>
-        );
-      }
-    });
-
-    return badges;
+  const clearFilters = () => {
+    setSearchQuery("");
+    setProviderFilter("all");
+    setCapabilityFilter("all");
+    searchInputRef.current?.focus();
   };
+
+  // Enter in the search box takes the top result, once the list matches what was typed.
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || isLoading) return;
+    const first = models[0];
+    if (!first) return;
+    event.preventDefault();
+    handleSelectModel(first);
+  };
+
+  const countLabel = isLoading
+    ? "Loading"
+    : error
+      ? "Unavailable"
+      : `${models.length} model${models.length !== 1 ? "s" : ""}${refreshingProviders.length > 0 ? ` · updating ${refreshingProviders.join(", ")}…` : ""}`;
+
+  // The providers' own search is worth offering once there is a real query and a provider that has one
+  const canDeepSearch =
+    debouncedSearch.trim().length >= 2 &&
+    (availableProviders.has("replicate") || availableProviders.has("fal")) &&
+    (providerFilter === "all" || providerFilter === "replicate" || providerFilter === "fal");
+  const deepSearchTargets = [providerFilter !== "fal" && availableProviders.has("replicate") ? "Replicate" : null, providerFilter !== "replicate" && availableProviders.has("fal") ? "fal.ai" : null]
+    .filter(Boolean)
+    .join(" and ");
+  const deepSearchRow =
+    canDeepSearch && (
+      <div className="flex items-center justify-between gap-3 rounded-[10px] border border-card-border px-3.5 py-2.5" data-testid="deep-search">
+        <span className="text-xs text-ink-3">
+          {deep?.state === "searching"
+            ? `Searching ${deepSearchTargets}…`
+            : deep?.state === "done"
+              ? `${deepSearchTargets} found nothing more for “${deep.query}”`
+              : deep?.state === "failed"
+                ? `${deepSearchTargets} could not be searched`
+                : `Not here? ${deepSearchTargets} may have more.`}
+        </span>
+        {deep?.state !== "searching" && deep?.state !== "done" && (
+          <DialogTextButton onClick={handleDeepSearch} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <Search size={13} strokeWidth={1.75} />
+            Search {deepSearchTargets}
+          </DialogTextButton>
+        )}
+      </div>
+    );
+
+  const providerNoticeRows = providerNotices.length > 0 && (
+    <div className="flex flex-col gap-2" data-testid="provider-notices">
+      {providerNotices.map(({ provider, status }) => (
+        <div key={provider} role="status" className="flex items-center gap-3 rounded-[10px] border border-error/30 bg-error/5 px-3.5 py-2.5 text-xs">
+          <CircleAlert size={15} strokeWidth={1.75} className="shrink-0 text-error" />
+          <span className="min-w-0 flex-1 text-neutral-300">
+            <span className="font-medium text-neutral-100">{getProviderDisplayName(provider)}</span>
+            {status.success ? " could not be refreshed" : " is unavailable"}: {status.error}
+            {providerErrorHint(status.error ?? "") && <span className="text-ink-3"> {providerErrorHint(status.error ?? "")}</span>}
+            {status.success && status.fetchedAt && <span className="text-ink-3"> Showing the list from {formatAge(status.fetchedAt)}.</span>}
+          </span>
+          <DialogTextButton onClick={handleRefresh} disabled={isRefreshing} className="whitespace-nowrap">
+            Retry
+          </DialogTextButton>
+          <button
+            type="button"
+            onClick={() => dismissNotice(provider, status.error ?? "")}
+            aria-label={`Dismiss ${getProviderDisplayName(provider)} notice`}
+            title="Dismiss"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-white/[0.06] hover:text-neutral-100"
+          >
+            <X size={14} strokeWidth={1.75} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
 
   if (!isOpen) return null;
 
-  const dialogContent = (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
-      onClick={handleBackdropClick}
+  const clearSelectionRow = showClearOption && onClearSelection && (
+    <button
+      type="button"
+      onClick={() => onClearSelection()}
+      className={cn(
+        "group w-full flex items-center justify-between gap-3 h-11 px-3.5 rounded-[10px] border border-card-border text-left transition-colors hover:border-error/50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection focus-visible:ring-offset-2 focus-visible:ring-offset-canvas-bg"
+      )}
     >
-      <div className="relative bg-neutral-800 border border-neutral-700 rounded-lg shadow-2xl w-full max-w-5xl max-h-[85vh] flex flex-col mx-4">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-700">
-          <h2 className="text-lg font-semibold text-neutral-100">
-            {title}
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700 rounded transition-colors"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </button>
-        </div>
+      <span className="flex items-center gap-2.5">
+        <X size={16} strokeWidth={1.75} className="text-neutral-500 group-hover:text-error transition-colors" />
+        <DialogRowTitle>Remove fallback</DialogRowTitle>
+      </span>
+      <span className="text-xs text-ink-3">Clear current selection</span>
+    </button>
+  );
 
-        {/* Filter Bar */}
-        <div className="px-6 py-4 border-b border-neutral-700">
-          <div className="flex flex-col sm:flex-row gap-3">
-            {/* Search Input */}
-            <div className="flex-1 relative">
-              <svg
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search models..."
-                className="w-full pl-10 pr-4 py-2 text-sm bg-neutral-700 border border-neutral-600 rounded text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500"
-              />
-            </div>
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      portal
+      initialFocusRef={searchInputRef}
+      className={cn(splitPanelClass, "w-[1200px] h-[720px] max-w-[92vw] max-h-[85vh]")}
+    >
+      <DialogPane width={232} className={filterPaneClass}>
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col">
+          <DialogPaneTitle>{title}</DialogPaneTitle>
 
-            {/* Provider Filter - Icon Buttons (only show available providers) */}
-            <div className="flex items-center gap-0.5 bg-neutral-700/50 rounded p-0.5">
-              <button
-                onClick={() => setProviderFilter("all")}
-                title="All Providers"
-                className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                  providerFilter === "all"
-                    ? "bg-neutral-600 text-neutral-100"
-                    : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700"
-                }`}
-              >
-                All
-              </button>
-              {availableProviders.has("gemini") && (
-                <button
-                  onClick={() => setProviderFilter("gemini")}
-                  title="Gemini"
-                  className={`p-2 rounded transition-colors ${
-                    providerFilter === "gemini"
-                      ? "bg-green-500/20 text-green-300"
-                      : "text-neutral-400 hover:text-green-300 hover:bg-neutral-700"
-                  }`}
-                >
-                  <GeminiIcon />
-                </button>
-              )}
-              {availableProviders.has("replicate") && (
-                <button
-                  onClick={() => setProviderFilter("replicate")}
-                  title="Replicate"
-                  className={`p-2 rounded transition-colors ${
-                    providerFilter === "replicate"
-                      ? "bg-blue-500/20 text-blue-300"
-                      : "text-neutral-400 hover:text-blue-300 hover:bg-neutral-700"
-                  }`}
-                >
-                  <ReplicateIcon />
-                </button>
-              )}
-              {availableProviders.has("fal") && (
-                <button
-                  onClick={() => setProviderFilter("fal")}
-                  title="fal.ai"
-                  className={`p-2 rounded transition-colors ${
-                    providerFilter === "fal"
-                      ? "bg-yellow-500/20 text-yellow-300"
-                      : "text-neutral-400 hover:text-yellow-300 hover:bg-neutral-700"
-                  }`}
-                >
-                  <FalIcon />
-                </button>
-              )}
-              {availableProviders.has("kie") && (
-                <button
-                  onClick={() => setProviderFilter("kie")}
-                  title="Kie.ai"
-                  className={`p-2 rounded transition-colors ${
-                    providerFilter === "kie"
-                      ? "bg-orange-500/20 text-orange-300"
-                      : "text-neutral-400 hover:text-orange-300 hover:bg-neutral-700"
-                  }`}
-                >
-                  <KieIcon />
-                </button>
-              )}
-              {availableProviders.has("wavespeed") && (
-                <button
-                  onClick={() => setProviderFilter("wavespeed")}
-                  title="WaveSpeed"
-                  className={`p-2 rounded transition-colors ${
-                    providerFilter === "wavespeed"
-                      ? "bg-purple-500/20 text-purple-300"
-                      : "text-neutral-400 hover:text-purple-300 hover:bg-neutral-700"
-                  }`}
-                >
-                  <WaveSpeedIcon />
-                </button>
-              )}
-              {availableProviders.has("openai") && (
-                <button
-                  onClick={() => setProviderFilter("openai")}
-                  title="OpenAI"
-                  className={`p-2 rounded transition-colors ${
-                    providerFilter === "openai"
-                      ? "bg-teal-500/20 text-teal-300"
-                      : "text-neutral-400 hover:text-teal-300 hover:bg-neutral-700"
-                  }`}
-                >
-                  <OpenAIIcon />
-                </button>
-              )}
-              {availableProviders.has("comfy") && (
-                <button
-                  onClick={() => setProviderFilter("comfy")}
-                  title="ComfyUI"
-                  className={`p-2 rounded transition-colors ${
-                    providerFilter === "comfy"
-                      ? "bg-neutral-500/20 text-neutral-100"
-                      : "text-neutral-400 hover:text-neutral-100 hover:bg-neutral-700"
-                  }`}
-                >
-                  <ComfyIcon />
-                </button>
-              )}
-            </div>
+          <DialogSearchField
+            ref={searchInputRef}
+            aria-label="Search models"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search models..."
+            className="mt-3"
+          />
 
-            {/* Capability Filter */}
-            <select
-              value={capabilityFilter}
-              onChange={(e) =>
-                setCapabilityFilter(e.target.value as CapabilityFilter)
-              }
-              className="px-3 py-2 text-sm bg-neutral-700 border border-neutral-600 rounded text-neutral-100 focus:outline-none focus:ring-1 focus:ring-neutral-500"
-            >
-              <option value="all">All Types</option>
-              <option value="image">Image</option>
-              <option value="video">Video</option>
-              <option value="3d">3D</option>
-              <option value="audio">Audio</option>
-            </select>
+          <div className="mt-[18px] flex flex-col gap-3.5">
+            <DialogFilterGroup label="Type">
+              {CAPABILITY_OPTIONS.map((option) => (
+                <DialogFilterItem
+                  key={option.id}
+                  active={capabilityFilter === option.id}
+                  onClick={() => setCapabilityFilter(option.id)}
+                >
+                  {option.label}
+                </DialogFilterItem>
+              ))}
+            </DialogFilterGroup>
 
-            {/* Refresh Cache */}
-            <button
-              onClick={handleRefresh}
-              disabled={isRefreshing || isLoading}
-              title="Refresh models & schemas"
-              className="p-2 rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <svg
-                className={`w-4 h-4${isRefreshing ? " animate-spin" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0113.292-6.036M20 15a8 8 0 01-13.292 6.036"
-                />
-              </svg>
-            </button>
+            <DialogPaneRule />
+
+            <DialogFilterGroup label="Provider">
+              <DialogFilterItem active={providerFilter === "all"} title="All Providers" onClick={() => setProviderFilter("all")}>
+                All providers
+              </DialogFilterItem>
+              {PROVIDER_OPTIONS.filter((option) => availableProviders.has(option.id)).map(({ id, label, Icon }) => (
+                <DialogFilterItem
+                  key={id}
+                  active={providerFilter === id}
+                  title={label}
+                  onClick={() => setProviderFilter(id)}
+                  icon={<Icon />}
+                >
+                  {label}
+                </DialogFilterItem>
+              ))}
+            </DialogFilterGroup>
           </div>
         </div>
 
-        {/* Model List */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {isLoading ? (
-            <div className="flex items-center justify-center h-48">
-              <div className="flex flex-col items-center gap-3">
-                <svg
-                  className="w-8 h-8 animate-spin text-neutral-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  />
-                </svg>
-                <span className="text-sm text-neutral-400">
-                  Loading models...
-                </span>
-              </div>
+        <div className="flex items-center pt-2 border-t border-white/[0.06]">
+          <DialogTextButton
+            onClick={handleRefresh}
+            disabled={isRefreshing || isLoading}
+            title="Refresh models & schemas"
+            className="inline-flex items-center gap-[7px] px-[11px] text-xs whitespace-nowrap"
+          >
+            <RefreshCw size={14} strokeWidth={1.75} className={cn(isRefreshing && "animate-spin")} />
+            Refresh catalog
+          </DialogTextButton>
+        </div>
+      </DialogPane>
+
+      <DialogPage>
+        <DialogPageHead
+          eyebrow={<span aria-live="polite">{countLabel}</span>}
+          actions={hasActiveFilters && <DialogTextButton onClick={clearFilters}>Clear filters</DialogTextButton>}
+        />
+
+        <DialogPageBody className="overscroll-contain pt-3 pb-6 flex flex-col gap-5">
+          {/* The spinner is for a first load only; a new search keeps the old results, dimmed. */}
+          {isLoading && models.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3">
+              <DialogSpinner />
+              <span className="text-xs text-ink-3">Loading models...</span>
             </div>
           ) : error ? (
-            <div className="flex flex-col items-center justify-center h-48 gap-3">
-              <svg
-                className="w-10 h-10 text-red-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                />
-              </svg>
-              <p className="text-sm text-neutral-400 text-center max-w-xs">
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center">
+              <DialogStatus tone="error" className="normal-case tracking-normal text-neutral-300 max-w-sm">
                 {error}
-              </p>
-              <button
-                onClick={handleRefresh}
-                className="px-3 py-1.5 text-sm bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
-              >
-                Try Again
-              </button>
+              </DialogStatus>
+              <DialogButton variant="outline" onClick={handleRefresh}>
+                Try again
+              </DialogButton>
             </div>
-          ) : models.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 gap-2">
-              {showClearOption && onClearSelection && (
-                <button
-                  onClick={() => onClearSelection()}
-                  className="w-full flex items-center justify-between px-3 py-2 mb-2 bg-neutral-800/60 hover:bg-neutral-700/60 border border-neutral-700 hover:border-red-500/50 rounded-lg transition-colors text-left group"
-                >
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-red-400 group-hover:text-red-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    <span className="text-sm text-neutral-200 group-hover:text-white">Remove fallback</span>
-                  </div>
-                  <span className="text-xs text-neutral-500">Clear current selection</span>
-                </button>
-              )}
-              <svg
-                className="w-10 h-10 text-neutral-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              <p className="text-sm text-neutral-400">No models found</p>
-              <p className="text-xs text-neutral-500">
-                Try adjusting your search or filters
-              </p>
-            </div>
+          ) : models.length === 0 && !isLoading ? (
+            <>
+              {clearSelectionRow}
+              {providerNoticeRows}
+              {deepSearchRow}
+              <div className="flex-1 flex flex-col items-center justify-center text-center">
+                <DialogSearchGlyph className="w-10 h-10 text-neutral-600 mb-4" strokeWidth={1.25} />
+                <h3 className="font-display text-sm leading-[18px] font-semibold tracking-[-0.01em] text-neutral-100">
+                  No models found
+                </h3>
+                <p className="mt-1 text-xs leading-4 text-ink-3">Try adjusting your search or filters</p>
+                {hasActiveFilters && (
+                  <DialogTextButton onClick={clearFilters} className="mt-3">
+                    Clear all filters
+                  </DialogTextButton>
+                )}
+              </div>
+            </>
           ) : (
-            <div className="space-y-4">
-              {/* Remove fallback row (fallback-selection mode only) */}
-              {showClearOption && onClearSelection && (
-                <button
-                  onClick={() => onClearSelection()}
-                  className="w-full flex items-center justify-between px-3 py-2 bg-neutral-800/60 hover:bg-neutral-700/60 border border-neutral-700 hover:border-red-500/50 rounded-lg transition-colors text-left group"
-                >
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-red-400 group-hover:text-red-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    <span className="text-sm text-neutral-200 group-hover:text-white">Remove fallback</span>
-                  </div>
-                  <span className="text-xs text-neutral-500">Clear current selection</span>
-                </button>
-              )}
+            <div className={cn("flex flex-col gap-5 transition-opacity", isLoading && "opacity-50 pointer-events-none")} aria-busy={isLoading || undefined}>
+              {clearSelectionRow}
+              {providerNoticeRows}
 
-              {/* Recently Used Section */}
               {filteredRecentModels.length > 0 && !searchQuery && (
-                <div className="bg-neutral-700/30 rounded-lg p-3">
-                  <h3 className="text-xs font-medium text-neutral-500 mb-2">
-                    Recently Used
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <section className="flex flex-col gap-2.5">
+                  <DialogEyebrow>Recently used</DialogEyebrow>
+                  <div className="grid grid-cols-2 gap-2">
                     {filteredRecentModels.map((recent) => {
-                      const matchingModel = models.find(
-                        (m) => m.id === recent.modelId
-                      );
+                      const matchingModel = catalog.find((m) => m.id === recent.modelId);
                       // Create a ProviderModel from RecentModel for handleSelectModel
                       const model: ProviderModel = matchingModel || {
                         id: recent.modelId,
@@ -994,180 +893,127 @@ export function ModelSearchDialog({
                       return (
                         <button
                           key={`recent-${recent.modelId}`}
+                          type="button"
                           onClick={() => handleSelectModel(model)}
-                          className="flex items-center gap-3 p-3 bg-neutral-700/50 hover:bg-neutral-700 border border-neutral-600/30 hover:border-neutral-500 rounded-lg transition-colors text-left cursor-pointer group"
+                          className={cn(dialogCardClass, "flex items-center gap-3 p-2")}
                         >
-                          {/* Small cover image */}
-                          <div className="w-10 h-10 rounded bg-neutral-600 overflow-hidden flex-shrink-0">
-                            {matchingModel?.coverImage ? (
-                              <img
-                                src={matchingModel.coverImage}
-                                alt={recent.displayName}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center">
-                                <svg
-                                  className="w-5 h-5 text-neutral-500"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={1.5}
-                                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                                  />
-                                </svg>
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-neutral-100 text-sm truncate">
-                              {recent.displayName}
-                            </div>
-                            <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded ${getProviderBadgeColor(recent.provider)}`}
-                            >
-                              {getProviderDisplayName(recent.provider)}
-                            </span>
-                          </div>
+                          <Thumb src={matchingModel?.coverImage} className="w-10 h-10 rounded-md" />
+                          <span className="flex-1 min-w-0">
+                            <DialogRowTitle className="text-[13px] truncate">{recent.displayName}</DialogRowTitle>
+                            <ProviderLabel provider={recent.provider} className="mt-0.5" />
+                          </span>
                         </button>
                       );
                     })}
                   </div>
-                </div>
+                </section>
               )}
 
-              {/* Main Model List */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {models.map((model) => (
-                <button
-                  key={`${model.provider}-${model.id}`}
-                  onClick={() => handleSelectModel(model)}
-                  className="flex items-start gap-3 p-4 bg-neutral-700/50 hover:bg-neutral-700 border border-neutral-600/50 hover:border-neutral-500 rounded-lg transition-colors text-left cursor-pointer group"
-                >
-                  {/* Cover Image - larger */}
-                  <div className="w-20 h-20 rounded bg-neutral-600 overflow-hidden flex-shrink-0">
-                    {model.coverImage ? (
-                      <img
-                        src={model.coverImage}
-                        alt={model.name}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          // Hide broken images
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <svg
-                          className="w-8 h-8 text-neutral-500"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
+              <section
+                className={cn(
+                  "flex flex-col gap-2.5",
+                  filteredRecentModels.length > 0 && !searchQuery && "pt-4 border-t border-card"
+                )}
+              >
+                {filteredRecentModels.length > 0 && !searchQuery && <DialogEyebrow>All models</DialogEyebrow>}
+                <div className="grid grid-cols-2 gap-3">
+                  {models.map((model) => {
+                    const url = getModelUrl(model);
+                    return (
+                      <div key={`${model.provider}-${model.id}`} className="relative group/card">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectModel(model)}
+                          className={cn(dialogCardClass, "flex items-stretch w-full h-[124px] overflow-hidden")}
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.5}
-                            d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                          />
-                        </svg>
-                      </div>
-                    )}
-                  </div>
+                          {/* Full-height cover image */}
+                          <Thumb src={model.coverImage} alt={model.name} className="w-[122px] self-stretch" large />
 
-                  {/* Model Info */}
-                  <div className="flex-1 min-w-0">
-                    {/* Model name with variant suffix for fal.ai */}
-                    <div className="font-medium text-neutral-100 text-sm truncate">
-                      {getDisplayName(model)}
-                    </div>
+                          {/* Fixed height: title, id line, one row of chips and two lines of description. */}
+                          <span className="flex-1 min-w-0 px-3.5 py-3 flex flex-col gap-1.5 overflow-hidden">
+                            <span className={cn("min-w-0", url && "pr-[26px]")}>
+                              <DialogRowTitle className="truncate">{getDisplayName(model)}</DialogRowTitle>
+                              <span className="flex items-center gap-1.5 mt-0.5 min-w-0 font-mono text-[11px] leading-4">
+                                <span className="flex items-center gap-[5px] shrink-0 text-neutral-400 [&_svg]:w-[11px] [&_svg]:h-[11px]">
+                                  <ProviderIcon provider={model.provider} />
+                                  {getProviderDisplayName(model.provider)}
+                                </span>
+                                <span aria-hidden="true" className="shrink-0 text-neutral-600">·</span>
+                                <span className="text-ink-3 truncate">{model.id}</span>
+                              </span>
+                            </span>
+                            <span className="flex items-center gap-1 overflow-hidden">
+                              {model.capabilities.map((cap) =>
+                                CAPABILITY_LABELS[cap] ? <DialogChip key={cap} className="shrink-0">{CAPABILITY_LABELS[cap]}</DialogChip> : null
+                              )}
+                            </span>
+                            <span className="h-8 shrink-0 text-xs leading-4 text-ink-3 line-clamp-2">{model.description}</span>
+                          </span>
+                        </button>
 
-                    {/* Model ID with link to provider page */}
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-xs text-neutral-500 truncate font-mono">
-                        {model.id}
-                      </span>
-                      {getModelUrl(model) && (
-                        <a
-                          href={getModelUrl(model)!}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-neutral-500 hover:text-neutral-300 transition-colors flex-shrink-0"
-                          title={`View on ${getProviderDisplayName(model.provider)}`}
-                        >
-                          <svg
-                            className="w-3 h-3"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
+                        {/* A sibling of the card, not inside it: a link cannot live in a button. */}
+                        {url && (
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={`View on ${getProviderDisplayName(model.provider)}`}
+                            aria-label={`View ${model.name} on ${getProviderDisplayName(model.provider)}`}
+                            className={cn(
+                              "absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded-md text-neutral-600 group-hover/card:text-neutral-400 transition-colors",
+                              "hover:text-neutral-100 hover:bg-white/[0.06]",
+                              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-selection"
+                            )}
                           >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                            />
-                          </svg>
-                        </a>
-                      )}
-                    </div>
-
-                    {/* Badges row */}
-                    <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-                      <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded ${getProviderBadgeColor(model.provider)}`}
-                      >
-                        {getProviderDisplayName(model.provider)}
-                      </span>
-                      {getCapabilityBadges(model.capabilities)}
-                    </div>
-
-                    {/* Description - more lines */}
-                    {model.description && (
-                      <p className="mt-1.5 text-xs text-neutral-400 line-clamp-3">
-                        {model.description}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Hover indicator */}
-                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 self-center">
-                    <svg
-                      className="w-5 h-5 text-neutral-400"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M12 4v16m8-8H4"
-                      />
-                    </svg>
-                  </div>
-                </button>
-              ))}
-              </div>
+                            <ArrowUpRight size={14} strokeWidth={1.75} />
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {deepSearchRow}
+              </section>
             </div>
           )}
-        </div>
-
-        {/* Footer with model count */}
-        {!isLoading && !error && models.length > 0 && (
-          <div className="px-6 py-3 border-t border-neutral-700 text-xs text-neutral-400">
-            {models.length} model{models.length !== 1 ? "s" : ""} found
-          </div>
-        )}
-      </div>
-    </div>
+        </DialogPageBody>
+      </DialogPage>
+    </Dialog>
   );
+}
 
-  // Use portal to render outside React Flow stacking context
-  return createPortal(dialogContent, document.body);
+/* ------------------------------------------------------------------ parts */
+
+function getProviderDisplayName(provider: ProviderType): string {
+  return PROVIDER_OPTIONS.find((option) => option.id === provider)?.label ?? provider;
+}
+
+function ProviderIcon({ provider }: { provider: ProviderType }) {
+  const Icon = PROVIDER_OPTIONS.find((option) => option.id === provider)?.Icon;
+  return Icon ? <Icon /> : null;
+}
+
+/** Provider icon and name as a mono label: the meta line of a recent entry. */
+function ProviderLabel({ provider, className }: { provider: ProviderType; className?: string }) {
+  return (
+    <span className={cn("flex items-center gap-1.5 font-mono text-[10px] leading-4 tracking-eyebrow uppercase text-ink-3 [&_svg]:w-3 [&_svg]:h-3", className)}>
+      <ProviderIcon provider={provider} />
+      {getProviderDisplayName(provider)}
+    </span>
+  );
+}
+
+/** Cover image, or a quiet placeholder when the model has none or it fails to load. */
+function Thumb({ src, alt = "", className, large = false }: { src?: string; alt?: string; className?: string; large?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className={cn("relative shrink-0 overflow-hidden bg-card flex items-center justify-center", className)}>
+      {src && !failed ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt={alt} className="absolute inset-0 w-full h-full object-cover" onError={() => setFailed(true)} />
+      ) : (
+        <Image size={large ? 28 : 16} strokeWidth={1.25} className="text-neutral-600" />
+      )}
+    </span>
+  );
 }

@@ -1,4 +1,8 @@
+import { Dropdown } from "@/components/nodes/ui/Dropdown";
+import { Check, Copy, X } from "lucide-react";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+
+import { Dialog, DialogButton, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/Dialog";
 import { AvailableVariable } from "@/types";
 import { usePromptAutocomplete } from "@/hooks/usePromptAutocomplete";
 
@@ -92,6 +96,19 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
     return resolved;
   }, [template, availableVariables]);
 
+  // Copy the resolved text, not the template, so what is pasted is what runs
+  const [copied, setCopied] = useState(false);
+  const handleCopyPreview = useCallback(async () => {
+    if (!resolvedPreview) return;
+    try {
+      await navigator.clipboard.writeText(resolvedPreview);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("Failed to copy resolved prompt:", err);
+    }
+  }, [resolvedPreview]);
+
   const handleAttemptClose = useCallback(() => {
     if (hasUnsavedChanges) {
       setShowConfirmation(true);
@@ -125,18 +142,9 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
     onClose();
   }, [template, onSubmit, onClose]);
 
-  const handleFontSizeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setFontSize(parseInt(e.target.value, 10));
+  const handleFontSizeChange = useCallback((next: string) => {
+    setFontSize(parseInt(next, 10));
   }, []);
-
-  const handleBackdropClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (e.target === e.currentTarget) {
-        handleAttemptClose();
-      }
-    },
-    [handleAttemptClose]
-  );
 
   const handleDismissConfirmation = useCallback(() => {
     setShowConfirmation(false);
@@ -171,40 +179,41 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
     [template]
   );
 
-  if (!isOpen) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
-      onClick={handleBackdropClick}
+    <Dialog
+      open={isOpen}
+      onClose={handleAttemptClose}
+      closeOnEscape={false}
+      size="lg"
+      className="h-[85vh]"
     >
-      <div className="relative bg-neutral-800 border border-neutral-700 rounded-lg shadow-2xl w-full max-w-3xl h-[85vh] flex flex-col mx-4">
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 flex items-center gap-3">
-          <h2 className="text-xl font-semibold text-neutral-100">Edit Prompt Constructor</h2>
-          {unresolvedVars.length > 0 && (
-            <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-[11px] text-amber-400">
-              Unresolved: {unresolvedVars.map((v) => `@${v}`).join(", ")}
-            </span>
-          )}
-        </div>
+        <DialogHeader
+          closeButton={false}
+          actions={
+            unresolvedVars.length > 0 ? (
+              <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-700/50 rounded text-[11px] text-amber-400">
+                Unresolved: {unresolvedVars.map((v) => `@${v}`).join(", ")}
+              </span>
+            ) : undefined
+          }
+        >
+          <DialogTitle>Edit Prompt Constructor</DialogTitle>
+        </DialogHeader>
 
         {/* Box containing toolbar and textarea */}
-        <div className="mx-6 flex-1 flex flex-col border border-neutral-700 rounded bg-neutral-900/30 overflow-hidden mb-4">
+        <div className="mx-5 flex-1 flex flex-col border border-chrome-border rounded-well bg-well overflow-hidden">
           {/* Toolbar */}
-          <div className="min-h-[48px] bg-neutral-900 border-b border-neutral-700 flex items-center px-4 gap-3 shrink-0 flex-wrap py-2">
+          <div className="min-h-[40px] bg-canvas-bg border-b border-chrome-border flex items-center px-3 gap-3 shrink-0 flex-wrap py-2">
             {/* Font Size Control */}
-            <select
-              value={fontSize}
+            <Dropdown
+              value={String(fontSize)}
+              options={FONT_SIZE_OPTIONS.map((size) => ({ value: String(size), label: `${size}px` }))}
               onChange={handleFontSizeChange}
-              className="text-sm py-1 px-2 border border-neutral-700 rounded bg-neutral-900/50 focus:outline-none focus:ring-1 focus:ring-neutral-600 text-neutral-300"
-            >
-              {FONT_SIZE_OPTIONS.map((size) => (
-                <option key={size} value={size}>
-                  {size}px
-                </option>
-              ))}
-            </select>
+              size="dialog"
+              aria-label="Font size"
+              className="w-[88px]"
+              triggerClassName="h-[26px] w-full px-2 rounded-md border border-chrome-border bg-well text-xs text-neutral-300 text-left flex items-center justify-between gap-2 outline-none focus:ring-1 focus:ring-neutral-600 cursor-pointer"
+            />
 
             {/* Divider */}
             {availableVariables.length > 0 && (
@@ -270,11 +279,28 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
           </div>
         </div>
 
-        {/* Resolved preview */}
-        {availableVariables.length > 0 && (
+        {/* Resolved preview: shown whenever there is something to preview, so the
+            resolved text can be copied even before any variable is connected */}
+        {(availableVariables.length > 0 || template.trim().length > 0) && (
           <div className="mx-6 mb-4 border border-neutral-700 rounded bg-neutral-900/30 overflow-hidden">
-            <div className="px-4 py-2 bg-neutral-900 border-b border-neutral-700 text-[11px] text-neutral-400 uppercase tracking-wide font-semibold">
-              Resolved Preview
+            <div className="flex items-center justify-between px-4 py-2 bg-neutral-900 border-b border-neutral-700 text-[11px] text-neutral-400 uppercase tracking-wide font-semibold">
+              <span>Resolved Preview</span>
+              <button
+                type="button"
+                onClick={handleCopyPreview}
+                disabled={!resolvedPreview}
+                aria-label={copied ? "Copied" : "Copy resolved prompt"}
+                className={`flex items-center gap-1 rounded px-1.5 py-0.5 normal-case tracking-normal font-medium transition-colors ${
+                  copied ? "text-green-400" : "text-neutral-400 hover:text-white hover:bg-neutral-700/60"
+                } disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-400`}
+              >
+                {copied ? (
+                  <Check size={12} strokeWidth={2} />
+                ) : (
+                  <Copy size={12} strokeWidth={2} />
+                )}
+                {copied ? "Copied" : "Copy"}
+              </button>
             </div>
             <div className="p-4 text-sm text-neutral-300 whitespace-pre-wrap max-h-32 overflow-y-auto leading-relaxed">
               {resolvedPreview || <span className="text-neutral-500 italic">Empty template</span>}
@@ -283,62 +309,42 @@ export const PromptConstructorEditorModal: React.FC<PromptConstructorEditorModal
         )}
 
         {/* Footer with buttons */}
-        <div className="flex justify-end gap-3 px-6 pb-6">
-          <button
-            onClick={handleAttemptClose}
-            className="px-4 py-2 text-sm font-medium text-neutral-300 bg-neutral-700 hover:bg-neutral-600 rounded transition-colors focus:outline-none focus:ring-1 focus:ring-neutral-500"
-          >
+        <DialogFooter className="mt-3">
+          <DialogButton variant="ghost" onClick={handleAttemptClose}>
             Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors focus:outline-none focus:ring-1 focus:ring-blue-400"
-          >
+          </DialogButton>
+          <DialogButton variant="primary" onClick={handleSubmit}>
             Submit
-          </button>
-        </div>
+          </DialogButton>
+        </DialogFooter>
 
         {/* Confirmation overlay */}
         {showConfirmation && (
           <div
-            className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-lg"
+            className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-card"
             onClick={handleConfirmationBackdropClick}
           >
-            <div className="relative bg-neutral-800 border border-neutral-600 rounded-lg p-6 mx-4 max-w-sm shadow-xl">
+            <div className="relative bg-card border border-chrome-border rounded-card p-5 mx-4 max-w-sm shadow-dialog">
               <button
                 onClick={handleDismissConfirmation}
                 className="absolute top-3 right-3 text-neutral-400 hover:text-neutral-200 transition-colors focus:outline-none"
                 aria-label="Close"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
+                <X size={20} strokeWidth={2} />
               </button>
 
-              <p className="text-neutral-100 text-center mb-6">You have unsaved changes</p>
+              <p className="text-neutral-100 text-[13px] text-center mb-5">You have unsaved changes</p>
               <div className="flex justify-center gap-3">
-                <button
-                  onClick={onClose}
-                  className="px-4 py-2 text-sm font-medium text-neutral-300 bg-neutral-700 hover:bg-neutral-600 rounded transition-colors focus:outline-none focus:ring-1 focus:ring-neutral-500"
-                >
+                <DialogButton variant="danger" onClick={onClose}>
                   Discard
-                </button>
-                <button
-                  onClick={handleSubmit}
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-500 rounded transition-colors focus:outline-none focus:ring-1 focus:ring-blue-400"
-                >
+                </DialogButton>
+                <DialogButton variant="primary" onClick={handleSubmit}>
                   Submit
-                </button>
+                </DialogButton>
               </div>
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </Dialog>
   );
 };

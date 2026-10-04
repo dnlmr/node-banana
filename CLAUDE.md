@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run dev      # Start Next.js dev server at http://localhost:3000
 npm run build    # Build for production
-npm run start    # Start production server
-npm run lint     # Run Next.js linting
+npm run start    # Start production server (node server.js --production)
+npm run lint     # ESLint with Next.js's rules (React Compiler rules and no-explicit-any are warnings)
+npm run typecheck # Type-check the app without its tests (tsconfig.build.json)
 npm run test     # Run all tests with Vitest (watch mode)
 npm run test:run # Run all tests once (CI mode)
 ```
@@ -32,6 +33,7 @@ Node Banana is a node-based visual workflow editor for AI image generation. User
 - **@xyflow/react** (React Flow) for the node editor canvas
 - **Konva.js / react-konva** for canvas annotation drawing
 - **Zustand** for state management (single store pattern)
+- **lucide-react** for icons (20px, 1.5 stroke in chrome; hand-drawn SVG only for diagram-like glyphs such as the connector style toggle)
 
 ### Key Files
 
@@ -40,11 +42,15 @@ Node Banana is a node-based visual workflow editor for AI image generation. User
 | Central workflow state & execution logic | `src/store/workflowStore.ts` |
 | All TypeScript type definitions | `src/types/index.ts` |
 | Main canvas component & connection validation | `src/components/WorkflowCanvas.tsx` |
-| Base node component (shared by all nodes) | `src/components/nodes/BaseNode.tsx` |
+| Node shell (media card, sockets, gap row, controls card — used by every node) | `src/components/nodes/NodeShell.tsx` |
+| Node UI primitives (fields, controls card, sockets, carousel, scrub row) | `src/components/nodes/ui/` |
+| Node anatomy and tokens | `docs/node-redesign.md`, `src/app/globals.css` (`@theme`) |
 | Image generation API route | `src/app/api/generate/route.ts` |
 | LLM text generation API route | `src/app/api/llm/route.ts` |
 | Cost calculations | `src/utils/costCalculator.ts` |
 | Grid splitting utility | `src/utils/gridSplitter.ts` |
+| Asset library (always-on saving, Assets view) | `src/lib/assets/`, `src/components/assets/`, `docs/asset-library.md` |
+| Full-screen media viewer (stage, dock-scaled filmstrip, details rail; the recent-generations drop-down and the output gallery node both mount it with their own actions) | `src/components/MediaViewer.tsx`, `src/hooks/useAddMediaNode.ts` |
 
 ### State Management
 
@@ -53,15 +59,24 @@ All application state lives in `workflowStore.ts` using Zustand. Key patterns:
 - `executeWorkflow(startFromNodeId?)` runs the pipeline via topological sort
 - `getConnectedInputs(nodeId)` retrieves upstream data for a node
 - `updateNodeData(nodeId, partialData)` updates node state
-- Auto-save runs every 90 seconds when enabled
+- Autosave (`src/store/utils/autoSave.ts`) follows the edits: a saved workflow is written 3 s after the last change, at the latest 30 s after the first, never mid-run or while media is still being written, and at once when the window loses focus; a failure is retried once, then backed off with one notice. "Save automatically" in Settings → Project turns it off (`node-banana-autosave`)
 
 ### Execution Flow
 
 1. User clicks Run or presses `Cmd/Ctrl+Enter`
-2. `executeWorkflow()` performs topological sort on node graph
-3. Nodes execute in dependency order, calling APIs as needed
-4. `getConnectedInputs()` provides upstream images/text to each node
-5. Locked groups are skipped; pause edges halt execution
+2. `runBatch(scope)` runs it `runCount` times (the Run menu's "Runs" stepper, saved with the workflow, 1–50), one run after another
+3. `executeWorkflow()` performs topological sort on node graph
+4. Nodes execute in dependency order, calling APIs as needed
+5. `getConnectedInputs()` provides upstream images/text to each node
+6. Locked groups are skipped; pause edges halt execution
+
+**Batch runs** (`src/store/utils/runBatch.ts`): every Run entry point (the
+button and its menu, ⌘↵, ⌥↵, the multi-select toolbar, a group's "Run group")
+goes through `runBatch`. A batch stops early on a failed run, a pause edge or
+a replaced canvas. The button's Stop is `requestStop`: mid-batch the first
+press lets the current run finish, the second stops now (`stopWorkflow`).
+`batch` (`id`, `index`, `count`) rides on each run's outputs: carousel
+entries, recent generations and asset records.
 
 ## AI Models
 
@@ -69,9 +84,27 @@ Image generation models (these exist and are recently released):
 - `gemini-2.5-flash-image` → internal name: `nano-banana`
 - `gemini-3-pro-image-preview` → internal name: `nano-banana-pro`
 
-LLM models:
-- Google: `gemini-2.5-flash`, `gemini-3-flash-preview`, `gemini-3-pro-preview`
-- OpenAI: `gpt-4.1-mini`, `gpt-4.1-nano`
+LLM models are defined once in `src/lib/llm/catalog.ts`: the current list per provider, legacy ids saved workflows may carry, their replacements, and the defaults. Add or retire a model there; every dropdown, `/api/llm` and the assistant read it.
+
+## Model catalog
+
+`GET /api/models` lists every provider with a key. Gemini, Kie and OpenAI
+are static catalogs in `src/lib/providers/registry.ts`; Comfy Router offers
+its bound models that the Router's own list says it serves (see "Adding
+Comfy Router Models"); Replicate, fal.ai and WaveSpeed come from the model catalog
+(`src/lib/providers/catalog.ts`): each list is fetched in parallel under its
+own deadline, kept under `~/.node-banana/catalog/<provider>.json`
+(`NODE_BANANA_CATALOG_DIR` moves it; tests must set it), served straight away,
+and refreshed behind the request once older than six hours. A refresh that
+fails keeps the previous list and reports the error in that provider's entry
+(`fetchedAt`, `stale`, `refreshing`, `error`), which the browse dialog shows
+as a notice. Replicate's list is built from its curated collections
+(`REPLICATE_COLLECTIONS`, one capability each, merged by model, ranked by
+runs), not from paging its newest uploads. `search` filters the stored lists;
+`deep=true` also asks Replicate's and fal.ai's own search, which the dialog
+offers as an explicit "Search Replicate and fal.ai" and the agent's model
+search always uses. The dialog fetches the whole list once and filters,
+searches and tabs it locally, polling while a provider is still refreshing.
 
 ## Node Types
 
@@ -124,7 +157,8 @@ Returns `{ images: string[], text: string | null }`.
 
 ## Keyboard Shortcuts
 
-- `Cmd/Ctrl + Enter` - Run workflow
+- `Cmd/Ctrl + Enter` - Run workflow (as many times as the Run menu's Runs count)
+- `Cmd/Ctrl + S` - Save workflow (works inside a node's text field; the first save asks for a name and location). The desktop app's File › Save is the same request (`src/store/saveRequestStore.ts`, answered by `FloatingMenu`)
 - `Cmd/Ctrl + C/V` - Copy/paste nodes
 - `Shift + P` - Add prompt node at center
 - `Shift + I` - Add image input node
@@ -134,9 +168,12 @@ Returns `{ images: string[], text: string | null }`.
 - `Shift + A` - Add annotation node
 - `Shift + T` - Add audio (generateAudio) node
 - `Shift + C` - Add ComfyUI app node
+- `Shift + D` - Add 3D (generate3d) node
+- `Shift + O` - Add output node
 - `H` - Stack selected nodes horizontally
 - `V` - Stack selected nodes vertically
 - `G` - Arrange selected nodes in grid
+- `A` - Show or hide the Assets view (bare A; Shift+letters add nodes). In Assets: arrows, Enter, Space, `Cmd/Ctrl + A`, Delete (Trash), `Cmd/Ctrl + Z` (undo the last asset action), `F` (fullscreen detail), Esc
 - `?` - Show keyboard shortcuts
 
 ## Adding New Node Types
@@ -148,7 +185,7 @@ Returns `{ images: string[], text: string | null }`.
 5. Create the component in `src/components/nodes/`
 6. Export from `src/components/nodes/index.ts`
 7. Register in `nodeTypes` in `WorkflowCanvas.tsx`
-8. Add minimap color in `WorkflowCanvas.tsx`
+8. Add minimap color to `getMiniMapNodeColor()` in `src/components/CanvasMinimap.tsx`
 9. Update `getConnectedInputs()` if the node produces consumable output
 10. Add execution logic in `executeWorkflow()` if the node requires processing
 11. Update `ConnectionDropMenu.tsx` to include the node in source/target lists
@@ -205,7 +242,7 @@ If the model uses different endpoints than `/api/v1/jobs/createTask` and `/api/v
 
 ## Adding Comfy Router Models
 
-Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~240 partner models behind one Comfy key and forwards each partner's native request and response. Provider id is `comfy`, shown as "ComfyUI"; the key falls back to the Comfy Cloud key from the ComfyUI settings.
+Comfy Router (`https://api.comfy.org/v2/models/{provider}/{model}`, header `X-API-Key`) fronts ~240 partner models behind one Comfy key and forwards each partner's native request and response. Provider id is `comfy`, shown as "ComfyUI". Its key on the Providers page is the one Comfy key: Comfy Cloud runs and partner nodes use it too (`comfyAccountKey()` in `src/lib/comfy/settings.ts`; a Cloud key an older build stored on the ComfyUI tab is moved there on start by `migrateLegacyComfyCloudKey`).
 
 Discovery and settings are live; wire formats are data:
 
@@ -215,7 +252,7 @@ Discovery and settings are live; wire formats are data:
 - **New model of a known format:** add it to that family's `models` (id, name, description, capabilities, any per-model overrides). **New format:** add a family.
 - **Checks:** `npm run comfy:router-sync` downloads every schema into `.scratch/comfy-router-schemas` and lists Router models that are neither bound nor excluded. Then `npx vitest run src/lib/providers/comfyRouter/__tests__/routerSchemas.test.ts` validates the smallest and fullest request of every bound model against its schema (Ajv) and checks each result path exists in the response schema. `src/app/api/generate/providers/__tests__/comfy.test.ts` pins bodies and result readings for the main formats.
 - **Transport:** always the queue (`POST …/requests` → poll `…/requests/{id}/status` respecting `Retry-After` → `GET …/requests/{id}`), with an `Idempotency-Key` per submit — synchronous partners (OpenAI, Qwen) work through it too. The generate route returns the polling envelope with `pollProvider: "comfy"` and `/api/generate/poll` finishes the run. Binary answers (ElevenLabs) become audio; 3D models return as their URL.
-- **Masks:** partners disagree. OpenAI edits where the mask is transparent; FLUX Fill and Bria edit where it is white.
+- **Masks:** partners disagree. OpenAI edits where the mask is transparent; FLUX Fill and Bria edit where it is white; Ideogram 4.5 edits where it is black.
 
 ## ComfyUI Integration
 
@@ -231,7 +268,7 @@ forwarded per request as `X-Comfy-*` headers (so no server config is needed):
 
 | Mode | Transport | Notes |
 |------|-----------|-------|
-| `cloud` (default) | `@comfyorg/sdk` (Comfy API v2) | Needs a `comfyui-…` key from platform.comfy.org |
+| `cloud` (default) | `@comfyorg/sdk` (Comfy API v2) | Uses the Comfy key from Settings → Providers (`comfyui-…`, from platform.comfy.org) |
 | `local` | legacy `/api/prompt` | A stock ComfyUI; no sidecar needed |
 | `remote` | legacy `/api/prompt` | Same, elsewhere on the network |
 
@@ -321,6 +358,142 @@ is a real published Blueprint that once broke it in a different way.
 Point the live tier at a local ComfyUI with
 `node scripts/comfy-smoke.mjs run --mode local --url http://127.0.0.1:8188`.
 
+## Agent
+
+The agent is a chat window opened from the labelled pill in the canvas's
+top-right corner, beside the recent-generations button; the window takes the
+pill's place (the pill is hidden while it is open) and runs down to the
+navigator. The recent-generations drop-down and the
+notification stack hang from the window's right edge while the agent window
+is closed, and move left of it while it is open (`anchorRight` on
+`GlobalImageHistory`, published as `--nb-history-right`). The pill shows the mark of the harness that
+will answer (both marks until the agent has been opened once), says "Working…"
+while a turn runs, and carries an amber dot when the harness needs sign-in. It
+creates workflows, edits the canvas and changes node settings.
+Every turn runs on the user's own **Claude Code** or **Codex (ChatGPT)** login
+through the vendor's official CLI, never on API credits:
+
+- Both CLIs ship as pinned npm packages (`@anthropic-ai/claude-agent-sdk`,
+  `@openai/codex`, in `serverExternalPackages` in `next.config.shared.cjs`).
+  `NB_CLAUDE_BIN` / `NB_CODEX_BIN` point at another binary.
+- The child environment is stripped of API keys. Before and during a turn the
+  harness checks that the login is a subscription and that the plan has room,
+  and stops rather than use extra usage or credits.
+- Sign-in only starts the vendor's own flow (`claude auth login`, Codex's
+  app-server login). Node Banana never reads or relays tokens, and never
+  relays Claude's manual-code URL.
+- The agent can only call our tools: Claude has every built-in tool off,
+  Codex runs with shell/patch disabled in a read-only sandbox.
+
+Flow: the panel sends a media-free canvas snapshot with each message →
+`/api/agent/chat` runs the turn on the chosen harness → tools edit a
+server-side draft and emit resolved graph ops → the browser applies them with
+`applyAgentGraphOps` (one undo step per tool call). Edits from a turn are
+dropped if the canvas is replaced mid-turn (`canvasGeneration`: load, clear,
+tab switch).
+
+| Purpose | Location |
+|---------|----------|
+| Shared contracts | `src/lib/agent/types.ts` |
+| Node catalog, handle rules, draft, layout, snapshot | `src/lib/agent/graph/` |
+| Tools and the system prompt | `src/lib/agent/tools/`, `src/lib/agent/prompt.ts` |
+| Prompting guides by modality, model notes, research turn | `src/lib/agent/prompting/` |
+| Harnesses (Claude Agent SDK, codex app-server), env, billing checks | `src/lib/agent/server/` |
+| UI message stream bridge | `src/lib/agent/server/chatStream.ts` |
+| Panel, button, sign-in card | `src/components/agent/`, `src/lib/agent/client/` |
+| Chat UI kit (Vercel AI Elements + radix-nova primitives, scoped theme) | `src/components/ai-elements/`, `src/components/agent/ui/`, `src/app/agent-theme.css` |
+
+The agent routes only answer requests the server vouches for: `server.js`
+stamps sockets that really are loopback and `electron/server.cjs` stamps every
+request it has authorised, with a per-process secret `sameOrigin.ts` requires.
+Run the app with `npm run dev` / `npm start` / Electron (plain `next dev` /
+`next start` refuse agent requests). `NB_AGENT_ALLOWED_HOSTS` opts other hosts
+in. `NB_CODEX_EFFORT` overrides Codex's reasoning effort (default `medium`).
+When the canvas rules in `WorkflowCanvas.tsx` or a node's sockets change,
+update `src/lib/agent/graph/catalog.ts` / `handles.ts` too (the server's copy).
+
+Prompts: the agent calls `get_prompt_guide` before writing a prompt. It
+renders the guide for the node's modality and task (image, video, audio, 3D,
+LLM instruction), notes read from the model's own schema and description,
+and any prompting tips saved for that model. A new prompt-taking node type
+needs an entry in `PROMPT_NODE_MODALITY`. Tips are looked up only when the
+user asks ("Look up prompting tips" chip, with one generator selected): a
+research turn with the harness's own web search on, no canvas tools, no
+chat history and no session part, whose one tool saves the tips under
+`~/.node-banana/prompt-notes/<provider>/<model>.json`
+(`NODE_BANANA_PROMPT_NOTES_DIR` moves it; tests must set it or pass a
+store).
+
+## Desktop releases and updates
+
+Pushing a tag `v<version>` runs `.github/workflows/release.yml`: tests, a
+draft release, then a signed and notarised Mac build on a macOS runner and an
+unsigned Windows build on a Windows runner, both uploaded into the draft
+(secrets: `MAC_CERTIFICATE_P12_BASE64`, `MAC_CERTIFICATE_PASSWORD`,
+`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`). A manual run
+builds without publishing unless asked.
+`npm run electron:package` is the same build by hand
+(`scripts/package-electron.cjs`); `--sign` signs and notarises the Mac build
+(Developer ID from the keychain, notarisation from `APPLE_API_KEY`,
+`APPLE_API_KEY_ID`, `APPLE_API_ISSUER` or the Apple ID trio; entitlements in
+`electron/entitlements.mac.plist`), `--publish` uploads the artifacts and the
+updater manifests to a **draft** GitHub release `v<version>` (`GH_TOKEN`).
+Windows builds are unsigned. Artifact names carry no spaces
+(`Node-Banana-<version>-<arch>.<ext>`): GitHub renames assets with spaces and
+the updater would miss them.
+
+The packaged app updates itself with electron-updater, loaded from the bundled
+runtime's `node_modules` (the app package has no dependencies of its own) and
+driven by `electron/lib/updates.cjs`: a check 15 s after launch and every six
+hours, download only on request, install on **Restart to update** or at the
+next quit, a skipped version remembered in `updates-v1.json` under user data.
+The renderer sees it through `window.nodeBananaDesktop.updates`
+(`src/types/desktop.d.ts`) and shows `DesktopUpdateNotice` in the notification
+stack. Squirrel.Mac installs signed builds only, so a Mac release for existing
+users must be built with `--sign`; an install failure falls back to a link to
+the release. Test profiles (`NODE_BANANA_ELECTRON_USER_DATA`) and `electron:dev`
+never check by themselves; `NODE_BANANA_ELECTRON_PREVIEW_UPDATES=1` (or `fail`)
+gives a dev run a pretend updater so the notice can be seen. The release steps
+are in `docs/desktop-preview.md`.
+
+## Asset Library
+
+Every generated and edited asset is saved to disk as it is made, with or
+without a project, and indexed for the Assets view (bare `A`). The library
+root is the "Node Banana folder": it defaults to `~/Documents/Node Banana`
+(Windows: `Documents\Node Banana`, or `%USERPROFILE%\Node Banana` when
+Documents syncs to OneDrive; Linux: `XDG_DOCUMENTS_DIR`) and holds projects
+saved by name (`<root>/<Project>/`), `Generations/` for unsaved workflows
+and the hidden `.nodebanana/` metadata. Project workflows still write into
+`<project>/generations/` and are indexed in place. See
+`docs/asset-library.md` for the layout, recording, snapshots, deletion and
+projects.
+
+- Known projects (the root's own, the project registry
+  `~/.node-banana/projects.json`, workflow rows) are listed by
+  `GET /api/assets/projects`. Each page load reports its localStorage's
+  project folders once (`reportProjects`), which may adopt the old workflows
+  folder as the root; known projects' generations are auto-indexed by a quiet
+  import job; the `projects` job moves folders into the root and rewrites
+  every path that pointed at them.
+
+- Executors record through `ctx.recordAsset` (present only while the library
+  is available); a new media-producing node should call it from its success
+  path with the model that actually ran and the resolved prompt, and put the
+  returned `assetId` into its carousel entry. Without it, project workflows
+  fall back to `/api/save-generation`.
+- `/api/assets/*` answer only Node Banana's own page on this computer
+  (`src/lib/assets/server/guard.ts`, same stamp as the agent routes);
+  `NB_LIBRARY_ALLOWED_HOSTS` opts other hosts in. The older routes that
+  read, write, list or reveal files by path (`/api/workflow`,
+  `/api/workflow-images`, `/api/list-workflows`, `/api/save-generation`,
+  `/api/load-generation`, `/api/list-generations`, `/api/open-file`,
+  `/api/open-directory`, `/api/browse-directory`) sit behind the same guard,
+  so a new route that takes a path should too.
+- `NODE_BANANA_ASSET_LIBRARY` pins the library root (tests must set it, or use
+  the server test hooks; scripted Electron runs get one under their temp
+  profile automatically).
+
 ## API Routes
 
 All routes in `src/app/api/`:
@@ -342,15 +515,41 @@ All routes in `src/app/api/`:
 | `/api/comfy/run` | 5 min | Submit a Comfy app run |
 | `/api/comfy/poll` | 5 min | Poll a run and collect its outputs |
 | `/api/comfy/preview` | 5 min | Stream a running job's preview images (NDJSON) |
+| `/api/agent/chat` | 10 min | Run one agent turn (AI SDK UI message stream) |
+| `/api/agent/status` | 1 min | Each harness: installed, signed in, subscription billing, models |
+| `/api/agent/sign-in` | 1 min | Start a harness's own sign-in flow |
+| `/api/agent/prompt-notes` | default | Read (GET) or forget (DELETE) the prompting tips saved for a model |
+| `/api/assets` | 10 min | List assets (GET, keyset pages) / start recording one (POST → upload ticket, or a server download for URLs) |
+| `/api/assets/uploads/[id]` | 10 min | Stream an asset's bytes (PUT) |
+| `/api/assets/[id]` (`/file`, `/poster`, `/workflow`) | default | Read/patch an asset, stream its file (Range), store a video poster, get its run snapshot |
+| `/api/assets/thumb/[sha256]` | default | 320/640 px webp thumbnails (204 when none) |
+| `/api/assets/facets`, `/bulk`, `/exists`, `/reveal` | default | Filter counts, bulk tag/favourite/trash/restore/delete, carousel existence, Show in Finder/Explorer |
+| `/api/assets/media`, `/runs/[id]`, `/workflows/[id]` | default | Snapshot media, run snapshots, workflow classification |
+| `/api/assets/library`, `/jobs/[id]`, `/import`, `/import/scan`, `/cleanup`, `/export` | default | Library status/location, background jobs (move, import projects, clean up, export), finding the projects under a folder to import |
+| `/api/assets/projects` (`/report`, `/bring-in`, `/offer`, `/folder-name`) | default | Known projects and the "live elsewhere" offer, the page load's project report, bringing projects in (use, move, leave), a new project's folder name |
 
 ## localStorage Keys
 
 - `node-banana-workflow-configs` - Project metadata (paths)
-- `node-banana-provider-settings` - Provider API keys and enabled flags (the `comfy` entry falls back to `node-banana-comfy-settings`' cloud key)
+- `node-banana-autosave` - "Save automatically" (absent or `on` means on)
+- `node-banana-provider-settings` - Provider API keys and enabled flags (the `comfy` entry is the one Comfy key; `node-banana-comfy-settings` no longer stores one)
 - `node-banana-workflow-costs` - Cost tracking per workflow
 - `node-banana-nanoBanana-defaults` - Sticky generation settings
 - `node-banana-comfy-settings` - ComfyUI backend (cloud/local/remote), keys, job timeout
+- `node-banana-edge-appearance` - User default for connection line style and appearance (thickness, faded opacity, gradient, loading pulse)
 - `node-banana-comfy-apps` - Saved Comfy nodes (workflow + contract + settings)
+- `node-banana-agent-settings` - Agent harness, and model and thinking-effort choice per harness
+- `node-banana-agent-conversations` - Agent chat history (messages, the agent's summary, workflow name; newest 50, size-capped)
+- `node-banana-assets-tile-size` - Assets view tile size (S/M/L)
+- `node-banana-assets-rail-open` - Which filter groups in the Assets rail are open
+- `node-banana-assets-first-run-shown` - The one-time "Saved to …" hint after the first recorded asset has been shown
+- `node-banana-models-cache` - The browse dialog's model list, one entry per set of configured providers
+- `node-banana-models-notices-dismissed` - Provider failure notices the user closed in the browse dialog (by provider, the error text); cleared by Refresh catalog
+
+The asset library's location and index live on disk, not in localStorage
+(the desktop and web origins do not share it): `~/.node-banana/library.json`
+and `<library>/.nodebanana/`, and the project registry in
+`~/.node-banana/projects.json`.
 
 ## Git Workflow
 

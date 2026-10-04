@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
+import { decodeBase64, parseDataUrl } from "@/utils/dataUrl";
 import { logger } from "@/utils/logger";
+import { sniffExtension } from "@/utils/mediaSniff";
 
 export const maxDuration = 300; // 5 minute timeout for large media operations
 
@@ -53,6 +56,30 @@ function getExtensionFromMime(mimeType: string): string {
   return "bin";
 }
 
+/**
+ * The extensions a saved generation is loaded back from, per kind: images by
+ * /api/workflow-images and /api/load-generation, video and audio by
+ * /api/load-generation, which tells the two apart by extension alone. A
+ * sniffed extension outside its kind's set (webm audio, which would come back
+ * as video; AVIF, which neither loader looks for) would save a file its node
+ * can't load again, so the declared type names those, as it always has.
+ */
+const LOADABLE_EXTENSIONS: Record<"image" | "video" | "audio", ReadonlySet<string>> = {
+  image: new Set(["png", "jpg", "gif", "webp", "svg"]),
+  video: new Set(["mp4", "webm", "mov"]),
+  audio: new Set(["mp3", "wav", "ogg", "flac", "aac", "m4a"]),
+};
+
+/** The bytes and declared media type of a data: URL, or of raw base64 (no type); null when it is neither. */
+function decodeInlineMedia(content: string): { bytes: Uint8Array; mime: string } | null {
+  if (content.slice(0, 5).toLowerCase() === "data:") {
+    const parsed = parseDataUrl(content);
+    return parsed ? { bytes: parsed.bytes, mime: parsed.mime } : null;
+  }
+  const bytes = decodeBase64(content);
+  return bytes ? { bytes, mime: "" } : null;
+}
+
 // Helper to detect if a string is an HTTP URL
 function isHttpUrl(str: string): boolean {
   return str.startsWith("http://") || str.startsWith("https://");
@@ -99,8 +126,11 @@ async function findExistingFileByHash(
   }
 }
 
-// POST: Save a generated image or video to the generations folder (or outputs folder)
+// POST: Save a generated image or video to the generations folder (or outputs folder).
+// Only Node Banana's own page may ask (see guard.ts).
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let directoryPath: string | undefined;
   try {
     const body = await request.json();
@@ -239,19 +269,29 @@ export async function POST(request: NextRequest) {
         throw fetchError;
       }
     } else {
-      // Handle base64 data URL
-      const dataUrlMatch = content.match(/^data:([\w/+-]+);base64,/);
-      if (dataUrlMatch) {
-        const mimeType = dataUrlMatch[1];
-        extension = getExtensionFromMime(mimeType);
-        const base64Data = content.replace(/^data:[\w/+-]+;base64,/, "");
-        buffer = Buffer.from(base64Data, "base64");
-      } else {
-        // Fallback: assume it's raw base64 without data URL prefix
-        extension = isAudio ? "mp3" : isVideo ? "mp4" : "png";
-        buffer = Buffer.from(content, "base64");
+      // A data: URL (any media type, or none at all), else raw base64. Only the
+      // payload is decoded: decoding the whole string would write noise.
+      const decoded = decodeInlineMedia(content);
+      if (!decoded) {
+        logger.warn('file.save', 'Generation save failed: content is not a data URL or base64', {
+          directoryPath,
+          prefix: content.slice(0, 40),
+        });
+        return NextResponse.json(
+          { success: false, error: "The content is not a readable data URL or base64" },
+          { status: 400 }
+        );
       }
+      buffer = Buffer.from(decoded.bytes.buffer, decoded.bytes.byteOffset, decoded.bytes.byteLength);
+      // No declared type (raw base64, `data:;base64,`) resolves by kind below.
+      extension = decoded.mime ? getExtensionFromMime(decoded.mime) : "bin";
     }
+
+    // The bytes decide the extension when they prove a format the node can load back as the same
+    // kind; otherwise the declared type (or the kind's default) names it, as before.
+    const kind = isModel ? "3d" : isAudio ? "audio" : isVideo ? "video" : "image";
+    const sniffed = sniffExtension(buffer, kind);
+    if (sniffed && (kind === "3d" || LOADABLE_EXTENSIONS[kind].has(sniffed))) extension = sniffed;
 
     // Safety net: if extension resolved to "bin" but we know the media type, use correct extension
     if (extension === "bin") {

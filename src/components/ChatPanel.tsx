@@ -1,5 +1,6 @@
 "use client";
 
+import { CircleAlert, Send, Trash2, X } from "lucide-react";
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
@@ -142,7 +143,7 @@ export function ChatPanel({ isOpen, onClose, onBuildWorkflow, isBuildingWorkflow
   if (!isOpen) return null;
 
   return (
-    <div className="fixed top-16 bottom-[220px] right-5 w-[380px] bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl flex flex-col overflow-hidden z-40">
+    <div className="fixed top-14 bottom-[220px] right-5 w-[380px] bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl flex flex-col overflow-hidden z-40">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-700">
         <h3 className="text-sm font-medium text-neutral-200">Workflow Assistant <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wider bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 rounded px-1.5 py-0.5">Beta</span></h3>
@@ -154,9 +155,7 @@ export function ChatPanel({ isOpen, onClose, onBuildWorkflow, isBuildingWorkflow
               aria-label="Clear chat"
               title="Clear chat history"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
+              <Trash2 size={16} strokeWidth={2} />
             </button>
           )}
           <button
@@ -164,9 +163,7 @@ export function ChatPanel({ isOpen, onClose, onBuildWorkflow, isBuildingWorkflow
             className="text-neutral-400 hover:text-neutral-200 transition-colors p-1"
             aria-label="Close chat"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={20} strokeWidth={2} />
           </button>
         </div>
       </div>
@@ -181,9 +178,7 @@ export function ChatPanel({ isOpen, onClose, onBuildWorkflow, isBuildingWorkflow
         {errorMessage && (
           <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 text-sm text-red-200">
             <div className="flex items-start gap-2">
-              <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+              <CircleAlert size={20} strokeWidth={2} className="flex-shrink-0 mt-0.5" />
               <div className="flex-1">
                 <p>{errorMessage}</p>
                 <button
@@ -311,9 +306,7 @@ export function ChatPanel({ isOpen, onClose, onBuildWorkflow, isBuildingWorkflow
                 className="text-neutral-400 hover:text-neutral-200 transition-colors"
                 aria-label="Dismiss"
               >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X size={14} strokeWidth={2} />
               </button>
             </div>
           </div>
@@ -342,9 +335,7 @@ export function ChatPanel({ isOpen, onClose, onBuildWorkflow, isBuildingWorkflow
               disabled={isLoading || !input.trim()}
               className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
+              <Send size={16} strokeWidth={2} />
             </button>
           </div>
         </form>

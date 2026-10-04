@@ -1,43 +1,48 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { generateWorkflowId, useWorkflowStore } from "@/store/workflowStore";
-import { ProviderType, ProviderSettings, NodeDefaultsConfig, LLMProvider, LLMModelType } from "@/types";
+import { ProviderType, ProviderSettings, NodeDefaultsConfig, LLMProvider, LLMModelType, EdgeAppearance, EdgeStyle } from "@/types";
 import { CanvasNavigationSettings, PanMode, ZoomMode, SelectionMode } from "@/types/canvas";
 import { EnvStatusResponse } from "@/app/api/env-status/route";
-import { loadNodeDefaults, saveNodeDefaults, getLastProjectBaseDir, setLastProjectBaseDir } from "@/store/utils/localStorage";
+import { loadNodeDefaults, saveNodeDefaults, getLastProjectBaseDir, setLastProjectBaseDir, saveEdgeDefaults, getProviderSettings } from "@/store/utils/localStorage";
 import { clearFetchCache } from "@/utils/deduplicatedFetch";
 import { ProviderModel } from "@/lib/providers/types";
 import { ModelSearchDialog } from "@/components/modals/ModelSearchDialog";
 import { ComfySettingsTab, useComfySettingsDraft } from "@/components/settings/ComfySettingsTab";
-import { saveComfySettings } from "@/lib/comfy/settings";
+import { saveComfySettings, getComfySettings } from "@/lib/comfy/settings";
+import { EnvironmentImport } from '@/components/settings/EnvironmentImport';
+import { isDesktop, comfySecretFields } from '@/lib/desktop/credentials';
+import { ConnectionSettings } from "@/components/settings/ConnectionSettings";
+import { LibrarySettingsTab } from "@/components/settings/LibrarySettingsTab";
+import {
+  Dialog,
+  DialogButton,
+  DialogEyebrow,
+  DialogPage,
+  DialogPageBody,
+  DialogPageFooter,
+  DialogPageHead,
+  DialogPageTitle,
+  DialogPane,
+  DialogPaneFoot,
+  DialogRailItem,
+  DialogRow,
+  DialogRowTitle,
+  DialogStatus,
+  DialogTextButton,
+  splitPanelClass,
+} from "@/components/ui/Dialog";
+import { Field, Segmented, Select, Slider, Switch, TextInput, helpClass, labelClass, type SegmentedOption } from "@/components/ui/Controls";
+import { getRecorderLibraryStatus } from "@/lib/assets/client/recorder";
+import { fetchProjectFolderName } from "@/lib/assets/client/api";
+import type { ProjectFolderName } from "@/lib/assets/types";
+import { shortenHomePath } from "@/components/assets/projectsFormat";
+import { APP_VERSION } from "@/lib/appVersion";
+import { cn } from "@/components/nodes/ui/cn";
 import { ComfyMark } from "@/components/icons/ComfyMark";
-import { useInlineParameters } from "@/hooks/useInlineParameters";
 
-// LLM provider and model options (mirrored from LLMGenerateNode)
-const LLM_PROVIDERS: { value: LLMProvider; label: string }[] = [
-  { value: "google", label: "Google" },
-  { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic" },
-];
-
-const LLM_MODELS: Record<LLMProvider, { value: LLMModelType; label: string }[]> = {
-  google: [
-    { value: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
-    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-    { value: "gemini-3-pro-preview", label: "Gemini 3.0 Pro" },
-    { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-  ],
-  openai: [
-    { value: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
-    { value: "gpt-4.1-nano", label: "GPT-4.1 Nano" },
-  ],
-  anthropic: [
-    { value: "claude-sonnet-4.5", label: "Claude Sonnet 4.5" },
-    { value: "claude-haiku-4.5", label: "Claude Haiku 4.5" },
-    { value: "claude-opus-4.6", label: "Claude Opus 4.6" },
-  ],
-};
+import { DEFAULT_LLM_MODEL, LLM_PROVIDER_OPTIONS, defaultLLMModel, llmModelLabel, llmModelOptions } from "@/lib/llm/catalog";
 
 // Provider icons
 const GeminiIcon = () => (
@@ -86,11 +91,63 @@ const getProviderIcon = (provider: ProviderType) => {
   }
 };
 
+export type SettingsTab = "project" | "library" | "providers" | "comfy" | "nodeDefaults" | "canvas" | "noodles";
+
+/** The rail's entries, with each page's heading and one-line subtitle. */
+const SETTINGS_PAGES: { id: SettingsTab; label: string; title: string; description: string }[] = [
+  { id: "project", label: "Project", title: "Project", description: "Name, location and how the file is written." },
+  { id: "library", label: "Storage", title: "Storage", description: "Where your projects and generations are saved." },
+  { id: "providers", label: "Providers", title: "Providers", description: "API keys for the model providers this project can call." },
+  { id: "comfy", label: "ComfyUI", title: "ComfyUI", description: "Where Comfy app nodes run." },
+  { id: "nodeDefaults", label: "Node defaults", title: "Node defaults", description: "Applied when a node is added from the bar or a shortcut." },
+  { id: "canvas", label: "Canvas", title: "Canvas", description: "How you navigate and select on the canvas." },
+  { id: "noodles", label: "Noodles", title: "Noodles", description: "How the connections between nodes are drawn." },
+];
+
+/** One ruled row per provider on the Providers page, in this order. */
+const PROVIDER_ROWS: { id: ProviderType; name: string; placeholder: string; description?: string }[] = [
+  { id: "gemini", name: "Google Gemini", placeholder: "AIza..." },
+  { id: "openai", name: "OpenAI", placeholder: "sk-..." },
+  // The one Comfy key: Comfy Cloud runs, Comfy-hosted models and partner nodes.
+  { id: "comfy", name: "ComfyUI", placeholder: "comfyui-..." },
+  { id: "anthropic", name: "Anthropic", placeholder: "sk-ant-..." },
+  { id: "replicate", name: "Replicate", placeholder: "r8_..." },
+  { id: "fal", name: "fal.ai", placeholder: "..." },
+  { id: "kie", name: "Kie.ai", placeholder: "..." },
+  { id: "wavespeed", name: "WaveSpeed", placeholder: "..." },
+];
+
+const PAN_MODES: SegmentedOption<PanMode>[] = [
+  { value: "space", label: "Space + Drag" },
+  { value: "middleMouse", label: "Middle Mouse" },
+  { value: "always", label: "Always On" },
+];
+
+const ZOOM_MODES: SegmentedOption<ZoomMode>[] = [
+  { value: "altScroll", label: "Alt + Scroll" },
+  { value: "ctrlScroll", label: "Ctrl + Scroll" },
+  { value: "scroll", label: "Scroll" },
+];
+
+const SELECTION_MODES: SegmentedOption<SelectionMode>[] = [
+  { value: "click", label: "Click" },
+  { value: "altDrag", label: "Alt + Drag" },
+  { value: "shiftDrag", label: "Shift + Drag" },
+];
+
 interface ProjectSetupModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (id: string, name: string, directoryPath: string) => void;
   mode: "new" | "settings";
+  /** Page to open on in settings mode; the menu's API keys entry passes "providers". */
+  initialTab?: SettingsTab;
+  /**
+   * Bumped by the host when something outside the dialog asks for a page
+   * (the first-run hint, the Assets view): an open dialog moves to
+   * `initialTab` again instead of staying where the user left it.
+   */
+  pageRequest?: number;
 }
 
 export function ProjectSetupModal({
@@ -98,6 +155,8 @@ export function ProjectSetupModal({
   onClose,
   onSave,
   mode,
+  initialTab,
+  pageRequest,
 }: ProjectSetupModalProps) {
   const sanitizeProjectFolderName = (projectName: string): string => {
     return projectName
@@ -133,7 +192,10 @@ export function ProjectSetupModal({
     return joinPathForPlatform(trimmedBase, sanitizedFolder);
   };
 
+  const autoSaveEnabled = useWorkflowStore((state) => state.autoSaveEnabled);
+  const setAutoSaveEnabled = useWorkflowStore((state) => state.setAutoSaveEnabled);
   const {
+    workflowId,
     workflowName,
     saveDirectoryPath,
     useExternalImageStorage,
@@ -145,13 +207,15 @@ export function ProjectSetupModal({
     setMaxConcurrentCalls,
     canvasNavigationSettings,
     updateCanvasNavigationSettings,
+    edgeStyle,
+    edgeAppearance,
+    setEdgeStyle,
+    setEdgeAppearance,
   } = useWorkflowStore();
 
-  // Inline parameters hook
-  const { inlineParametersEnabled, setInlineParameters } = useInlineParameters();
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<"project" | "providers" | "comfy" | "nodeDefaults" | "canvas">("project");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("project");
 
   // Project tab state
   const [name, setName] = useState("");
@@ -160,9 +224,17 @@ export function ProjectSetupModal({
   const [isValidating, setIsValidating] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "Choose another location…": the project goes in a directory of the user's
+  // choosing instead of a folder of its own inside the Node Banana folder
+  const [customLocation, setCustomLocation] = useState(true);
+  // The folder the name gets inside the Node Banana folder, as the server numbers it
+  const [folderTarget, setFolderTarget] = useState<ProjectFolderName | null>(null);
+  // The chosen folder already holds a different workflow: replace it, or save beside it
+  const [folderConflict, setFolderConflict] = useState<{ path: string; existingName: string | null } | null>(null);
 
   // Provider tab state
   const [localProviders, setLocalProviders] = useState<ProviderSettings>(providerSettings);
+  const editedProviderKeys = useRef(new Set<ProviderType>());
   const [showApiKey, setShowApiKey] = useState<Record<ProviderType, boolean>>({
     gemini: false,
     openai: false,
@@ -193,15 +265,22 @@ export function ProjectSetupModal({
   // Canvas tab state
   const [localCanvasSettings, setLocalCanvasSettings] = useState<CanvasNavigationSettings>(canvasNavigationSettings);
 
+  // Connection appearance draft (Canvas tab); applied on Save
+  const [localEdgeStyle, setLocalEdgeStyle] = useState<EdgeStyle>(edgeStyle);
+  const [localEdgeAppearance, setLocalEdgeAppearance] = useState<EdgeAppearance>(edgeAppearance);
+  const [edgeDefaultSaved, setEdgeDefaultSaved] = useState(false);
+
   // ComfyUI tab state
-  const [localComfySettings, setLocalComfySettings] = useComfySettingsDraft(isOpen);
+  const [localComfySettings, setLocalComfySettings, applyImportedComfySettings] = useComfySettingsDraft(isOpen);
 
   // Pre-fill when opening in settings mode
   useEffect(() => {
     if (isOpen) {
-      // Reset to project tab when opening
+      // A new project starts on its page; settings open where the caller asks.
       if (mode === "new") {
         setActiveTab("project");
+      } else if (initialTab) {
+        setActiveTab(initialTab);
       }
 
       if (mode === "settings") {
@@ -213,8 +292,14 @@ export function ProjectSetupModal({
         setDirectoryPath(getLastProjectBaseDir() || "");
         setExternalStorage(true);
       }
+      // A project goes in the Node Banana folder unless it already lives
+      // somewhere, or there is no Node Banana folder to put it in.
+      const openingStatus = getRecorderLibraryStatus();
+      setCustomLocation(!(openingStatus?.available && openingStatus.root) || (mode === "settings" && !!saveDirectoryPath));
+      setFolderTarget(null);
 
       // Sync local providers state
+      editedProviderKeys.current.clear();
       setLocalProviders(providerSettings);
       setShowApiKey({ gemini: false, openai: false, anthropic: false, replicate: false, fal: false, kie: false, wavespeed: false, comfy: false });
       // Initialize override as active if user already has a key set
@@ -229,6 +314,7 @@ export function ProjectSetupModal({
         comfy: !!providerSettings.providers.comfy?.apiKey,
       });
       setError(null);
+      setFolderConflict(null);
 
       // Load node defaults
       setLocalNodeDefaults(loadNodeDefaults());
@@ -237,6 +323,9 @@ export function ProjectSetupModal({
 
       // Sync canvas settings
       setLocalCanvasSettings(canvasNavigationSettings);
+      setLocalEdgeStyle(edgeStyle);
+      setLocalEdgeAppearance(edgeAppearance);
+      setEdgeDefaultSaved(false);
 
       // Fetch env status
       fetch("/api/env-status")
@@ -244,7 +333,50 @@ export function ProjectSetupModal({
         .then((data: EnvStatusResponse) => setEnvStatus(data))
         .catch(() => setEnvStatus(null));
     }
-  }, [isOpen, mode, workflowName, saveDirectoryPath, useExternalImageStorage, providerSettings, canvasNavigationSettings]);
+    // Provider edits/imports must not reset other unsaved settings drafts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, mode, workflowName, saveDirectoryPath, useExternalImageStorage, canvasNavigationSettings]);
+
+  // A page asked for while the dialog is already open: go there, keep the drafts.
+  useEffect(() => {
+    if (isOpen && mode === "settings" && initialTab && pageRequest !== undefined) setActiveTab(initialTab);
+    // Only a new request moves the page; the open effect above handles opening.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageRequest]);
+
+  // Where the name lands in the Node Banana folder, asked as it is typed
+  const recorderStatus = getRecorderLibraryStatus();
+  const libraryRoot = recorderStatus?.available ? recorderStatus.root : null;
+  const folderQuery = isOpen && activeTab === "project" && !customLocation && libraryRoot ? name.trim() || "my-project" : null;
+  useEffect(() => {
+    if (folderQuery === null) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetchProjectFolderName(folderQuery, controller.signal)
+        .then((target) => {
+          if (!controller.signal.aborted) setFolderTarget(target);
+        })
+        .catch(() => {
+          // The line falls back to the plain name; saving asks again
+        });
+    }, 150);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [folderQuery]);
+
+  /** "Choose another location…" and back: a chosen directory starts at the Node Banana folder. */
+  const toggleCustomLocation = () => {
+    if (customLocation) {
+      setCustomLocation(false);
+    } else {
+      if (!directoryPath.trim() && libraryRoot) setDirectoryPath(libraryRoot);
+      setCustomLocation(true);
+    }
+    setError(null);
+    setFolderConflict(null);
+  };
 
   const handleBrowse = async () => {
     setIsBrowsing(true);
@@ -275,18 +407,53 @@ export function ProjectSetupModal({
     }
   };
 
-  const handleSaveProject = async () => {
-    if (!name.trim()) {
+  /** The Node Banana workflow a folder already holds, if any. */
+  const findWorkflowInFolder = async (folder: string): Promise<{ id: string | null; name: string | null } | null> => {
+    try {
+      const response = await fetch(`/api/workflow?path=${encodeURIComponent(folder)}&load=true`);
+      const result = await response.json();
+      if (!result?.success || !result.workflow) return null;
+      const { id, name: existingName } = result.workflow as { id?: unknown; name?: unknown };
+      return {
+        id: typeof id === "string" ? id : null,
+        name: typeof existingName === "string" && existingName ? existingName : null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  /** "Fox" → "Fox 2", "Fox 2" → "Fox 3". */
+  const nextProjectName = (projectName: string): string => {
+    const trimmed = projectName.trim();
+    const numbered = trimmed.match(/^(.*\S)\s+(\d+)$/);
+    return numbered ? `${numbered[1]} ${Number(numbered[2]) + 1}` : `${trimmed} 2`;
+  };
+
+  const saveProject = async (projectName: string, replaceExisting: boolean) => {
+    if (!projectName.trim()) {
       setError("Project name is required");
       return;
     }
 
-    if (!directoryPath.trim()) {
+    const inFolder = !customLocation && !!libraryRoot;
+    if (!inFolder && !directoryPath.trim()) {
       setError("Project directory is required");
       return;
     }
 
-    const fullProjectPath = ensureProjectSubfolderPath(directoryPath, name);
+    let fullProjectPath: string;
+    if (inFolder) {
+      // Asked afresh: a folder may have appeared since the name was typed
+      try {
+        fullProjectPath = (await fetchProjectFolderName(projectName.trim())).path;
+      } catch (err) {
+        setError(`Could not find a folder for the project: ${err instanceof Error ? err.message : "Unknown error"}`);
+        return;
+      }
+    } else {
+      fullProjectPath = ensureProjectSubfolderPath(directoryPath, projectName);
+    }
 
     if (!(fullProjectPath.startsWith("/") || /^[A-Za-z]:[\\\/]/.test(fullProjectPath) || fullProjectPath.startsWith("\\\\"))) {
       setError("Project directory must be an absolute path (starting with /, a drive letter, or a UNC path)");
@@ -295,6 +462,7 @@ export function ProjectSetupModal({
 
     setIsValidating(true);
     setError(null);
+    setFolderConflict(null);
 
     try {
       // Validate path shape when it already exists
@@ -309,12 +477,29 @@ export function ProjectSetupModal({
         return;
       }
 
-      const id = mode === "new" ? generateWorkflowId() : useWorkflowStore.getState().workflowId || generateWorkflowId();
+      // A canvas that has never had a folder keeps its id when it becomes a
+      // project, so what it already generated belongs to the project too. One
+      // that already has a folder becomes a new workflow.
+      const id = mode === "new"
+        ? (saveDirectoryPath ? generateWorkflowId() : workflowId || generateWorkflowId())
+        : useWorkflowStore.getState().workflowId || generateWorkflowId();
+
+      // Saving over another workflow's folder would overwrite it; ask first.
+      // The folder this workflow already lives in is its own, whatever its file says.
+      if (result.exists && !replaceExisting && fullProjectPath !== saveDirectoryPath) {
+        const existing = await findWorkflowInFolder(fullProjectPath);
+        if (existing && existing.id !== id) {
+          setFolderConflict({ path: fullProjectPath, existingName: existing.name });
+          setIsValidating(false);
+          return;
+        }
+      }
+
       // Update external storage setting
       setUseExternalImageStorage(externalStorage);
-      // Remember the base directory for next time
-      setLastProjectBaseDir(directoryPath);
-      onSave(id, name.trim(), fullProjectPath);
+      // Remember a chosen base directory for next time
+      if (!inFolder) setLastProjectBaseDir(directoryPath);
+      onSave(id, projectName.trim(), fullProjectPath);
       setIsValidating(false);
     } catch (err) {
       setError(
@@ -322,6 +507,15 @@ export function ProjectSetupModal({
       );
       setIsValidating(false);
     }
+  };
+
+  const handleSaveProject = () => saveProject(name, false);
+
+  /** Keep the other workflow, and save this one as "<name> 2" in a folder of its own. */
+  const handleSaveBeside = () => {
+    const next = nextProjectName(name);
+    setName(next);
+    saveProject(next, false);
   };
 
   const handleSaveProviders = () => {
@@ -360,6 +554,17 @@ export function ProjectSetupModal({
     onClose();
   };
 
+  const handleSaveNoodles = () => {
+    if (localEdgeStyle !== edgeStyle) setEdgeStyle(localEdgeStyle);
+    if (localEdgeAppearance !== edgeAppearance) setEdgeAppearance(localEdgeAppearance);
+    onClose();
+  };
+
+  const handleSetEdgeDefault = () => {
+    saveEdgeDefaults({ edgeStyle: localEdgeStyle, appearance: localEdgeAppearance });
+    setEdgeDefaultSaved(true);
+  };
+
   const handleSaveComfy = () => {
     saveComfySettings(localComfySettings);
     onClose();
@@ -368,23 +573,29 @@ export function ProjectSetupModal({
   const handleSave = () => {
     if (activeTab === "project") {
       handleSaveProject();
+    } else if (activeTab === "library") {
+      // Storage actions apply as they are made; there is nothing to save.
+      onClose();
     } else if (activeTab === "providers") {
       handleSaveProviders();
     } else if (activeTab === "comfy") {
       handleSaveComfy();
     } else if (activeTab === "canvas") {
       handleSaveCanvas();
+    } else if (activeTab === "noodles") {
+      handleSaveNoodles();
     } else {
       handleSaveNodeDefaults();
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // The model browsers are React children of this panel, so their key events
+    // bubble here through the portal. Enter in one of them picks a model; it
+    // must not save the (still stale) draft and close the settings dialog.
+    if (showImageModelDialog || showVideoModelDialog) return;
     if (e.key === "Enter" && !isValidating && !isBrowsing) {
       handleSave();
-    }
-    if (e.key === "Escape") {
-      onClose();
     }
   };
 
@@ -392,6 +603,7 @@ export function ProjectSetupModal({
     providerId: ProviderType,
     updates: { enabled?: boolean; apiKey?: string | null }
   ) => {
+    if ('apiKey' in updates) editedProviderKeys.current.add(providerId);
     setLocalProviders((prev) => ({
       providers: {
         ...prev.providers,
@@ -405,786 +617,432 @@ export function ProjectSetupModal({
 
   if (!isOpen) return null;
 
+  const page = SETTINGS_PAGES.find((p) => p.id === activeTab) ?? SETTINGS_PAGES[0];
+  // The folder the project is saved in, inside the Node Banana folder
+  const folderPath = libraryRoot
+    ? folderTarget?.path ?? joinPathForPlatform(libraryRoot, sanitizeProjectFolderName(name) || "my-project")
+    : null;
+  const takenFolder = folderTarget?.taken ? folderTarget.folder.replace(/ \d+$/, "") : null;
+  const llmProvider = localNodeDefaults.llm?.provider || "google";
+  const llmTemperature = localNodeDefaults.llm?.temperature ?? 0.7;
+  const llmMaxTokens = localNodeDefaults.llm?.maxTokens ?? 8192;
+  // On the web there is no import row, so the first provider row opens the stack.
+  const hasImportRow = isDesktop();
+
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      onWheelCapture={(e) => e.stopPropagation()}
+    <Dialog
+      open={isOpen}
+      onClose={onClose}
+      // In a body portal, so it still opens while its host is hidden (the Assets view)
+      portal
+      className={cn(splitPanelClass, "w-[840px] h-[560px] max-w-[92vw] max-h-[85vh]")}
+      panelProps={{ onKeyDown: handleKeyDown }}
     >
-      <div
-        className="bg-neutral-800 rounded-xl w-[580px] border border-neutral-700 shadow-2xl overflow-clip flex flex-col max-h-[80vh]"
-        onKeyDown={handleKeyDown}
-      >
-        <div className="px-8 pt-8 pb-0 shrink-0">
-          <div className="flex items-center gap-2 mb-5">
-            <img src="/banana_icon.png" alt="" className="w-6 h-6" />
-            <h2 className="text-xl font-medium text-neutral-100">
-              {mode === "new" ? "New Project" : "Project Settings"}
-            </h2>
-          </div>
-
-          {/* Tab Bar */}
-          <div className="flex gap-1.5 p-1 bg-neutral-900/50 rounded-lg">
-          <button
-            onClick={() => setActiveTab("project")}
-            className={`px-3 py-1.5 text-sm rounded-md transition-all duration-150 ${activeTab === "project" ? "bg-neutral-700 text-neutral-100 font-medium" : "text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50"}`}
-          >
-            Project
-          </button>
-          <button
-            onClick={() => setActiveTab("providers")}
-            className={`px-3 py-1.5 text-sm rounded-md transition-all duration-150 ${activeTab === "providers" ? "bg-neutral-700 text-neutral-100 font-medium" : "text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50"}`}
-          >
-            Providers
-          </button>
-          <button
-            onClick={() => setActiveTab("comfy")}
-            className={`px-3 py-1.5 text-sm rounded-md transition-all duration-150 ${activeTab === "comfy" ? "bg-neutral-700 text-neutral-100 font-medium" : "text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50"}`}
-          >
-            ComfyUI
-          </button>
-          <button
-            onClick={() => setActiveTab("nodeDefaults")}
-            className={`px-3 py-1.5 text-sm rounded-md transition-all duration-150 ${activeTab === "nodeDefaults" ? "bg-neutral-700 text-neutral-100 font-medium" : "text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50"}`}
-          >
-            Node Defaults
-          </button>
-          <button
-            onClick={() => setActiveTab("canvas")}
-            className={`px-3 py-1.5 text-sm rounded-md transition-all duration-150 ${activeTab === "canvas" ? "bg-neutral-700 text-neutral-100 font-medium" : "text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50"}`}
-          >
-            Canvas
-          </button>
-          </div>
+      {/* Rail: one entry per page, the dialog's eyebrow at its head */}
+      <DialogPane width={224}>
+        <div>
+          <DialogEyebrow className="block pl-4 pb-3.5 text-neutral-500">
+            {mode === "new" ? "New project" : "Project settings"}
+          </DialogEyebrow>
+          <nav aria-label="Settings pages" className="flex flex-col">
+            {SETTINGS_PAGES.map((p) => (
+              <DialogRailItem key={p.id} active={activeTab === p.id} onClick={() => setActiveTab(p.id)}>
+                {p.label}
+              </DialogRailItem>
+            ))}
+          </nav>
         </div>
+        <DialogPaneFoot version={APP_VERSION} />
+      </DialogPane>
 
-        {/* Scrollable tab content area */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-8 py-5">
+      <DialogPage>
+        <DialogPageHead />
+        <DialogPageTitle heading={page.title} lead={page.description} />
+
+        {/* Scrollable page content */}
+        <DialogPageBody>
 
         {/* Project Tab Content */}
         {activeTab === "project" && (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm text-neutral-400 mb-1">
-                Project Name
-              </label>
-              <input
+          <div className="flex flex-col gap-[18px]">
+            <Field id="project-name" label="Project name">
+              <TextInput
+                id="project-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="my-project"
                 autoFocus
-                className="w-full px-3 py-2 bg-neutral-900 border border-neutral-600 rounded-lg text-neutral-100 text-sm focus:outline-none focus:border-neutral-500"
               />
-            </div>
+              {!customLocation && folderPath && (
+                <>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <p className="min-w-0 text-xs leading-4 text-neutral-500">
+                      Saves to <span className="font-mono text-[11px] text-neutral-400 break-all">{shortenHomePath(folderPath)}</span>
+                    </p>
+                    <DialogTextButton className="-mr-1.5 shrink-0 text-xs" onClick={toggleCustomLocation}>
+                      Choose another location…
+                    </DialogTextButton>
+                  </div>
+                  {takenFolder && (
+                    <p className={helpClass}>There’s already a “{takenFolder}” folder there, so this one gets a number.</p>
+                  )}
+                </>
+              )}
+            </Field>
 
-            <div>
-              <label className="block text-sm text-neutral-400 mb-1">
-                Project Directory
-              </label>
+            {customLocation && (
+            <Field id="project-directory" label="Project directory">
               <div className="flex gap-2">
-                <input
+                <TextInput
+                  id="project-directory"
                   type="text"
                   value={directoryPath}
                   onChange={(e) => setDirectoryPath(e.target.value)}
                   placeholder="/Users/username/projects/my-project"
-                  className="flex-1 px-3 py-2 bg-neutral-900 border border-neutral-600 rounded-lg text-neutral-100 text-sm focus:outline-none focus:border-neutral-500"
                 />
-                <button
-                  type="button"
+                <DialogButton
+                  variant="outline"
+                  size="md"
                   onClick={handleBrowse}
                   disabled={isBrowsing}
-                  className="px-3 py-2 bg-neutral-700 hover:bg-neutral-600 disabled:bg-neutral-700 disabled:opacity-50 text-neutral-200 text-sm rounded-lg transition-colors"
+                  className="shrink-0"
                 >
                   {isBrowsing ? "..." : "Browse"}
-                </button>
+                </DialogButton>
               </div>
-              <p className="text-xs text-neutral-400 mt-1">
-                Workflow files and images will be saved here. Subfolders for inputs and generations will be auto-created.
-              </p>
-            </div>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <p className="min-w-0 text-xs leading-4 text-neutral-500">
+                  Only this project is saved here. Its generations still show in Assets.
+                </p>
+                {libraryRoot && (
+                  <DialogTextButton className="-mr-1.5 shrink-0 text-xs" onClick={toggleCustomLocation}>
+                    Use the Node Banana folder
+                  </DialogTextButton>
+                )}
+              </div>
+            </Field>
+            )}
 
-            <div className="pt-2 border-t border-neutral-700">
-              <label className="flex items-center justify-between gap-3 cursor-pointer">
-                <div>
-                  <span className="text-sm text-neutral-200">Embed images as base64</span>
-                  <p className="text-xs text-neutral-400">
-                    Embeds all images in workflow, larger workflow files. Can hit memory limits on very large workflows.
-                  </p>
+            <DialogRow
+              title="Embed images as base64"
+              description="Embeds all images in workflow, larger workflow files. Can hit memory limits on very large workflows."
+              className="pt-[18px] pb-0"
+            >
+              <Switch
+                checked={!externalStorage}
+                onChange={() => setExternalStorage(externalStorage ? false : true)}
+                label="Embed images as base64"
+              />
+            </DialogRow>
+
+            <DialogRow
+              title="Save automatically"
+              description="Saves a few seconds after you stop editing, and when you leave the window. Never during a run."
+              className="pt-[18px] pb-0"
+            >
+              <Switch checked={autoSaveEnabled} onChange={setAutoSaveEnabled} label="Save automatically" />
+            </DialogRow>
+
+            {error && <DialogStatus tone="error">{error}</DialogStatus>}
+
+            {folderConflict && folderConflict.path === ensureProjectSubfolderPath(directoryPath, name) && (
+              <div role="alert" className="flex flex-col gap-2.5">
+                <DialogStatus tone="neutral">Folder already has a workflow</DialogStatus>
+                <p className="text-xs leading-4 text-neutral-400">
+                  {folderConflict.existingName ? `“${folderConflict.existingName}”` : "Another workflow"} is saved in{" "}
+                  {folderConflict.path}. Replace it with this one, or keep it and save this workflow in a new folder.
+                </p>
+                <div className="flex gap-2">
+                  <DialogButton variant="outline" size="md" onClick={() => saveProject(name, true)} disabled={isValidating}>
+                    Replace
+                  </DialogButton>
+                  <DialogButton variant="outline" size="md" onClick={handleSaveBeside} disabled={isValidating}>
+                    Save as “{nextProjectName(name)}”
+                  </DialogButton>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={!externalStorage}
-                  onClick={() => setExternalStorage(externalStorage ? false : true)}
-                  className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${!externalStorage ? "bg-blue-500" : "bg-neutral-600"}`}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${!externalStorage ? "translate-x-[18px]" : "translate-x-[3px]"}`} />
-                </button>
-              </label>
-            </div>
-
-            <div className="pt-2 border-t border-neutral-700">
-              <label className="flex items-center justify-between gap-3 cursor-pointer">
-                <div>
-                  <span className="text-sm text-neutral-200">Show model settings on nodes</span>
-                  <p className="text-xs text-neutral-400">
-                    Show model parameters inside generation nodes instead of the side panel
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={inlineParametersEnabled}
-                  onClick={() => setInlineParameters(!inlineParametersEnabled)}
-                  className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${inlineParametersEnabled ? "bg-blue-500" : "bg-neutral-600"}`}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${inlineParametersEnabled ? "translate-x-[18px]" : "translate-x-[3px]"}`} />
-                </button>
-              </label>
-            </div>
-
-            {error && <p className="text-sm text-red-400">{error}</p>}
+              </div>
+            )}
           </div>
         )}
 
+        {/* Storage Tab Content */}
+        {activeTab === "library" && <LibrarySettingsTab onLeave={onClose} />}
+
         {/* Providers Tab Content */}
         {activeTab === "providers" && (
-          <div className="space-y-3">
-            {/* Gemini Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">Google Gemini</span>
-                {envStatus?.gemini && !overrideActive.gemini ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, gemini: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.gemini ? "text" : "password"}
-                      value={localProviders.providers.gemini?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("gemini", { apiKey: e.target.value || null })}
-                      placeholder="AIza..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, gemini: !prev.gemini }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.gemini ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.gemini && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, gemini: false }));
-                          updateLocalProvider("gemini", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
+          <div>
+            <EnvironmentImport onImported={result => {
+              const imported = getProviderSettings();
+              setLocalProviders(previous => ({ providers: Object.fromEntries(Object.entries(previous.providers).map(([id, config]) => [id, {
+                ...config, apiKey: editedProviderKeys.current.has(id as ProviderType) ? config.apiKey : imported.providers[id as ProviderType]?.apiKey,
+              }])) as ProviderSettings['providers'] }));
+              const comfy = getComfySettings();
+              applyImportedComfySettings(comfy, [
+                ...comfySecretFields,
+                ...Object.keys(result.preferences) as (keyof typeof result.preferences)[],
+              ]);
+            }} />
+
+            {PROVIDER_ROWS.map((provider, index) => {
+              const fromEnv = Boolean(envStatus?.[provider.id]);
+              return (
+                <DialogRow
+                  key={provider.id}
+                  title={provider.name}
+                  description={provider.description}
+                  first={index === 0 && !hasImportRow}
+                  className={index === 0 && !hasImportRow ? "pt-0 pb-2" : "py-2"}
+                >
+                  {/* One grid for every row, so the inputs and buttons line up
+                      whether or not a row has a third action. */}
+                  <div className="grid shrink-0 grid-cols-[220px_44px_56px] items-center gap-x-1.5">
+                    {fromEnv && !overrideActive[provider.id] ? (
+                      <>
+                        <DialogStatus tone="ok" className="col-span-2 justify-self-end">Configured via .env</DialogStatus>
+                        <DialogTextButton
+                          className="justify-self-start"
+                          onClick={() => setOverrideActive((prev) => ({ ...prev, [provider.id]: true }))}
+                        >
+                          Override
+                        </DialogTextButton>
+                      </>
+                    ) : (
+                      <>
+                        <TextInput
+                          type={showApiKey[provider.id] ? "text" : "password"}
+                          value={localProviders.providers[provider.id]?.apiKey || ""}
+                          onChange={(e) => updateLocalProvider(provider.id, { apiKey: e.target.value || null })}
+                          placeholder={provider.placeholder}
+                          aria-label={`${provider.name} API key`}
+                          className="w-[220px] h-8"
+                        />
+                        {/* Nothing to reveal in an empty field */}
+                        {localProviders.providers[provider.id]?.apiKey ? (
+                          <DialogTextButton
+                            className="justify-self-start"
+                            onClick={() => setShowApiKey((prev) => ({ ...prev, [provider.id]: !prev[provider.id] }))}
+                          >
+                            {showApiKey[provider.id] ? "Hide" : "Show"}
+                          </DialogTextButton>
+                        ) : (
+                          <span aria-hidden="true" />
+                        )}
+                        {fromEnv ? (
+                          <DialogTextButton
+                            className="justify-self-start text-neutral-500"
+                            onClick={() => {
+                              setOverrideActive((prev) => ({ ...prev, [provider.id]: false }));
+                              updateLocalProvider(provider.id, { apiKey: null });
+                            }}
+                          >
+                            Cancel
+                          </DialogTextButton>
+                        ) : (
+                          <span aria-hidden="true" />
+                        )}
+                      </>
                     )}
                   </div>
-                )}
-              </div>
-            </div>
+                </DialogRow>
+              );
+            })}
 
-            {/* OpenAI Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">OpenAI</span>
-                {envStatus?.openai && !overrideActive.openai ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, openai: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.openai ? "text" : "password"}
-                      value={localProviders.providers.openai?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("openai", { apiKey: e.target.value || null })}
-                      placeholder="sk-..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, openai: !prev.openai }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.openai ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.openai && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, openai: false }));
-                          updateLocalProvider("openai", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Anthropic Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">Anthropic</span>
-                {envStatus?.anthropic && !overrideActive.anthropic ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, anthropic: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.anthropic ? "text" : "password"}
-                      value={localProviders.providers.anthropic?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("anthropic", { apiKey: e.target.value || null })}
-                      placeholder="sk-ant-..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, anthropic: !prev.anthropic }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.anthropic ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.anthropic && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, anthropic: false }));
-                          updateLocalProvider("anthropic", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Replicate Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">Replicate</span>
-                {envStatus?.replicate && !overrideActive.replicate ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, replicate: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.replicate ? "text" : "password"}
-                      value={localProviders.providers.replicate?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("replicate", { apiKey: e.target.value || null })}
-                      placeholder="r8_..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, replicate: !prev.replicate }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.replicate ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.replicate && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, replicate: false }));
-                          updateLocalProvider("replicate", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* fal.ai Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">fal.ai</span>
-                {envStatus?.fal && !overrideActive.fal ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, fal: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.fal ? "text" : "password"}
-                      value={localProviders.providers.fal?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("fal", { apiKey: e.target.value || null })}
-                      placeholder="..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, fal: !prev.fal }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.fal ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.fal && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, fal: false }));
-                          updateLocalProvider("fal", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Kie.ai Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">Kie.ai</span>
-                {envStatus?.kie && !overrideActive.kie ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, kie: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.kie ? "text" : "password"}
-                      value={localProviders.providers.kie?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("kie", { apiKey: e.target.value || null })}
-                      placeholder="..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, kie: !prev.kie }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.kie ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.kie && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, kie: false }));
-                          updateLocalProvider("kie", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* WaveSpeed Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">WaveSpeed</span>
-                {envStatus?.wavespeed && !overrideActive.wavespeed ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, wavespeed: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.wavespeed ? "text" : "password"}
-                      value={localProviders.providers.wavespeed?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("wavespeed", { apiKey: e.target.value || null })}
-                      placeholder="..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, wavespeed: !prev.wavespeed }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.wavespeed ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.wavespeed && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, wavespeed: false }));
-                          updateLocalProvider("wavespeed", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* ComfyUI (Comfy Router) Provider */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">ComfyUI</span>
-                {envStatus?.comfy && !overrideActive.comfy ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-green-400">Configured via .env</span>
-                    <button
-                      type="button"
-                      onClick={() => setOverrideActive((prev) => ({ ...prev, comfy: true }))}
-                      className="px-2 py-1 text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
-                    >
-                      Override
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showApiKey.comfy ? "text" : "password"}
-                      value={localProviders.providers.comfy?.apiKey || ""}
-                      onChange={(e) => updateLocalProvider("comfy", { apiKey: e.target.value || null })}
-                      placeholder="comfyui-..."
-                      className="w-48 px-2 py-1 bg-neutral-800 border border-neutral-600 rounded-lg text-neutral-100 text-xs focus:outline-none focus:border-neutral-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => ({ ...prev, comfy: !prev.comfy }))}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      {showApiKey.comfy ? "Hide" : "Show"}
-                    </button>
-                    {envStatus?.comfy && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOverrideActive((prev) => ({ ...prev, comfy: false }));
-                          updateLocalProvider("comfy", { apiKey: null });
-                        }}
-                        className="text-xs text-neutral-500 hover:text-neutral-300"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-              <p className="mt-2 text-xs text-neutral-500">
-                Uses your Comfy Cloud key from the ComfyUI tab when left empty.
-              </p>
-            </div>
-
-            <p className="text-xs text-neutral-400 mt-2">
-              Add API keys via <code className="px-1 py-0.5 bg-neutral-800 rounded">.env.local</code> for better security. Keys added here override .env and are stored in your browser.
+            <p className="mt-2.5 pt-2.5 border-t border-card text-xs leading-4 text-neutral-500">
+              {isDesktop() ? 'Keys are encrypted in your desktop profile. Imported keys are saved immediately.' : <>Add API keys via <code className="px-1 py-0.5 rounded bg-card font-mono text-[11px] text-neutral-400">.env.local</code> for server-side storage. Keys added here override .env and are stored in your browser.</>}
             </p>
           </div>
         )}
 
         {/* Node Defaults Tab Content */}
         {activeTab === "nodeDefaults" && (
-          <div className="space-y-3">
+          <div>
             {/* GenerateImage Section */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">Default Image Model</span>
-                <div className="flex items-center gap-2">
-                  {localNodeDefaults.generateImage?.selectedModel ? (
-                    <>
-                      <div className="flex items-center gap-1.5 text-xs text-neutral-300">
-                        {getProviderIcon(localNodeDefaults.generateImage.selectedModel.provider)}
-                        <span className="truncate max-w-[150px]">
-                          {localNodeDefaults.generateImage.selectedModel.displayName}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowImageModelDialog(true)}
-                        className="px-2 py-1 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
-                      >
-                        Change
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const { generateImage, ...rest } = localNodeDefaults;
-                          setLocalNodeDefaults(rest);
-                        }}
-                        className="text-xs text-neutral-400 hover:text-neutral-200"
-                      >
-                        Clear
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-xs text-neutral-400">System default (Gemini nano-banana-pro)</span>
-                      <button
-                        type="button"
-                        onClick={() => setShowImageModelDialog(true)}
-                        className="px-2 py-1 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
-                      >
-                        Select Model
-                      </button>
-                    </>
-                  )}
+            <DialogRow
+              first
+              title="Default image model"
+              description={localNodeDefaults.generateImage?.selectedModel ? undefined : "System default (Gemini nano-banana-pro)"}
+              className="pt-0 pb-3"
+            >
+              {localNodeDefaults.generateImage?.selectedModel ? (
+                <div className="flex items-center gap-2.5">
+                  <span className="inline-flex items-center gap-2 text-[13px] text-neutral-100">
+                    {getProviderIcon(localNodeDefaults.generateImage.selectedModel.provider)}
+                    <span className="truncate max-w-[150px]">
+                      {localNodeDefaults.generateImage.selectedModel.displayName}
+                    </span>
+                  </span>
+                  <DialogButton variant="outline" size="md" className="h-8" onClick={() => setShowImageModelDialog(true)}>
+                    Change
+                  </DialogButton>
+                  <DialogTextButton
+                    onClick={() => {
+                      const { generateImage, ...rest } = localNodeDefaults;
+                      setLocalNodeDefaults(rest);
+                    }}
+                  >
+                    Clear
+                  </DialogTextButton>
                 </div>
-              </div>
-            </div>
+              ) : (
+                <DialogButton variant="outline" size="md" className="h-8" onClick={() => setShowImageModelDialog(true)}>
+                  Select model
+                </DialogButton>
+              )}
+            </DialogRow>
 
             {/* GenerateVideo Section */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-neutral-100">Default Video Model</span>
-                <div className="flex items-center gap-2">
-                  {localNodeDefaults.generateVideo?.selectedModel ? (
-                    <>
-                      <div className="flex items-center gap-1.5 text-xs text-neutral-300">
-                        {getProviderIcon(localNodeDefaults.generateVideo.selectedModel.provider)}
-                        <span className="truncate max-w-[150px]">
-                          {localNodeDefaults.generateVideo.selectedModel.displayName}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowVideoModelDialog(true)}
-                        className="px-2 py-1 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
-                      >
-                        Change
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const { generateVideo, ...rest } = localNodeDefaults;
-                          setLocalNodeDefaults(rest);
-                        }}
-                        className="text-xs text-neutral-400 hover:text-neutral-200"
-                      >
-                        Clear
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-xs text-neutral-400">None set (select on first use)</span>
-                      <button
-                        type="button"
-                        onClick={() => setShowVideoModelDialog(true)}
-                        className="px-2 py-1 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-200 rounded transition-colors"
-                      >
-                        Select Model
-                      </button>
-                    </>
-                  )}
+            <DialogRow
+              title="Default video model"
+              description={localNodeDefaults.generateVideo?.selectedModel ? undefined : "None set (select on first use)"}
+              className="py-3"
+            >
+              {localNodeDefaults.generateVideo?.selectedModel ? (
+                <div className="flex items-center gap-2.5">
+                  <span className="inline-flex items-center gap-2 text-[13px] text-neutral-100">
+                    {getProviderIcon(localNodeDefaults.generateVideo.selectedModel.provider)}
+                    <span className="truncate max-w-[150px]">
+                      {localNodeDefaults.generateVideo.selectedModel.displayName}
+                    </span>
+                  </span>
+                  <DialogButton variant="outline" size="md" className="h-8" onClick={() => setShowVideoModelDialog(true)}>
+                    Change
+                  </DialogButton>
+                  <DialogTextButton
+                    onClick={() => {
+                      const { generateVideo, ...rest } = localNodeDefaults;
+                      setLocalNodeDefaults(rest);
+                    }}
+                  >
+                    Clear
+                  </DialogTextButton>
                 </div>
-              </div>
-            </div>
+              ) : (
+                <DialogButton variant="outline" size="md" className="h-8" onClick={() => setShowVideoModelDialog(true)}>
+                  Select model
+                </DialogButton>
+              )}
+            </DialogRow>
 
             {/* LLM Section */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-neutral-100">Default LLM Settings</span>
-                  {localNodeDefaults.llm && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const { llm, ...rest } = localNodeDefaults;
-                        setLocalNodeDefaults(rest);
-                      }}
-                      className="text-xs text-neutral-400 hover:text-neutral-200"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-
+            <div className="flex items-center justify-between gap-6 pt-3.5 pb-2.5 border-t border-card">
+              <div className="min-w-0">
+                <DialogRowTitle>Default LLM settings</DialogRowTitle>
                 {!localNodeDefaults.llm ? (
-                  <p className="text-xs text-neutral-400">Using system defaults (Google Gemini 3 Flash)</p>
+                  <p className="mt-0.5 text-xs leading-4 text-ink-3">{`Using system defaults (Google ${llmModelLabel(DEFAULT_LLM_MODEL)})`}</p>
                 ) : null}
+              </div>
+              {localNodeDefaults.llm && (
+                <DialogTextButton
+                  onClick={() => {
+                    const { llm, ...rest } = localNodeDefaults;
+                    setLocalNodeDefaults(rest);
+                  }}
+                >
+                  Clear
+                </DialogTextButton>
+              )}
+            </div>
 
-                {/* Provider dropdown */}
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-neutral-400 w-20">Provider</label>
-                  <select
-                    value={localNodeDefaults.llm?.provider || "google"}
-                    onChange={(e) => {
-                      const newProvider = e.target.value as LLMProvider;
-                      const firstModelForProvider = LLM_MODELS[newProvider][0].value;
-                      const currentTemp = localNodeDefaults.llm?.temperature ?? 0.7;
-                      setLocalNodeDefaults(prev => ({
-                        ...prev,
-                        llm: {
-                          ...prev.llm,
-                          provider: newProvider,
-                          model: firstModelForProvider,
-                          // Clamp temperature for Anthropic (max 1.0)
-                          ...(newProvider === "anthropic" && currentTemp > 1 ? { temperature: 1 } : {}),
-                        }
-                      }));
-                    }}
-                    className="flex-1 px-2 py-1 text-xs bg-neutral-800 border border-neutral-600 rounded text-neutral-100 focus:outline-none focus:border-neutral-500"
-                  >
-                    {LLM_PROVIDERS.map((p) => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                  </select>
-                </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+              {/* Provider dropdown */}
+              <Field id="llm-provider" label="Provider">
+                <Select
+                  id="llm-provider"
+                  value={llmProvider}
+                  options={LLM_PROVIDER_OPTIONS}
+                  onChange={(next) => {
+                    const newProvider = next as LLMProvider;
+                    const firstModelForProvider = defaultLLMModel(newProvider);
+                    const currentTemp = localNodeDefaults.llm?.temperature ?? 0.7;
+                    setLocalNodeDefaults(prev => ({
+                      ...prev,
+                      llm: {
+                        ...prev.llm,
+                        provider: newProvider,
+                        model: firstModelForProvider,
+                        // Clamp temperature for Anthropic (max 1.0)
+                        ...(newProvider === "anthropic" && currentTemp > 1 ? { temperature: 1 } : {}),
+                      }
+                    }));
+                  }}
+                />
+              </Field>
 
-                {/* Model dropdown */}
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-neutral-400 w-20">Model</label>
-                  <select
-                    value={localNodeDefaults.llm?.model || LLM_MODELS[localNodeDefaults.llm?.provider || "google"][0].value}
-                    onChange={(e) => {
-                      setLocalNodeDefaults(prev => ({
-                        ...prev,
-                        llm: { ...prev.llm, model: e.target.value as LLMModelType }
-                      }));
-                    }}
-                    className="flex-1 px-2 py-1 text-xs bg-neutral-800 border border-neutral-600 rounded text-neutral-100 focus:outline-none focus:border-neutral-500"
-                  >
-                    {LLM_MODELS[localNodeDefaults.llm?.provider || "google"].map((m) => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
-                    ))}
-                  </select>
-                </div>
+              {/* Model dropdown */}
+              <Field id="llm-model" label="Model">
+                <Select
+                  id="llm-model"
+                  value={localNodeDefaults.llm?.model || defaultLLMModel(llmProvider)}
+                  options={llmModelOptions(llmProvider, localNodeDefaults.llm?.model)}
+                  onChange={(next) => {
+                    setLocalNodeDefaults(prev => ({
+                      ...prev,
+                      llm: { ...prev.llm, model: next as LLMModelType }
+                    }));
+                  }}
+                />
+              </Field>
 
-                {/* Temperature slider */}
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-neutral-400 w-20">
-                    Temp: {(localNodeDefaults.llm?.temperature ?? 0.7).toFixed(1)}
-                  </label>
-                  <input
-                    type="range"
-                    min="0"
-                    max={(localNodeDefaults.llm?.provider || "google") === "anthropic" ? "1" : "2"}
-                    step="0.1"
-                    value={localNodeDefaults.llm?.temperature ?? 0.7}
-                    onChange={(e) => {
-                      setLocalNodeDefaults(prev => ({
-                        ...prev,
-                        llm: { ...prev.llm, temperature: parseFloat(e.target.value) }
-                      }));
-                    }}
-                    className="flex-1 h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-neutral-400"
-                  />
-                </div>
+              {/* Temperature slider */}
+              <div>
+                <label htmlFor="llm-temperature" className={cn(labelClass, "mb-2")}>Temperature</label>
+                <Slider
+                  id="llm-temperature"
+                  label="Temperature"
+                  min={0}
+                  max={llmProvider === "anthropic" ? 1 : 2}
+                  step={0.1}
+                  value={llmTemperature}
+                  readout={llmTemperature.toFixed(1)}
+                  onChange={(temperature) => {
+                    setLocalNodeDefaults(prev => ({
+                      ...prev,
+                      llm: { ...prev.llm, temperature }
+                    }));
+                  }}
+                />
+              </div>
 
-                {/* Max Tokens slider */}
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-neutral-400 w-20">
-                    Tokens: {(localNodeDefaults.llm?.maxTokens ?? 8192).toLocaleString()}
-                  </label>
-                  <input
-                    type="range"
-                    min="256"
-                    max="16384"
-                    step="256"
-                    value={localNodeDefaults.llm?.maxTokens ?? 8192}
-                    onChange={(e) => {
-                      setLocalNodeDefaults(prev => ({
-                        ...prev,
-                        llm: { ...prev.llm, maxTokens: parseInt(e.target.value, 10) }
-                      }));
-                    }}
-                    className="flex-1 h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-neutral-400"
-                  />
-                </div>
+              {/* Max Tokens slider */}
+              <div>
+                <label htmlFor="llm-max-tokens" className={cn(labelClass, "mb-2")}>Max tokens</label>
+                <Slider
+                  id="llm-max-tokens"
+                  label="Max tokens"
+                  min={256}
+                  max={16384}
+                  step={256}
+                  value={llmMaxTokens}
+                  readout={llmMaxTokens.toLocaleString()}
+                  onChange={(maxTokens) => {
+                    setLocalNodeDefaults(prev => ({
+                      ...prev,
+                      llm: { ...prev.llm, maxTokens }
+                    }));
+                  }}
+                />
               </div>
             </div>
 
             {/* Execution Section */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex flex-col gap-3">
-                <span className="text-sm font-medium text-neutral-100">Execution Settings</span>
+            <DialogRow
+              title="Max parallel calls"
+              description="Maximum number of nodes to execute in parallel during workflow execution. Higher values may improve speed but increase API rate limit risk."
+              className="mt-3.5"
+            >
+              <Slider
+                className="w-[200px] shrink-0"
+                label="Max parallel calls"
+                min={1}
+                max={10}
+                step={1}
+                value={maxConcurrentCalls}
+                onChange={(value) => setMaxConcurrentCalls(value)}
+              />
+            </DialogRow>
 
-                {/* Concurrency slider */}
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-neutral-400 w-32">
-                    Max Parallel Calls: {maxConcurrentCalls}
-                  </label>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    step="1"
-                    value={maxConcurrentCalls}
-                    onChange={(e) => setMaxConcurrentCalls(parseInt(e.target.value, 10))}
-                    className="flex-1 h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-neutral-400"
-                  />
-                </div>
-                <p className="text-xs text-neutral-400">
-                  Maximum number of nodes to execute in parallel during workflow execution.
-                  Higher values may improve speed but increase API rate limit risk.
-                </p>
-              </div>
-            </div>
-
-            <p className="text-xs text-neutral-400 mt-2">
+            <p className="pt-3 border-t border-card text-xs leading-4 text-neutral-500">
               These defaults are applied when creating nodes via keyboard shortcuts (Shift+G, Shift+L, etc).
             </p>
           </div>
@@ -1192,139 +1050,116 @@ export function ProjectSetupModal({
 
         {/* ComfyUI Tab Content */}
         {activeTab === "comfy" && (
-          <ComfySettingsTab settings={localComfySettings} onChange={setLocalComfySettings} />
+          <ComfySettingsTab
+            settings={localComfySettings}
+            onChange={setLocalComfySettings}
+            accountKey={localProviders.providers.comfy?.apiKey ?? null}
+            onOpenProviders={() => setActiveTab("providers")}
+          />
         )}
 
         {/* Canvas Tab Content */}
         {activeTab === "canvas" && (
-          <div className="space-y-3">
-            <p className="text-xs text-neutral-400">Configure how you navigate and interact with the canvas.</p>
+          <div>
             {/* Pan Mode */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-neutral-100">Pan Mode</span>
-                  <p className="text-xs text-neutral-400">
-                    {localCanvasSettings.panMode === "space" && "Hold Space and drag to pan"}
-                    {localCanvasSettings.panMode === "middleMouse" && "Click and drag with middle mouse button"}
-                    {localCanvasSettings.panMode === "always" && "Pan without holding any keys"}
-                  </p>
-                </div>
-                <div className="flex gap-1 p-0.5 bg-neutral-800 rounded-md">
-                  {([
-                    { value: "space" as PanMode, label: "Space + Drag" },
-                    { value: "middleMouse" as PanMode, label: "Middle Mouse" },
-                    { value: "always" as PanMode, label: "Always On" },
-                  ] as const).map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setLocalCanvasSettings({ ...localCanvasSettings, panMode: option.value })}
-                      className={`flex-1 px-2 py-1.5 text-xs rounded transition-all duration-150 ${
-                        localCanvasSettings.panMode === option.value
-                          ? "bg-neutral-700 text-neutral-100 font-medium"
-                          : "text-neutral-400 hover:text-neutral-300"
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <DialogRow
+              first
+              title="Pan mode"
+              description={
+                <>
+                  {localCanvasSettings.panMode === "space" && "Hold Space and drag to pan"}
+                  {localCanvasSettings.panMode === "middleMouse" && "Click and drag with middle mouse button"}
+                  {localCanvasSettings.panMode === "always" && "Pan without holding any keys"}
+                </>
+              }
+              className="pt-0 pb-[18px]"
+            >
+              <Segmented
+                className="w-[312px] shrink-0"
+                label="Pan mode"
+                options={PAN_MODES}
+                value={localCanvasSettings.panMode}
+                onChange={(panMode) => setLocalCanvasSettings({ ...localCanvasSettings, panMode })}
+              />
+            </DialogRow>
 
             {/* Zoom Mode */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-neutral-100">Zoom Mode</span>
-                  <p className="text-xs text-neutral-400">
-                    {localCanvasSettings.zoomMode === "altScroll" && "Hold Alt and scroll to zoom"}
-                    {localCanvasSettings.zoomMode === "ctrlScroll" && "Hold Ctrl/Cmd and scroll to zoom"}
-                    {localCanvasSettings.zoomMode === "scroll" && "Scroll to zoom without modifier keys"}
-                  </p>
-                </div>
-                <div className="flex gap-1 p-0.5 bg-neutral-800 rounded-md">
-                  {([
-                    { value: "altScroll" as ZoomMode, label: "Alt + Scroll" },
-                    { value: "ctrlScroll" as ZoomMode, label: "Ctrl + Scroll" },
-                    { value: "scroll" as ZoomMode, label: "Scroll" },
-                  ] as const).map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setLocalCanvasSettings({ ...localCanvasSettings, zoomMode: option.value })}
-                      className={`flex-1 px-2 py-1.5 text-xs rounded transition-all duration-150 ${
-                        localCanvasSettings.zoomMode === option.value
-                          ? "bg-neutral-700 text-neutral-100 font-medium"
-                          : "text-neutral-400 hover:text-neutral-300"
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <DialogRow
+              title="Zoom mode"
+              description={
+                <>
+                  {localCanvasSettings.zoomMode === "altScroll" && "Hold Alt and scroll to zoom"}
+                  {localCanvasSettings.zoomMode === "ctrlScroll" && "Hold Ctrl/Cmd and scroll to zoom"}
+                  {localCanvasSettings.zoomMode === "scroll" && "Scroll to zoom without modifier keys"}
+                </>
+              }
+              className="py-[18px]"
+            >
+              <Segmented
+                className="w-[312px] shrink-0"
+                label="Zoom mode"
+                options={ZOOM_MODES}
+                value={localCanvasSettings.zoomMode}
+                onChange={(zoomMode) => setLocalCanvasSettings({ ...localCanvasSettings, zoomMode })}
+              />
+            </DialogRow>
 
             {/* Selection Mode */}
-            <div className="p-3 bg-neutral-900 rounded-lg border border-neutral-700">
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-neutral-100">Selection Mode</span>
-                  <p className="text-xs text-neutral-400">
-                    {localCanvasSettings.selectionMode === "click" && "Click to select nodes"}
-                    {localCanvasSettings.selectionMode === "altDrag" && "Hold Alt and drag to select"}
-                    {localCanvasSettings.selectionMode === "shiftDrag" && "Hold Shift and drag to select"}
-                  </p>
-                </div>
-                <div className="flex gap-1 p-0.5 bg-neutral-800 rounded-md">
-                  {([
-                    { value: "click" as SelectionMode, label: "Click" },
-                    { value: "altDrag" as SelectionMode, label: "Alt + Drag" },
-                    { value: "shiftDrag" as SelectionMode, label: "Shift + Drag" },
-                  ] as const).map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setLocalCanvasSettings({ ...localCanvasSettings, selectionMode: option.value })}
-                      className={`flex-1 px-2 py-1.5 text-xs rounded transition-all duration-150 ${
-                        localCanvasSettings.selectionMode === option.value
-                          ? "bg-neutral-700 text-neutral-100 font-medium"
-                          : "text-neutral-400 hover:text-neutral-300"
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <DialogRow
+              title="Selection mode"
+              description={
+                <>
+                  {localCanvasSettings.selectionMode === "click" && "Click to select nodes"}
+                  {localCanvasSettings.selectionMode === "altDrag" && "Hold Alt and drag to select"}
+                  {localCanvasSettings.selectionMode === "shiftDrag" && "Hold Shift and drag to select"}
+                </>
+              }
+              className="py-[18px]"
+            >
+              <Segmented
+                className="w-[312px] shrink-0"
+                label="Selection mode"
+                options={SELECTION_MODES}
+                value={localCanvasSettings.selectionMode}
+                onChange={(selectionMode) => setLocalCanvasSettings({ ...localCanvasSettings, selectionMode })}
+              />
+            </DialogRow>
           </div>
         )}
 
-        </div>
+        {/* Noodles Tab Content */}
+        {activeTab === "noodles" && (
+          <ConnectionSettings
+            edgeStyle={localEdgeStyle}
+            appearance={localEdgeAppearance}
+            onEdgeStyleChange={setLocalEdgeStyle}
+            onAppearanceChange={setLocalEdgeAppearance}
+            onSetDefault={handleSetEdgeDefault}
+            defaultSaved={edgeDefaultSaved}
+          />
+        )}
 
-        {/* Fixed footer */}
-        <div className="flex justify-end gap-2 px-8 py-5 border-t border-neutral-700/50 shrink-0">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-100 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
+        </DialogPageBody>
+
+        <DialogPageFooter>
+          {activeTab !== "library" && (
+            <DialogButton variant="ghost" size="md" onClick={onClose}>
+              Cancel
+            </DialogButton>
+          )}
+          <DialogButton
+            variant="primary"
+            size="md"
             onClick={handleSave}
             disabled={activeTab === "project" && (isValidating || isBrowsing)}
-            className="px-4 py-2 text-sm bg-white text-neutral-900 rounded-lg hover:bg-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {activeTab === "project"
               ? (isValidating ? "Validating..." : mode === "new" ? "Create" : "Save")
-              : "Save"
+              : activeTab === "library" ? "Done" : "Save"
             }
-          </button>
-        </div>
-      </div>
+          </DialogButton>
+        </DialogPageFooter>
+      </DialogPage>
 
       {/* Model Selection Dialogs */}
       {showImageModelDialog && (
@@ -1369,6 +1204,6 @@ export function ProjectSetupModal({
           initialCapabilityFilter="video"
         />
       )}
-    </div>
+    </Dialog>
   );
 }

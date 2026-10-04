@@ -35,6 +35,11 @@ vi.mock("@xyflow/react", () => {
   return {
     Handle: MockHandle,
     NodeResizer: () => null,
+    NodeResizeControl: () => null,
+    useNodeConnections: () => [],
+    useStore: () => undefined,
+    useStoreApi: () => ({ getState: () => ({ nodeLookup: new Map() }), subscribe: () => () => {} }),
+    useUpdateNodeInternals: () => () => {},
     Position: { Left: "left", Right: "right", Top: "top", Bottom: "bottom" },
     ReactFlowProvider: ({ children }: { children: React.ReactNode }) => children,
     useReactFlow: () => ({
@@ -43,6 +48,7 @@ vi.mock("@xyflow/react", () => {
       screenToFlowPosition: (pos: unknown) => pos,
     }),
     useConnection: (selector: (state: { inProgress: boolean }) => boolean) => selector({ inProgress: false }),
+    useNodeId: () => "node-1",
   };
 });
 

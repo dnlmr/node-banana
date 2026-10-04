@@ -15,7 +15,9 @@ Multi-provider support. Dynamic prompting features. Local, private, MIT, BYOK.
 
 <br />
 
-[**Documentation**](https://node-banana-docs.vercel.app/) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/89Nr6EKkTf)
+[**Download for Mac · Apple Silicon**](https://nodebanana.app/download/mac) &nbsp;&bull;&nbsp; [**Download for Windows · x64**](https://nodebanana.app/download/windows)
+
+[Website](https://nodebanana.app/) &nbsp;&bull;&nbsp; [**Documentation**](https://node-banana-docs.vercel.app/) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/89Nr6EKkTf) &nbsp;&bull;&nbsp; [All releases](https://github.com/shrimbly/node-banana/releases)
 
 <br />
 
@@ -36,6 +38,9 @@ Node Banana is a node-based workflow editor for AI media generation. Drag nodes 
 
 | Feature | Description |
 |:--------|:------------|
+| **Desktop app** | A signed Mac app (Apple Silicon) and a Windows installer (x64) that update themselves. Keys are encrypted at rest; workflows and media stay on your disk |
+| **Agent** | A chat window that builds workflows, edits the canvas and changes node settings, running on your own Claude Code or Codex (ChatGPT) subscription through the vendor's CLI, never on API credits |
+| **Asset library** | Everything you generate is saved as it is made and browsable in the Assets view, with filters, favourites, tags, and the workflow that made it |
 | **Dynamic Prompting** | Build prompts with variables, LLM-powered text construction, and reusable prompt chains that adapt per run and per input |
 | **Prompt to Workflow** | Generate complete workflows from natural language descriptions |
 | **Visual Node Editor** | Drag-and-drop nodes onto an infinite canvas with pan and zoom |
@@ -47,7 +52,8 @@ Node Banana is a node-based workflow editor for AI media generation. Drag nodes 
 | **Text Generation** | Generate text using Google Gemini, OpenAI, or Anthropic models |
 | **Workflow Chaining** | Connect multiple nodes to create complex multi-step pipelines |
 | **Group Locking** | Lock node groups to skip them during execution |
-| **Save/Load** | Export and import workflows as JSON files |
+| **Batch runs** | Run a workflow or a group N times, with each output tagged by its run |
+| **Save/Load** | Cmd/Ctrl+S saves, autosave follows your edits, and workflows are portable JSON files |
 
 ## Supported Providers
 
@@ -63,12 +69,20 @@ Node Banana is a node-based workflow editor for AI media generation. Drag nodes 
 
 ## Getting Started
 
-### Prerequisites
+### Install the desktop app
+
+Download the installer for your platform from [nodebanana.app](https://nodebanana.app/): **Mac (Apple Silicon, macOS 13 or later)** as a signed and notarised DMG, or **Windows (x64, Windows 10 or later)** as an installer. The Windows build is not code-signed, so SmartScreen may warn on first run. The app keeps itself up to date from [GitHub Releases](https://github.com/shrimbly/node-banana/releases); every release also lists SHA-256 checksums for its installers.
+
+Then open Settings → Providers and paste the API keys for the providers you use. Node Banana calls those providers directly with your keys, and their usage is billed to you by them. Keys are stored encrypted in your OS profile; workflows and generated media are files in the Node Banana folder (Documents by default). See the [desktop guide](docs/desktop-preview.md) for data locations, logs, recovery and updates.
+
+### Run from source
+
+#### Prerequisites
 
 - Node.js 18+
 - npm
 
-### Quick Start
+#### Quick Start
 
 ```bash
 git clone https://github.com/shrimbly/node-banana.git
@@ -78,6 +92,59 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+`npm run dev` and `npm start` (after `npm run build`) listen on `127.0.0.1`
+only, and the API answers Node Banana's own page, not other websites. To reach
+the app from another device, set `HOST=0.0.0.0` (for example
+`HOST=0.0.0.0 npm start`). Do that only on a trusted network or behind an
+authenticated proxy: the API reads and writes local workflow files and spends
+the provider keys in `.env.local`.
+
+### Local Electron app
+
+Use Node.js 22.12 or newer for the Electron tooling. After `npm install`, launch
+the desktop development app:
+
+```bash
+npm run electron:dev
+```
+
+This opens Node Banana in an Electron window and starts its own local Next.js
+server. UI edits reload automatically. Restart the command after changing files
+in `electron/`. No separate `npm run dev` process is needed.
+
+To run a production build locally:
+
+```bash
+npm run build
+npm run electron:start
+```
+
+When running from source, the app reads the same `.env.local` as the browser version, and API keys can also
+be entered in Settings. Desktop settings use a separate persistent Electron
+profile; existing browser settings are not imported automatically. Workflows
+remain ordinary files that either version can open. Folder selection uses a
+native desktop dialog.
+
+The desktop server binds to `127.0.0.1:47831` and only accepts authenticated
+requests from the Electron session. Set `NODE_BANANA_ELECTRON_PORT` to override
+the port if it is occupied. Keep that port consistent: browser storage is tied
+to the origin. `NODE_BANANA_ELECTRON_USER_DATA` can point to an alternate absolute
+profile directory. Electron development output lives in `.next-electron`, so
+the browser dev server can run separately.
+
+Run `npm run electron:smoke` to check the real desktop window, editor interaction,
+local file save/load, native dialog bridge, settings persistence, and server
+shutdown using a temporary profile. It needs a graphical desktop (or Xvfb on
+Linux). Add `-- --production` to test an existing production build. These commands
+run from source. Use `npm run electron:package` for an unsigned Apple Silicon app, DMG and ZIP (`--sign` signs and notarises it; on Windows it makes the installer), and `npm run electron:acceptance` for packaged crash/recovery checks. See the [desktop guide](docs/desktop-preview.md) for installation, encrypted credentials, recovery and how releases are cut. ComfyUI remains a separately installed or remote service.
+
+For macOS title-bar changes, also run
+`npm run electron:smoke -- --production --native-input` after building. This uses
+`cliclick` (installed separately) with macOS Accessibility permission to test real
+mouse hover, clicks, and window dragging; browser automation alone bypasses the
+native draggable-region hit testing. It brings the test window to the front and
+moves the mouse, so let it finish before interacting with the desktop.
 
 ### Environment Variables
 
@@ -177,6 +244,9 @@ The `/examples` directory contains example workflow files. To try them:
 npm test              # Watch mode
 npm run test:run      # Single run
 npm run test:coverage # With coverage report
+npm run electron:test # The desktop shell's own tests
+npm run lint          # ESLint (Next.js rules)
+npm run typecheck     # Type-check the app without its tests
 ```
 
 ## Contributing

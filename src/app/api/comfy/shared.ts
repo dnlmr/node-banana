@@ -13,6 +13,7 @@ import { ComfyConfigError } from "@/lib/comfy/server";
 import { ComfyEngineError } from "@/lib/comfy/server/engine";
 import { ComfyImportError } from "@/lib/comfy/server/import";
 import { ComfyConversionError } from "@/lib/comfy/editor";
+import { parseDataUrl } from "@/utils/dataUrl";
 
 export interface ComfyErrorResponse {
   success: false;
@@ -75,17 +76,6 @@ export function comfyErrorResponse(error: unknown): NextResponse<ComfyErrorRespo
   );
 }
 
-/**
- * `data:` prefix: the media type, then any `;key=value` parameters, then the
- * optional `;base64` marker.
- *
- * The parameters group is not decoration. Without it `data:text/plain;charset=utf-8;base64,…`
- * matches nothing at all — `(;base64)?` cannot consume `;charset=utf-8`, so the
- * required comma never matches — and the caller reports a perfectly valid input
- * as media it could not read.
- */
-const DATA_URL = /^data:([^;,]+)?((?:;[^;,]*)*?)(;base64)?,/;
-
 /** Decoded media from a `data:` URL. */
 export interface DecodedMedia {
   bytes: Uint8Array;
@@ -99,20 +89,15 @@ export interface DecodedMedia {
  * connected image reaches the engine. Returns null for anything else (a remote
  * URL, a blob: URL that never survived serialization) so the caller can report
  * which input could not be read.
+ *
+ * The shared parser (`src/utils/dataUrl.ts`) reads the media type, any
+ * `;key=value` parameters (`data:text/plain;charset=utf-8;base64,…` is as valid
+ * as the bare form) and the base64 flag, and decodes only the payload.
  */
 export function decodeDataUrl(value: string): DecodedMedia | null {
-  const match = DATA_URL.exec(value);
-  if (!match) return null;
-  const contentType = match[1] || "application/octet-stream";
-  const payload = value.slice(match[0].length);
-  try {
-    const bytes = match[3]
-      ? new Uint8Array(Buffer.from(payload, "base64"))
-      : new TextEncoder().encode(decodeURIComponent(payload));
-    return bytes.length > 0 ? { bytes, contentType } : null;
-  } catch {
-    return null;
-  }
+  const parsed = parseDataUrl(value);
+  if (!parsed || parsed.bytes.length === 0) return null;
+  return { bytes: new Uint8Array(parsed.bytes), contentType: parsed.mime || "application/octet-stream" };
 }
 
 /**

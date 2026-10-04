@@ -1,14 +1,50 @@
 "use client";
 
+import { Check, CircleAlert, CircleCheck, Copy, Info, Pause, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
+import { DesktopUpdateNotice } from "./DesktopUpdateNotice";
+
+/**
+ * Where notifications stack (this toast and the generation cards): under the
+ * history button, which sits at the canvas's top-right inset (tab strip 38px + frame border 1px + 16px margin,
+ * then the 42px button and an 8px gap; 4px frame margin + 1px border + 16px
+ * from the right).
+ */
+export const STACK_TOP = 38 + 1 + 16 + 42 + 8;
+export const STACK_RIGHT = 4 + 1 + 16;
+/**
+ * Where the notifications hang, as a distance from the canvas's right edge:
+ * the window's edge, or the history button's inset while the agent window
+ * covers the corner. Published by the history button (GlobalImageHistory).
+ */
+export const HISTORY_RIGHT_VAR = "--nb-history-right";
+/** STACK_RIGHT as CSS, following that anchor. */
+export const STACK_RIGHT_CSS = `calc(${STACK_RIGHT - 16}px + var(${HISTORY_RIGHT_VAR}, 16px))`;
+
+/** A text button on the toast ("Show", "Change…"); choosing it also dismisses the toast. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+/** How long a toast stays up; one with actions gets longer, so there is time to reach them. */
+const AUTO_HIDE_MS = 4000;
+const AUTO_HIDE_WITH_ACTIONS_MS = 8000;
 
 interface ToastState {
   message: string | null;
   type: "info" | "success" | "warning" | "error";
   persistent: boolean;
   details: string | null;
-  show: (message: string, type?: "info" | "success" | "warning" | "error", persistent?: boolean, details?: string | null) => void;
+  actions: ToastAction[] | null;
+  show: (
+    message: string,
+    type?: "info" | "success" | "warning" | "error",
+    persistent?: boolean,
+    details?: string | null,
+    actions?: ToastAction[] | null
+  ) => void;
   hide: () => void;
 }
 
@@ -17,8 +53,10 @@ export const useToast = create<ToastState>((set) => ({
   type: "info",
   persistent: false,
   details: null,
-  show: (message, type = "info", persistent = false, details = null) => set({ message, type, persistent, details }),
-  hide: () => set({ message: null, persistent: false, details: null }),
+  actions: null,
+  show: (message, type = "info", persistent = false, details = null, actions = null) =>
+    set({ message, type, persistent, details, actions: actions && actions.length > 0 ? actions : null }),
+  hide: () => set({ message: null, persistent: false, details: null, actions: null }),
 }));
 
 const typeStyles = {
@@ -30,29 +68,21 @@ const typeStyles = {
 
 const typeIcons = {
   info: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <Info size={20} strokeWidth={2} />
   ),
   success: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <CircleCheck size={20} strokeWidth={2} />
   ),
   warning: (
-    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-    </svg>
+    <Pause size={20} strokeWidth={0} fill="currentColor" />
   ),
   error: (
-    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-    </svg>
+    <CircleAlert size={20} strokeWidth={2} />
   ),
 };
 
 export function Toast() {
-  const { message, type, persistent, details, hide } = useToast();
+  const { message, type, persistent, details, actions, hide } = useToast();
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -60,7 +90,7 @@ export function Toast() {
     // Reset expanded state when toast changes
     setIsExpanded(false);
     setCopied(false);
-  }, [message]);
+  }, [message, details]);
 
   const handleCopy = async () => {
     const textToCopy = details ? `${message}\n\n${details}` : message;
@@ -75,57 +105,74 @@ export function Toast() {
     if (message && !persistent) {
       const timer = setTimeout(() => {
         hide();
-      }, 4000);
+      }, actions ? AUTO_HIDE_WITH_ACTIONS_MS : AUTO_HIDE_MS);
       return () => clearTimeout(timer);
     }
-  }, [message, persistent, hide]);
-
-  if (!message) return null;
+  }, [message, persistent, actions, hide]);
 
   return (
-    <div className="fixed top-6 right-6 z-[200] animate-in fade-in slide-in-from-top-4 duration-300 max-w-md">
+    <div
+      className="pointer-events-none fixed z-[200] flex w-96 min-w-0 flex-col items-end gap-2 [&>*]:pointer-events-auto"
+      style={{ top: STACK_TOP, right: STACK_RIGHT_CSS, maxWidth: `calc(100vw - ${STACK_RIGHT * 2}px)` }}
+    >
+      <DesktopUpdateNotice />
+      {message && (
       <div
-        className={`flex flex-col rounded-lg border shadow-xl ${typeStyles[type]}`}
+        className={`animate-drop-in flex w-full min-w-0 flex-col overflow-hidden rounded-lg border shadow-xl ${typeStyles[type]}`}
+        style={{ maxHeight: `min(360px, calc(100dvh - ${STACK_TOP + 16}px))` }}
       >
-        <div className="flex items-center gap-3 px-4 py-3">
-          {typeIcons[type]}
-          <span className="text-sm font-medium flex-1">{message}</span>
+        <div className="flex shrink-0 items-start gap-3 px-4 py-3">
+          <span className="shrink-0 pt-0.5">{typeIcons[type]}</span>
+          <span className="min-w-0 max-h-24 flex-1 overflow-y-auto overscroll-contain text-sm font-medium [overflow-wrap:anywhere]">{message}</span>
           <button
             onClick={handleCopy}
-            className="p-1 rounded hover:bg-white/10 transition-colors"
+            className="shrink-0 p-1 rounded hover:bg-white/10 transition-colors"
             title="Copy message"
           >
             {copied ? (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
+              <Check size={16} strokeWidth={2} />
             ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
+              <Copy size={16} strokeWidth={2} />
             )}
           </button>
           <button
             onClick={hide}
-            className="p-1 rounded hover:bg-white/10 transition-colors"
+            className="shrink-0 p-1 rounded hover:bg-white/10 transition-colors"
             title="Dismiss"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={16} strokeWidth={2} />
           </button>
         </div>
+        {actions && (
+          // Under the message, the labels on its left edge: px-4 + 20px icon + gap-3, less the buttons' own 6px
+          <div className="-mt-1.5 flex shrink-0 flex-wrap items-center gap-1 pb-2.5 pl-[42px] pr-4">
+            {actions.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={() => {
+                  hide();
+                  action.onClick();
+                }}
+                className="rounded px-1.5 py-1 text-xs font-semibold opacity-90 hover:bg-white/10 hover:opacity-100 transition-colors"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
         {details && (
           <>
             <button
               onClick={() => setIsExpanded(!isExpanded)}
-              className="px-4 py-1 text-xs opacity-70 hover:opacity-100 transition-opacity text-left border-t border-white/10"
+              aria-expanded={isExpanded}
+              className="shrink-0 px-4 py-1 text-xs opacity-70 hover:opacity-100 transition-opacity text-left border-t border-white/10"
             >
               {isExpanded ? "Hide details" : "Show details"}
             </button>
             {isExpanded && (
-              <div className="px-4 pb-3">
-                <pre className="bg-black/30 rounded p-2 max-h-40 overflow-auto text-xs font-mono whitespace-pre-wrap break-words">
+              <div className="min-h-0 overflow-y-auto overscroll-contain px-4 pb-3">
+                <pre className="max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap rounded bg-black/30 p-2 text-xs font-mono [overflow-wrap:anywhere]">
                   {details}
                 </pre>
               </div>
@@ -133,6 +180,7 @@ export function Toast() {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }

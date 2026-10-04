@@ -1,34 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
+import { decodeBase64, parseDataUrl } from "@/utils/dataUrl";
 import { logger } from "@/utils/logger";
+import { sniffExtension } from "@/utils/mediaSniff";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 
 export const maxDuration = 300; // 5 minute timeout for large image operations
 
+// Both handlers answer only Node Banana's own page (see guard.ts).
+
 const IMAGES_FOLDER = "inputs";
 const LEGACY_IMAGES_FOLDER = ".images"; // For backward compatibility
 
-// Helper to extract MIME type and extension from data URL
-function getMimeAndExtension(dataUrl: string): { mime: string; extension: string } {
-  const match = dataUrl.match(/^data:(image\/\w+);base64,/);
-  if (match) {
-    const mime = match[1];
-    const mimeToExt: Record<string, string> = {
-      "image/png": "png",
-      "image/jpeg": "jpg",
-      "image/jpg": "jpg",
-      "image/gif": "gif",
-      "image/webp": "webp",
-    };
-    return { mime, extension: mimeToExt[mime] || "png" };
+/** Image extensions GET looks for, in order, and the MIME type it serves each as. */
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
+const MIME_TO_EXTENSION: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+};
+
+/** The bytes of a data: URL (any media type, or none), else of raw base64; null when it is neither. */
+function decodeImageData(imageData: string): { bytes: Uint8Array; mime: string } | null {
+  if (imageData.slice(0, 5).toLowerCase() === "data:") {
+    const parsed = parseDataUrl(imageData);
+    return parsed ? { bytes: parsed.bytes, mime: parsed.mime } : null;
   }
-  // Default to PNG if no MIME type found
-  return { mime: "image/png", extension: "png" };
+  const bytes = decodeBase64(imageData);
+  return bytes ? { bytes, mime: "" } : null;
+}
+
+/** The extension to save under: what the bytes prove (if GET can load it), else the declared type, else png. */
+function imageExtension(bytes: Uint8Array, mime: string): string {
+  const sniffed = sniffExtension(bytes, "image");
+  if (sniffed && sniffed in IMAGE_EXTENSIONS) return sniffed;
+  return MIME_TO_EXTENSION[mime] ?? "png";
 }
 
 // POST: Save an image to the workflow's inputs or generations folder
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let workflowPath: string | undefined;
   let imageId: string | undefined;
   let folder: string | undefined;
@@ -72,6 +97,20 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json(
         { success: false, error: pathValidation.error },
+        { status: 400 }
+      );
+    }
+
+    // Only the payload is decoded (whatever media type the URL declares, or none):
+    // decoding the whole string would write noise no decoder can open.
+    const decoded = typeof imageData === "string" ? decodeImageData(imageData) : null;
+    if (!decoded) {
+      logger.warn('file.save', 'Workflow image save failed: imageData is not a data URL or base64', {
+        workflowPath,
+        imageId,
+      });
+      return NextResponse.json(
+        { success: false, error: "imageData is not a readable data URL or base64" },
         { status: 400 }
       );
     }
@@ -145,14 +184,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Extract MIME type and determine file extension
-    const { extension } = getMimeAndExtension(imageData);
+    // The bytes pick the extension when they prove a format; the declared type is only a label.
+    const extension = imageExtension(decoded.bytes, decoded.mime);
     const filename = `${safeImageId}.${extension}`;
     const filePath = path.join(targetFolder, filename);
-
-    // Extract base64 data and convert to buffer
-    const base64Data = imageData.replace(/^data:image\/\w+;base64,/, "");
-    const buffer = Buffer.from(base64Data, "base64");
+    const buffer = Buffer.from(decoded.bytes.buffer, decoded.bytes.byteOffset, decoded.bytes.byteLength);
 
     // Write the image file
     await fs.writeFile(filePath, buffer);
@@ -183,11 +219,40 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** Stems of every file under the workflow's media folders (inputs, generations, legacy .images). */
+async function listMediaIds(workflowPath: string): Promise<string[]> {
+  const ids = new Set<string>();
+  for (const sub of [IMAGES_FOLDER, "generations", LEGACY_IMAGES_FOLDER]) {
+    let names: string[] = [];
+    try {
+      names = await fs.readdir(path.join(workflowPath, sub));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const dot = name.lastIndexOf(".");
+      ids.add(dot > 0 ? name.slice(0, dot) : name);
+    }
+  }
+  return [...ids];
+}
+
 // GET: Load an image from the workflow's folders (inputs, generations, or legacy .images)
 export async function GET(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const workflowPath = request.nextUrl.searchParams.get("workflowPath");
   const imageId = request.nextUrl.searchParams.get("imageId");
   const folder = request.nextUrl.searchParams.get("folder"); // Optional hint for which folder to check first
+
+  // ?list=1: the ids of every media file the folder holds, so a save can tell a
+  // ref that still has its file from one that does not before trusting it.
+  if (request.nextUrl.searchParams.get("list") === "1") {
+    if (!workflowPath) return NextResponse.json({ success: false, error: "Missing workflowPath" }, { status: 400 });
+    const pathValidation = validateWorkflowPath(workflowPath);
+    if (!pathValidation.valid) return NextResponse.json({ success: false, error: pathValidation.error }, { status: 400 });
+    return NextResponse.json({ success: true, ids: await listMediaIds(workflowPath) });
+  }
 
   logger.info('file.load', 'Workflow image load request received', {
     workflowPath,
@@ -246,7 +311,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Construct file path - check folders and extensions in order
-    const possibleExtensions = ["png", "jpg", "jpeg", "gif", "webp"];
+    const possibleExtensions = Object.keys(IMAGE_EXTENSIONS);
     const inputsFolder = path.join(workflowPath, IMAGES_FOLDER);
     const generationsFolder = path.join(workflowPath, "generations");
     const legacyFolder = path.join(workflowPath, LEGACY_IMAGES_FOLDER);
@@ -298,9 +363,7 @@ export async function GET(request: NextRequest) {
 
     // Convert to base64 data URL with correct MIME type
     const base64 = buffer.toString("base64");
-    const mimeType = foundExtension === "jpg" || foundExtension === "jpeg"
-      ? "image/jpeg"
-      : `image/${foundExtension}`;
+    const mimeType = IMAGE_EXTENSIONS[foundExtension] ?? "image/png";
     const dataUrl = `data:${mimeType};base64,${base64}`;
 
     logger.info('file.load', 'Workflow image loaded successfully', {

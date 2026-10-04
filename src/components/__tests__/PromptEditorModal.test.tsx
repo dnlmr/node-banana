@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { PromptEditorModal } from "@/components/modals/PromptEditorModal";
+import { pickOption } from "@/test/dropdown";
 
 // Mock localStorage
 const mockLocalStorage = {
@@ -471,7 +472,7 @@ describe("PromptEditorModal", () => {
       );
 
       const fontSizeSelect = screen.getByRole("combobox");
-      expect(fontSizeSelect).toHaveValue("14");
+      expect(fontSizeSelect).toHaveAttribute("data-value", "14");
     });
 
     it("should load saved font size from localStorage", () => {
@@ -487,7 +488,7 @@ describe("PromptEditorModal", () => {
       );
 
       const fontSizeSelect = screen.getByRole("combobox");
-      expect(fontSizeSelect).toHaveValue("18");
+      expect(fontSizeSelect).toHaveAttribute("data-value", "18");
     });
 
     it("should update font size when selection changes", () => {
@@ -501,9 +502,9 @@ describe("PromptEditorModal", () => {
       );
 
       const fontSizeSelect = screen.getByRole("combobox");
-      fireEvent.change(fontSizeSelect, { target: { value: "20" } });
+      pickOption(fontSizeSelect, "20");
 
-      expect(fontSizeSelect).toHaveValue("20");
+      expect(fontSizeSelect).toHaveAttribute("data-value", "20");
     });
 
     it("should save font size to localStorage when changed", () => {
@@ -517,7 +518,7 @@ describe("PromptEditorModal", () => {
       );
 
       const fontSizeSelect = screen.getByRole("combobox");
-      fireEvent.change(fontSizeSelect, { target: { value: "20" } });
+      pickOption(fontSizeSelect, "20");
 
       expect(mockLocalStorage.setItem).toHaveBeenCalledWith(
         "prompt-editor-font-size",
@@ -535,13 +536,9 @@ describe("PromptEditorModal", () => {
         />
       );
 
-      expect(screen.getByText("10px")).toBeInTheDocument();
-      expect(screen.getByText("12px")).toBeInTheDocument();
-      expect(screen.getByText("14px")).toBeInTheDocument();
-      expect(screen.getByText("16px")).toBeInTheDocument();
-      expect(screen.getByText("18px")).toBeInTheDocument();
-      expect(screen.getByText("20px")).toBeInTheDocument();
-      expect(screen.getByText("24px")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("combobox"));
+      const labels = screen.getAllByRole("option").map((o) => o.textContent);
+      expect(labels).toEqual(["10px", "12px", "14px", "16px", "18px", "20px", "24px"]);
     });
 
     it("should apply font size to textarea", () => {
@@ -555,7 +552,7 @@ describe("PromptEditorModal", () => {
       );
 
       const fontSizeSelect = screen.getByRole("combobox");
-      fireEvent.change(fontSizeSelect, { target: { value: "20" } });
+      pickOption(fontSizeSelect, "20");
 
       const textarea = screen.getByPlaceholderText("Describe what to generate...");
       expect(textarea).toHaveStyle({ fontSize: "20px" });
@@ -574,7 +571,7 @@ describe("PromptEditorModal", () => {
       );
 
       const fontSizeSelect = screen.getByRole("combobox");
-      expect(fontSizeSelect).toHaveValue("14");
+      expect(fontSizeSelect).toHaveAttribute("data-value", "14");
     });
 
     it("should fall back to default if localStorage value is out of range", () => {
@@ -590,7 +587,7 @@ describe("PromptEditorModal", () => {
       );
 
       const fontSizeSelect = screen.getByRole("combobox");
-      expect(fontSizeSelect).toHaveValue("14");
+      expect(fontSizeSelect).toHaveAttribute("data-value", "14");
     });
   });
 });

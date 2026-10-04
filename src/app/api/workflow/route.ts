@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { atomicWriteFile } from "@/lib/assets/server/fsutil";
+import { guardAssetRequest } from "@/lib/assets/server/guard";
 import { logger } from "@/utils/logger";
 import { validateWorkflowPath } from "@/utils/pathValidation";
 
 export const maxDuration = 300; // 5 minute timeout for large workflow files
 
+// Both handlers answer only Node Banana's own page (see guard.ts).
+
 // POST: Save workflow to file
 export async function POST(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   let directoryPath: string | undefined;
   let filename: string | undefined;
   try {
@@ -113,9 +119,10 @@ export async function POST(request: NextRequest) {
     const safeName = filename.replace(/[^a-zA-Z0-9-_]/g, "_");
     const filePath = path.join(directoryPath, `${safeName}.json`);
 
-    // Write workflow JSON
+    // Write beside the file and rename over it, so a write that fails midway
+    // (a full disk) leaves the last good save rather than a truncated one
     const json = JSON.stringify(workflow, null, 2);
-    await fs.writeFile(filePath, json, "utf-8");
+    await atomicWriteFile(filePath, json, { fsync: true });
 
     logger.info('file.save', 'Workflow saved successfully', {
       filePath,
@@ -143,6 +150,8 @@ export async function POST(request: NextRequest) {
 
 // GET: Validate directory path, or load workflow from directory
 export async function GET(request: NextRequest) {
+  const refused = guardAssetRequest(request);
+  if (refused) return refused;
   const directoryPath = request.nextUrl.searchParams.get("path");
   const shouldLoad = request.nextUrl.searchParams.get("load") === "true";
 

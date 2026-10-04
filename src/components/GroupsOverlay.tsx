@@ -1,42 +1,34 @@
 "use client";
 
+import { Ellipsis, Lock, LogOut, Pencil, Play, Repeat, Trash2 } from "lucide-react";
 import { memo, useCallback, useState, useRef, useEffect } from "react";
-import { useStore, ViewportPortal, type ReactFlowState } from "@xyflow/react";
+import { useStore, ViewportPortal, type ReactFlowState, useReactFlow } from "@xyflow/react";
 import { useShallow } from "zustand/shallow";
-import { useWorkflowStore, GROUP_COLORS } from "@/store/workflowStore";
+import { useWorkflowStore } from "@/store/workflowStore";
+import { GROUP_COLOR_ORDER } from "@/store/utils/nodeDefaults";
 import { GroupColor } from "@/types";
 import { isOverviewZoom } from "@/utils/canvasPerformance";
+import { groupBaseColor, groupColorLabel, groupFill, groupLabelColor } from "@/utils/groupColors";
+import { cn } from "@/components/nodes/ui/cn";
+import { MenuDivider, MenuItem, MenuList, MenuSectionLabel, MenuShortcut, MenuStepper, MenuSurface } from "@/components/ui/Menu";
+import { MAX_RUN_COUNT } from "@/store/utils/runBatch";
 
-const COLOR_OPTIONS: { color: GroupColor; label: string }[] = [
-  { color: "neutral", label: "Gray" },
-  { color: "blue", label: "Blue" },
-  { color: "green", label: "Green" },
-  { color: "purple", label: "Purple" },
-  { color: "orange", label: "Orange" },
-  { color: "red", label: "Red" },
-];
-
-// Brighter preview colors for the color picker (more saturated/vivid)
-const PICKER_PREVIEW_COLORS: Record<GroupColor, string> = {
-  neutral: "#525252",
-  blue: "#3b82f6",
-  green: "#22c55e",
-  purple: "#8b5cf6",
-  orange: "#f97316",
-  red: "#ef4444",
-};
+/** Inset of the label from the group's left edge, so it starts inside the corner radius. */
+const LABEL_INSET = 10;
 
 interface GroupBackgroundProps {
   groupId: string;
 }
 
-// Renders just the group background - displayed below nodes (z-index 1)
-function GroupBackground({ groupId }: GroupBackgroundProps) {
+// Renders just the group background - displayed below nodes (z-index 1).
+// A faint wash of the group's hue and nothing else: the hue is painted once,
+// here, and once more as the label's text colour. Memoised, with the portals
+// below, because the canvas re-renders on every drag frame and would take
+// every group with it.
+const GroupBackground = memo(function GroupBackground({ groupId }: GroupBackgroundProps) {
   const group = useWorkflowStore((state) => state.groups[groupId]);
 
   if (!group) return null;
-
-  const bgColor = GROUP_COLORS[group.color];
 
   return (
     <div
@@ -46,27 +38,41 @@ function GroupBackground({ groupId }: GroupBackgroundProps) {
         top: group.position.y,
         width: group.size.width,
         height: group.size.height,
-        backgroundColor: `${bgColor}60`,
-        border: group.isNbpInput ? `3px dashed rgba(255,255,255,0.25)` : `1px solid ${bgColor}`,
+        backgroundColor: groupFill(group.color),
         pointerEvents: "none",
       }}
     />
+  );
+});
+
+/** A passive switch drawn inside a menu row; the row itself is the control. */
+function RowSwitch({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "ml-auto inline-flex h-4 w-[26px] shrink-0 items-center rounded-full p-0.5 transition-colors",
+        on ? "justify-end bg-neutral-200" : "justify-start bg-white/12"
+      )}
+    >
+      <span className={cn("h-3 w-3 rounded-full", on ? "bg-neutral-900" : "bg-neutral-400")} />
+    </span>
   );
 }
 
 interface GroupControlsProps {
   groupId: string;
-  zoom: number;
   showInteractiveControls: boolean;
 }
 
 // Renders the group header and resize handles - displayed above nodes (z-index 5)
+// The zoom reaches the header as a CSS variable on the overlay and the drag
+// math reads it at event time, so a zoom step does not re-render every group.
 const GroupControls = memo(function GroupControls({
   groupId,
-  zoom,
   showInteractiveControls,
 }: GroupControlsProps) {
-  const { group, updateGroup, deleteGroup, moveGroupNodes, toggleGroupLock } =
+  const { group, updateGroup, deleteGroup, moveGroupNodes, toggleGroupLock, runCount, setRunCount, runBatch, isRunning } =
     useWorkflowStore(
       useShallow((state) => ({
         group: state.groups[groupId],
@@ -74,12 +80,16 @@ const GroupControls = memo(function GroupControls({
         deleteGroup: state.deleteGroup,
         moveGroupNodes: state.moveGroupNodes,
         toggleGroupLock: state.toggleGroupLock,
+        runCount: state.runCount,
+        setRunCount: state.setRunCount,
+        runBatch: state.runBatch,
+        isRunning: state.isRunning,
       }))
     );
 
+  const { getViewport } = useReactFlow();
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(group?.name || "");
-  const [showColorPicker, setShowColorPicker] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -87,15 +97,7 @@ const GroupControls = memo(function GroupControls({
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const resizeStartRef = useRef<{ x: number; y: number; width: number; height: number; posX: number; posY: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const colorPickerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // Reset color picker when menu closes
-  useEffect(() => {
-    if (!showMenu) {
-      setShowColorPicker(false);
-    }
-  }, [showMenu]);
 
   useEffect(() => {
     if (group?.name && !isEditing) {
@@ -112,19 +114,16 @@ const GroupControls = memo(function GroupControls({
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (colorPickerRef.current && !colorPickerRef.current.contains(e.target as Node)) {
-        setShowColorPicker(false);
-      }
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setShowMenu(false);
       }
     };
 
-    if (showColorPicker || showMenu) {
+    if (showMenu) {
       document.addEventListener("mousedown", handleClickOutside);
     }
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [showColorPicker, showMenu]);
+  }, [showMenu]);
 
   const handleNameSubmit = useCallback(() => {
     if (editName.trim() && editName !== group?.name) {
@@ -139,7 +138,6 @@ const GroupControls = memo(function GroupControls({
     if (showInteractiveControls) return;
     if (isEditing) handleNameSubmit();
     setShowMenu(false);
-    setShowColorPicker(false);
   }, [showInteractiveControls, isEditing, handleNameSubmit]);
 
   const handleKeyDown = useCallback(
@@ -154,10 +152,10 @@ const GroupControls = memo(function GroupControls({
     [handleNameSubmit, group?.name]
   );
 
+  // The menu stays open: the swatches are for trying colours against the canvas.
   const handleColorChange = useCallback(
     (color: GroupColor) => {
       updateGroup(groupId, { color });
-      setShowColorPicker(false);
     },
     [groupId, updateGroup]
   );
@@ -175,7 +173,8 @@ const GroupControls = memo(function GroupControls({
     (e: React.MouseEvent) => {
       if (
         (e.target as HTMLElement).closest("button") ||
-        (e.target as HTMLElement).closest("input")
+        (e.target as HTMLElement).closest("input") ||
+        (e.target as HTMLElement).closest('[role="menu"]')
       ) {
         return;
       }
@@ -212,6 +211,7 @@ const GroupControls = memo(function GroupControls({
     const handleMouseMove = (e: MouseEvent) => {
       if (!dragStartRef.current) return;
 
+      const { zoom } = getViewport();
       const deltaX = (e.clientX - dragStartRef.current.x) / zoom;
       const deltaY = (e.clientY - dragStartRef.current.y) / zoom;
 
@@ -241,7 +241,7 @@ const GroupControls = memo(function GroupControls({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isDragging, groupId, group?.position, moveGroupNodes, updateGroup, zoom]);
+  }, [isDragging, groupId, group?.position, moveGroupNodes, updateGroup, getViewport]);
 
   useEffect(() => {
     if (!isResizing || !resizeHandle) return;
@@ -249,6 +249,7 @@ const GroupControls = memo(function GroupControls({
     const handleMouseMove = (e: MouseEvent) => {
       if (!resizeStartRef.current) return;
 
+      const { zoom } = getViewport();
       const deltaX = (e.clientX - resizeStartRef.current.x) / zoom;
       const deltaY = (e.clientY - resizeStartRef.current.y) / zoom;
 
@@ -294,11 +295,13 @@ const GroupControls = memo(function GroupControls({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isResizing, resizeHandle, groupId, updateGroup, zoom]);
+  }, [isResizing, resizeHandle, groupId, updateGroup, getViewport]);
 
   if (!group) return null;
 
-  const bgColor = GROUP_COLORS[group.color];
+  const labelColor = groupLabelColor(group.color);
+  const locked = Boolean(group.locked);
+  const nbpInput = Boolean(group.isNbpInput);
 
   return (
     <div
@@ -312,41 +315,30 @@ const GroupControls = memo(function GroupControls({
         overflow: "visible",
       }}
     >
-      {/* Group title label + three-dot menu - top-left, viewport-scaled */}
+      {/* Group title + menu - top-left, viewport-scaled */}
       {/* Outer wrapper: zero-height anchor at the top edge of the group */}
       <div
-        className="absolute left-0"
-        style={{ top: 0, height: 0, overflow: "visible" }}
+        className="absolute"
+        style={{ left: LABEL_INSET, top: 0, height: 0, overflow: "visible" }}
       >
         {/* Inner scaled element: bottom-anchored so it grows upward, scale keeps bottom-left fixed */}
         <div
           ref={menuRef}
-          className={`absolute left-0 select-none ${
-            showInteractiveControls
-              ? "pointer-events-auto cursor-grab active:cursor-grabbing"
-              : "pointer-events-none"
-          }`}
+          className={cn(
+            "group/header absolute left-0 select-none",
+            showInteractiveControls ? "pointer-events-auto cursor-grab active:cursor-grabbing" : "pointer-events-none"
+          )}
           style={{
             bottom: 0,
-            transform: `scale(${1 / zoom})`,
+            transform: "scale(calc(1 / var(--group-zoom, 1)))",
             transformOrigin: "bottom left",
             whiteSpace: "nowrap",
           }}
           onMouseDown={showInteractiveControls ? handleHeaderMouseDown : undefined}
         >
-          <div
-            className="flex items-center gap-0.5 mb-1"
-          >
-            {/* Title pill */}
-            <div
-              className="flex items-center rounded-md px-2 py-0.5"
-              style={{ backgroundColor: bgColor }}
-            >
-              {group.locked && (
-                <svg className="w-3 h-3 text-white/70 mr-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              )}
+          <div className="mb-1 flex items-center gap-0.5">
+            {/* Title: the hue as text, with the lock and NBP marks after the name */}
+            <div className="flex h-5 items-center gap-1.5 pr-0.5" style={{ color: labelColor }}>
               {isEditing ? (
                 <input
                   ref={inputRef}
@@ -355,154 +347,139 @@ const GroupControls = memo(function GroupControls({
                   onChange={(e) => setEditName(e.target.value)}
                   onBlur={handleNameSubmit}
                   onKeyDown={handleKeyDown}
-                  className="bg-transparent border-none outline-none text-xs font-medium text-white px-0 py-0"
-                  style={{ minWidth: 60, maxWidth: 200, width: `${Math.max(60, editName.length * 7)}px` }}
+                  className="border-none bg-transparent px-0 py-0 text-xs font-medium outline-none"
+                  style={{ color: labelColor, minWidth: 60, maxWidth: 200, width: `${Math.max(60, editName.length * 7)}px` }}
                 />
               ) : (
                 <span
-                  className="text-xs font-medium text-white truncate"
+                  className="truncate text-xs font-medium"
                   style={{ maxWidth: 200 }}
                   onDoubleClick={showInteractiveControls ? (e) => { e.stopPropagation(); setIsEditing(true); } : undefined}
                 >
                   {group.name}
                 </span>
               )}
+              {locked && <Lock size={12} strokeWidth={2} className="shrink-0 text-neutral-400" aria-label="Locked" />}
+              {nbpInput && <LogOut size={12} strokeWidth={2} className="shrink-0 text-neutral-400" aria-label="NBP input" />}
             </div>
 
-            {/* Three-dot menu toggle — omitted in overview mode */}
-            {showInteractiveControls && <div className="relative group-interactive-controls">
+            {/* Menu toggle: shown on hover of the header, or while the menu is open. Omitted in overview mode */}
+            {showInteractiveControls && <div className="group-interactive-controls relative">
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
-                className="w-6 h-6 rounded-md flex flex-col items-center justify-center gap-[2px] hover:bg-white/20 transition-colors"
+                className={cn(
+                  "flex h-5 w-5 items-center justify-center rounded-md transition-[opacity,background-color,color]",
+                  "focus-visible:opacity-100 focus-visible:outline-none",
+                  showMenu
+                    ? "bg-white/12 text-white opacity-100"
+                    : "text-neutral-300 opacity-0 hover:bg-white/6 group-hover/header:opacity-100"
+                )}
                 title="Group options"
+                aria-label="Group options"
+                aria-haspopup="menu"
+                aria-expanded={showMenu}
               >
-                <div className="w-[3px] h-[3px] rounded-full bg-white/70" />
-                <div className="w-[3px] h-[3px] rounded-full bg-white/70" />
-                <div className="w-[3px] h-[3px] rounded-full bg-white/70" />
+                <Ellipsis size={14} strokeWidth={2} />
               </button>
 
-              {/* Vertical context menu - appears above the three-dot button */}
+              {/* The menu sits above the button, left-aligned to it */}
               {showMenu && (
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-neutral-800/90 backdrop-blur rounded-lg py-1 min-w-[130px] shadow-lg shadow-black/30" ref={colorPickerRef}>
-                  {/* Color fan - anchored to top-left corner of menu */}
-                  {showColorPicker && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setShowColorPicker(false)}
-                      />
-                      <div className="absolute top-0 left-0 z-50 pointer-events-auto">
-                        {COLOR_OPTIONS.map(({ color, label }, index) => {
-                          const totalItems = COLOR_OPTIONS.length;
-                          const arcSpread = 180;
-                          const startAngle = -130 - arcSpread / 2;
-                          const angleStep = arcSpread / (totalItems - 1);
-                          const angle = startAngle + index * angleStep;
-                          const radius = 55;
-                          const rad = (angle * Math.PI) / 180;
-                          const x = Math.cos(rad) * radius;
-                          const y = Math.sin(rad) * radius;
-                          const finalX = x;
-                          const finalY = y;
-
-                          return (
-                            <button
-                              key={color}
-                              onClick={() => handleColorChange(color)}
-                              className={`absolute w-6 h-6 rounded-full border-2 transition-[transform,border-color] duration-150 hover:scale-125 ${
-                                group.color === color
-                                  ? "border-white"
-                                  : "border-transparent hover:border-white/50"
-                              }`}
-                              style={{
-                                backgroundColor: PICKER_PREVIEW_COLORS[color],
-                                left: finalX - 12,
-                                top: finalY - 12,
-                                animation: `colorFanIn-${index} 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards`,
-                                animationDelay: `${index * 0.025}s`,
-                                opacity: 0,
-                              }}
-                              title={label}
-                            >
-                              <style>{`
-                                @keyframes colorFanIn-${index} {
-                                  0% {
-                                    opacity: 0;
-                                    left: -12px;
-                                    top: -12px;
-                                    transform: scale(0.3);
-                                  }
-                                  100% {
-                                    opacity: 1;
-                                    left: ${finalX - 12}px;
-                                    top: ${finalY - 12}px;
-                                    transform: scale(1);
-                                  }
-                                }
-                              `}</style>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
-
-                  {/* Background color row */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setShowColorPicker(!showColorPicker); }}
-                    className="flex items-center gap-2 px-3 py-1.5 w-full hover:bg-white/10 text-xs text-white/80 transition-colors"
-                  >
-                    <div
-                      className="w-3 h-3 rounded-full border border-white/30"
-                      style={{ backgroundColor: bgColor }}
-                    />
-                    <span>Background</span>
-                  </button>
-
-                  {/* Lock/Unlock row */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleToggleLock(); setShowMenu(false); }}
-                    className="flex items-center gap-2 px-3 py-1.5 w-full hover:bg-white/10 text-xs text-white/80 transition-colors"
-                  >
-                    {group.locked ? (
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
-                      </svg>
-                    )}
-                    <span>{group.locked ? "Unlock" : "Lock"}</span>
-                  </button>
-
-                  {/* NBP Input toggle row */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); updateGroup(groupId, { isNbpInput: !group.isNbpInput }); setShowMenu(false); }}
-                    className="flex items-center gap-2 px-3 py-1.5 w-full hover:bg-white/10 text-xs text-white/80 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
-                    </svg>
-                    <span>NBP Input</span>
-                    {group.isNbpInput && (
-                      <svg className="w-3 h-3 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                  </button>
-
-                  {/* Delete row */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleDelete(); }}
-                    className="flex items-center gap-2 px-3 py-1.5 w-full hover:bg-white/10 text-xs text-white/80 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    <span>Delete</span>
-                  </button>
-                </div>
+                <MenuSurface
+                  role="menu"
+                  aria-label="Group options"
+                  floating={false}
+                  className="absolute bottom-full left-0 z-50 mb-1.5 w-[232px] cursor-default"
+                >
+                  {/* Colour: six swatches in a row, the current one ringed */}
+                  <div className="flex items-center gap-2 px-2.5 pt-2 pb-1.5">
+                    <MenuSectionLabel className="flex-1">Colour</MenuSectionLabel>
+                    {GROUP_COLOR_ORDER.map((color) => {
+                      const selected = group.color === color;
+                      const label = groupColorLabel(color);
+                      return (
+                        <button
+                          key={color}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          onClick={(e) => { e.stopPropagation(); handleColorChange(color); }}
+                          className={cn(
+                            "flex h-5 w-5 items-center justify-center rounded-full transition-[box-shadow,transform] hover:scale-110",
+                            selected ? "shadow-[0_0_0_1.5px_rgb(255_255_255/0.85)]" : "hover:shadow-[0_0_0_1.5px_rgb(255_255_255/0.35)]"
+                          )}
+                          title={label}
+                          aria-label={label}
+                        >
+                          <span className="h-3 w-3 rounded-full" style={{ backgroundColor: groupBaseColor(color) }} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <MenuDivider />
+                  {/* Run the group's nodes, as many times as the Run menu's count (the same count) */}
+                  <MenuList>
+                    <MenuItem
+                      role="menuitem"
+                      disabled={locked || isRunning}
+                      title={locked ? "Unlock the group to run it" : isRunning ? "A run is in progress" : undefined}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nodeIds = useWorkflowStore.getState().nodes.filter((n) => n.groupId === groupId).map((n) => n.id);
+                        setShowMenu(false);
+                        if (nodeIds.length > 0) runBatch({ kind: "nodes", nodeIds });
+                      }}
+                    >
+                      <Play size={14} strokeWidth={0} fill="currentColor" />
+                      <span>{runCount > 1 ? `Run group ${runCount}×` : "Run group"}</span>
+                    </MenuItem>
+                    <div className="flex min-h-7 items-center gap-2 px-2.5 py-1 text-xs text-neutral-300" onClick={(e) => e.stopPropagation()}>
+                      <Repeat size={14} strokeWidth={2} />
+                      <span>Runs</span>
+                      <MenuStepper label="Runs" value={runCount} min={1} max={MAX_RUN_COUNT} onChange={setRunCount} />
+                    </div>
+                  </MenuList>
+                  <MenuDivider />
+                  <MenuList>
+                    <MenuItem
+                      role="menuitem"
+                      onClick={(e) => { e.stopPropagation(); setShowMenu(false); setIsEditing(true); }}
+                    >
+                      <Pencil size={14} strokeWidth={2} />
+                      <span>Rename</span>
+                      <MenuShortcut>double-click</MenuShortcut>
+                    </MenuItem>
+                    <MenuItem
+                      role="menuitemcheckbox"
+                      aria-checked={locked}
+                      onClick={(e) => { e.stopPropagation(); handleToggleLock(); setShowMenu(false); }}
+                    >
+                      <Lock size={14} strokeWidth={2} />
+                      <span>Lock</span>
+                      <RowSwitch on={locked} />
+                    </MenuItem>
+                    <MenuItem
+                      role="menuitemcheckbox"
+                      aria-checked={nbpInput}
+                      onClick={(e) => { e.stopPropagation(); updateGroup(groupId, { isNbpInput: !nbpInput }); setShowMenu(false); }}
+                    >
+                      <LogOut size={14} strokeWidth={2} />
+                      <span>NBP input</span>
+                      <RowSwitch on={nbpInput} />
+                    </MenuItem>
+                  </MenuList>
+                  <MenuDivider />
+                  <MenuList>
+                    <MenuItem
+                      role="menuitem"
+                      onClick={(e) => { e.stopPropagation(); handleDelete(); }}
+                      className="text-red-300 hover:text-red-200"
+                    >
+                      <Trash2 size={14} strokeWidth={2} />
+                      <span>Delete group</span>
+                    </MenuItem>
+                  </MenuList>
+                </MenuSurface>
               )}
             </div>}
           </div>
@@ -554,7 +531,7 @@ export function selectViewportZoom(state: Pick<ReactFlowState, "transform">): nu
 
 // Renders group backgrounds inside ReactFlow's viewport using ViewportPortal
 // This participates in React Flow's stacking context so z-index works properly
-export function GroupBackgroundsPortal() {
+export const GroupBackgroundsPortal = memo(function GroupBackgroundsPortal() {
   const groupIds = useWorkflowStore(useShallow((state) => Object.keys(state.groups)));
 
   if (groupIds.length === 0) return null;
@@ -568,7 +545,7 @@ export function GroupBackgroundsPortal() {
       </div>
     </ViewportPortal>
   );
-}
+});
 
 // Renders group controls (headers, resize handles) using ViewportPortal above nodes
 export function GroupControlsOverlay() {
@@ -580,12 +557,14 @@ export function GroupControlsOverlay() {
 
   return (
     <ViewportPortal>
-      <div className="group-controls-overlay" style={{ position: "absolute", top: 0, left: 0, zIndex: 1000, pointerEvents: "none" }}>
+      <div
+        className="group-controls-overlay"
+        style={{ position: "absolute", top: 0, left: 0, zIndex: 1000, pointerEvents: "none", "--group-zoom": zoom } as React.CSSProperties}
+      >
         {groupIds.map((groupId) => (
           <GroupControls
             key={groupId}
             groupId={groupId}
-            zoom={zoom}
             showInteractiveControls={showInteractiveControls}
           />
         ))}

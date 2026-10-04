@@ -6,8 +6,128 @@
  */
 
 import type { VideoStitchNodeData, EaseCurveNodeData, VideoTrimNodeData, VideoFrameGrabNodeData } from "@/types";
-import { revokeBlobUrl } from "@/store/utils/executionUtils";
+import { dataUrlToBlob, isDataUrl, readBlobBytes } from "@/lib/assets/client/mediaBlob";
 import type { NodeExecutionContext } from "./types";
+import { assetParameters, assetProducer, holdRecordingRun, recordingResult, recordOutput } from "./assetRecording";
+
+const FINGERPRINT_SAMPLES = 8;
+const FINGERPRINT_SAMPLE_BYTES = 4096;
+const MAX_REMEMBERED_VIDEOS = 256;
+
+/**
+ * A cheap stand-in for an encoded video's identity: its size, its type and a
+ * few slices spread through its body, tail included. The head is left out:
+ * the muxer stamps the time of each encode into the moov box at the front,
+ * so two encodes of the same edit differ there and nowhere else.
+ */
+export async function videoFingerprint(blob: Blob): Promise<string> {
+  const { size } = blob;
+  const starts = new Set<number>([Math.max(0, size - FINGERPRINT_SAMPLE_BYTES)]);
+  for (let i = 1; i <= FINGERPRINT_SAMPLES; i++) starts.add(Math.floor((size * i) / (FINGERPRINT_SAMPLES + 1)));
+  // 32-bit FNV-1a over the sampled bytes, in file order
+  let hash = 0x811c9dc5;
+  for (const start of [...starts].sort((a, b) => a - b)) {
+    const bytes = await readBlobBytes(blob.slice(start, Math.min(size, start + FINGERPRINT_SAMPLE_BYTES)));
+    for (let i = 0; i < bytes.length; i++) {
+      hash ^= bytes[i];
+      hash = Math.imul(hash, 0x01000193);
+    }
+  }
+  return `${size}:${blob.type}:${(hash >>> 0).toString(16)}`;
+}
+
+interface RecordedVideo {
+  fingerprint: string;
+  /** True once the library holds it; false if that recording failed. */
+  landed: Promise<boolean>;
+}
+
+/**
+ * The video each edit node last recorded, by workflow and node. A re-run that
+ * produced it again is not a new asset, and over 20 MB the node's string can
+ * never tell: every run gets a fresh object URL.
+ */
+const lastRecordedVideo = new Map<string, RecordedVideo>();
+
+function rememberRecordedVideo(key: string, video: RecordedVideo): void {
+  lastRecordedVideo.delete(key);
+  lastRecordedVideo.set(key, video);
+  if (lastRecordedVideo.size > MAX_REMEMBERED_VIDEOS) {
+    const oldest = lastRecordedVideo.keys().next().value;
+    if (oldest !== undefined) lastRecordedVideo.delete(oldest);
+  }
+}
+
+/** What the node showed before this run, when that was a video still readable here. */
+async function previousVideoFingerprint(previousOutput: unknown): Promise<string | null> {
+  // An object URL is revoked by now; a data: URL (under 20 MB, or loaded from a file) still holds its bytes
+  if (typeof previousOutput !== "string" || !isDataUrl(previousOutput)) return null;
+  return videoFingerprint(dataUrlToBlob(previousOutput));
+}
+
+/**
+ * Keep an edited video in the asset library. The Blob goes rather than the
+ * node's string: over 20 MB that string is an object URL, which does not
+ * outlive the session. A re-run that produced the same video is not a new one.
+ */
+async function recordEditedVideo(
+  ctx: NodeExecutionContext,
+  outputVideo: string,
+  previousOutput: unknown,
+  outputBlob: Blob,
+  operation: string,
+  parameters: Record<string, unknown>,
+  durationSec?: number
+): Promise<void> {
+  if (outputVideo === previousOutput || !ctx.recordAsset) return;
+  const key = `${ctx.assetRun?.workflowId ?? ""}\u0000${ctx.node.id}`;
+
+  const record = (fingerprint: string | null): void => {
+    const handle = recordOutput(ctx, {
+      kind: "video",
+      origin: "edited",
+      media: outputBlob,
+      mime: outputBlob.type || "video/mp4",
+      parameters: assetParameters(parameters),
+      producer: assetProducer(ctx, { operation }),
+      ...(typeof durationSec === "number" && Number.isFinite(durationSec) && durationSec > 0 ? { durationSec } : {}),
+    });
+    if (!handle || !fingerprint) return;
+    const video: RecordedVideo = { fingerprint, landed: recordingResult(handle).then((result) => result !== null) };
+    rememberRecordedVideo(key, video);
+    // A recording that failed kept nothing, so the next run records it again
+    void video.landed.then((landed) => {
+      if (!landed && lastRecordedVideo.get(key) === video) lastRecordedVideo.delete(key);
+    });
+  };
+
+  let fingerprint: string | null = null;
+  try {
+    fingerprint = await videoFingerprint(outputBlob);
+    const remembered = lastRecordedVideo.get(key);
+    if (remembered && fingerprint === remembered.fingerprint) {
+      rememberRecordedVideo(key, remembered);
+      // That recording may still be uploading. If it then fails, this run's
+      // copy is the one to keep, unless a later run has recorded since. This
+      // run stays open until then, so that copy gets its workflow snapshot.
+      const release = holdRecordingRun(ctx);
+      void remembered.landed
+        .then((landed) => {
+          if (!landed && !lastRecordedVideo.has(key)) record(fingerprint);
+        })
+        .finally(release);
+      return;
+    }
+    if (!remembered && fingerprint === (await previousVideoFingerprint(previousOutput))) {
+      rememberRecordedVideo(key, { fingerprint, landed: Promise.resolve(true) });
+      return;
+    }
+  } catch (error) {
+    // Not knowing is no reason to lose the edit
+    console.warn("Could not compare the edited video with the previous one:", error);
+  }
+  record(fingerprint);
+}
 
 /**
  * VideoStitch: combines multiple video clips into a single output.
@@ -89,11 +209,12 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       throw new DOMException("Aborted", "AbortError");
     }
 
-    // Revoke old blob URL before replacing
+    // The previous output is released once the new one is in place, and only
+    // if nothing else (a copy, another tab, undo) still holds it
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
-    revokeBlobUrl(oldData?.outputVideo as string | undefined);
+    const previousOutput = oldData?.outputVideo;
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -113,6 +234,14 @@ export async function executeVideoStitch(ctx: NodeExecutionContext): Promise<voi
       status: "complete",
       progress: 100,
       error: null,
+    });
+
+    ctx.releaseMediaUrl?.(previousOutput as string | undefined);
+
+    await recordEditedVideo(ctx, outputVideo, previousOutput, outputBlob, "stitch", {
+      clips: inputs.videos.length,
+      loopCount,
+      withAudio: audioData !== null,
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -196,14 +325,11 @@ export async function executeVideoTrim(ctx: NodeExecutionContext): Promise<void>
       throw new DOMException("Aborted", "AbortError");
     }
 
-    // Revoke old blob URL before replacing
+    // Released once the new output is in place (see the stitch above)
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
     const oldOutputVideo = oldData?.outputVideo as string | undefined;
-    if (oldOutputVideo && oldOutputVideo.startsWith("blob:")) {
-      URL.revokeObjectURL(oldOutputVideo);
-    }
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -224,6 +350,10 @@ export async function executeVideoTrim(ctx: NodeExecutionContext): Promise<void>
       progress: 100,
       error: null,
     });
+
+    ctx.releaseMediaUrl?.(oldOutputVideo);
+
+    await recordEditedVideo(ctx, outputVideo, oldOutputVideo, outputBlob, "trim", { startTime, endTime }, endTime - startTime);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });
@@ -352,11 +482,11 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
       throw new Error("Speed curve processing returned no output");
     }
 
-    // Revoke old blob URL before replacing
+    // Released once the new output is in place (see the stitch above)
     const oldData = getNodes().find((n) => n.id === node.id)?.data as
       | Record<string, unknown>
       | undefined;
-    revokeBlobUrl(oldData?.outputVideo as string | undefined);
+    const previousOutput = oldData?.outputVideo;
 
     let outputVideo: string;
     if (outputBlob.size > 20 * 1024 * 1024) {
@@ -377,6 +507,18 @@ export async function executeEaseCurve(ctx: NodeExecutionContext): Promise<void>
       progress: 100,
       error: null,
     });
+
+    ctx.releaseMediaUrl?.(previousOutput as string | undefined);
+
+    await recordEditedVideo(
+      ctx,
+      outputVideo,
+      previousOutput,
+      outputBlob,
+      "easeCurve",
+      { easingPreset: activeEasingPreset, bezierHandles: activeBezierHandles, outputDuration: activeOutputDuration },
+      activeOutputDuration
+    );
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       updateNodeData(node.id, { status: "idle", error: null, progress: 0 });
@@ -484,11 +626,24 @@ export async function executeVideoFrameGrab(ctx: NodeExecutionContext): Promise<
       }
     });
 
+    const previousOutput = (ctx.getFreshNode(node.id)?.data as VideoFrameGrabNodeData | undefined)?.outputImage;
     updateNodeData(node.id, {
       outputImage,
       status: "complete",
       error: null,
     });
+
+    if (outputImage !== previousOutput) {
+      recordOutput(ctx, {
+        kind: "image",
+        origin: "edited",
+        media: outputImage,
+        mime: "image/png",
+        parameters: { framePosition: nodeData.framePosition },
+        producer: assetProducer(ctx, { operation: "frameGrab" }),
+        ...(video.videoWidth > 0 && video.videoHeight > 0 ? { width: video.videoWidth, height: video.videoHeight } : {}),
+      });
+    }
     } finally {
       if (blobUrl) {
         URL.revokeObjectURL(blobUrl);

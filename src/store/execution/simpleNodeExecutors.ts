@@ -304,16 +304,21 @@ export async function executeOutputGallery(ctx: NodeExecutionContext): Promise<v
 
   const updates: Partial<OutputGalleryNodeData> = {};
 
+  // New media goes first; each refs array gets a blank per new entry so it stays
+  // aligned with its media (a stale ref would point a new image at an old file, and
+  // leave the old ones without refs, to be written again as copies on the next save)
   const existingImages = new Set(galleryImages);
   const newImages = images.filter((img) => !existingImages.has(img));
   if (newImages.length > 0) {
     updates.images = [...newImages, ...galleryImages];
+    if (freshData.imageRefs?.length) updates.imageRefs = [...newImages.map(() => ""), ...freshData.imageRefs];
   }
 
   const existingVideos = new Set(galleryVideos);
   const newVideos = videos.filter((v) => !existingVideos.has(v));
   if (newVideos.length > 0) {
     updates.videos = [...newVideos, ...galleryVideos];
+    if (freshData.videoRefs?.length) updates.videoRefs = [...newVideos.map(() => ""), ...freshData.videoRefs];
   }
 
   if (Object.keys(updates).length > 0) {

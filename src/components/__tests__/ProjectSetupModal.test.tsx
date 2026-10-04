@@ -3,6 +3,15 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ProjectSetupModal } from "@/components/ProjectSetupModal";
 import { ProviderSettings } from "@/types";
 
+vi.mock('@/components/settings/EnvironmentImport', () => ({
+  EnvironmentImport: ({ onImported }: { onImported: (value: unknown) => void }) => <button onClick={() => onImported({ preferences: {} })}>Complete environment import</button>,
+}));
+
+// The Library page talks to the asset library; its own tests cover it.
+vi.mock("@/components/settings/LibrarySettingsTab", () => ({
+  LibrarySettingsTab: () => <div data-testid="library-settings">Library settings</div>,
+}));
+
 // Mock the workflow store
 const mockSetUseExternalImageStorage = vi.fn();
 const mockUpdateProviderApiKey = vi.fn();
@@ -10,13 +19,38 @@ const mockToggleProvider = vi.fn();
 const mockUseWorkflowStore = vi.fn();
 
 vi.mock("@/store/workflowStore", () => ({
-  useWorkflowStore: (selector?: (state: unknown) => unknown) => {
-    if (selector) {
-      return mockUseWorkflowStore(selector);
-    }
-    return mockUseWorkflowStore((s: unknown) => s);
-  },
+  useWorkflowStore: Object.assign(
+    (selector?: (state: unknown) => unknown) => {
+      if (selector) {
+        return mockUseWorkflowStore(selector);
+      }
+      return mockUseWorkflowStore((s: unknown) => s);
+    },
+    { getState: () => mockUseWorkflowStore((s: unknown) => s) }
+  ),
   generateWorkflowId: () => "mock-workflow-id",
+}));
+
+// What the asset library last said about itself (null until it has answered)
+const mockLibraryStatus = vi.fn((): { available: boolean; root: string | null } | null => null);
+vi.mock("@/lib/assets/client/recorder", () => ({
+  getRecorderLibraryStatus: () => mockLibraryStatus(),
+}));
+
+// Stand-in for the model browser: a search box rendered, like the real one,
+// as a React child of the settings dialog's panel.
+vi.mock("@/components/modals/ModelSearchDialog", () => ({
+  ModelSearchDialog: ({ onModelSelected }: { onModelSelected?: (m: unknown) => void }) => (
+    <div data-testid="model-search-dialog">
+      <input placeholder="Search models..." />
+      <button
+        type="button"
+        onClick={() => onModelSelected?.({ provider: "fal", id: "fal/test-model", name: "Test Model" })}
+      >
+        Test Model
+      </button>
+    </div>
+  ),
 }));
 
 // Mock fetch
@@ -29,7 +63,7 @@ global.confirm = mockConfirm;
 
 // Ensure localStorage is always available in this test environment
 const localStorageMock = {
-  getItem: vi.fn(() => null),
+  getItem: vi.fn((_key?: string): string | null => null),
   setItem: vi.fn(),
   removeItem: vi.fn(),
   clear: vi.fn(),
@@ -64,12 +98,17 @@ const createDefaultState = (overrides = {}) => ({
   setUseExternalImageStorage: mockSetUseExternalImageStorage,
   updateProviderApiKey: mockUpdateProviderApiKey,
   toggleProvider: mockToggleProvider,
+  edgeStyle: "curved",
+  edgeAppearance: { thickness: "regular", fadedOpacity: 0.25, gradient: true, loadingPulse: true },
+  setEdgeStyle: vi.fn(),
+  setEdgeAppearance: vi.fn(),
   ...overrides,
 });
 
 describe("ProjectSetupModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorageMock.getItem.mockImplementation(() => null);
     // Default mock for env-status API (called on modal open)
     mockFetch.mockImplementation((url: string) => {
       if (url === "/api/env-status") {
@@ -93,6 +132,26 @@ describe("ProjectSetupModal", () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps a provider key explicitly cleared before an unrelated environment import', async () => {
+    const settings = { providers: { ...defaultProviderSettings.providers, gemini: { ...defaultProviderSettings.providers.gemini, apiKey: 'saved-gemini-key' } } };
+    mockUseWorkflowStore.mockImplementation(selector => selector(createDefaultState({ providerSettings: settings })));
+    localStorageMock.getItem.mockImplementation((key?: string) => key === 'node-banana-provider-settings' ? JSON.stringify({ providers: {
+      ...settings.providers, openai: { ...settings.providers.openai, apiKey: 'imported-openai-key' },
+    } }) : null);
+    render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Providers' }));
+    const key = await screen.findByPlaceholderText('AIza...');
+    expect(key).toHaveValue('saved-gemini-key');
+    fireEvent.change(key, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Complete environment import' }));
+    expect(key).toHaveValue('');
+    expect(screen.getByPlaceholderText('sk-...')).toHaveValue('imported-openai-key');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(mockUpdateProviderApiKey).toHaveBeenCalledWith('gemini', null);
+    expect(mockUpdateProviderApiKey).toHaveBeenCalledWith('openai', 'imported-openai-key');
+    localStorageMock.getItem.mockImplementation(() => null);
+  });
+
   describe("Visibility", () => {
     it("should not render when isOpen is false", () => {
       render(
@@ -104,11 +163,11 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      expect(screen.queryByText("New Project")).not.toBeInTheDocument();
-      expect(screen.queryByText("Project Settings")).not.toBeInTheDocument();
+      expect(screen.queryByText("New project")).not.toBeInTheDocument();
+      expect(screen.queryByText("Project settings")).not.toBeInTheDocument();
     });
 
-    it("should render with 'New Project' title when mode is 'new'", () => {
+    it("should render with 'New project' title when mode is 'new'", () => {
       render(
         <ProjectSetupModal
           isOpen={true}
@@ -118,10 +177,10 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      expect(screen.getByText("New Project")).toBeInTheDocument();
+      expect(screen.getByText("New project")).toBeInTheDocument();
     });
 
-    it("should render with 'Project Settings' title when mode is 'settings'", () => {
+    it("should render with 'Project settings' title when mode is 'settings'", () => {
       render(
         <ProjectSetupModal
           isOpen={true}
@@ -131,7 +190,7 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      expect(screen.getByText("Project Settings")).toBeInTheDocument();
+      expect(screen.getByText("Project settings")).toBeInTheDocument();
     });
   });
 
@@ -146,8 +205,8 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      expect(screen.getByText("Project")).toBeInTheDocument();
-      expect(screen.getByText("Providers")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Project" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Providers" })).toBeInTheDocument();
     });
 
     it("should start on Project tab in new mode", () => {
@@ -174,13 +233,42 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Providers"));
+      fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
       // Should show provider names
       expect(screen.getByText("Google Gemini")).toBeInTheDocument();
       expect(screen.getByText("OpenAI")).toBeInTheDocument();
       expect(screen.getByText("Replicate")).toBeInTheDocument();
       expect(screen.getByText("fal.ai")).toBeInTheDocument();
+    });
+
+    it("opens on the page named by initialTab in settings mode", () => {
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          mode="settings"
+          initialTab="providers"
+        />
+      );
+
+      expect(screen.getByRole("button", { name: "Providers" })).toHaveAttribute("aria-current", "page");
+      expect(screen.getByText("Google Gemini")).toBeInTheDocument();
+    });
+
+    it("ignores initialTab for a new project, which starts on Project", () => {
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          mode="new"
+          initialTab="providers"
+        />
+      );
+
+      expect(screen.getByPlaceholderText("my-project")).toBeInTheDocument();
     });
   });
 
@@ -225,8 +313,8 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      expect(screen.getByText("Project Name")).toBeInTheDocument();
-      expect(screen.getByText("Project Directory")).toBeInTheDocument();
+      expect(screen.getByText("Project name")).toBeInTheDocument();
+      expect(screen.getByText("Project directory")).toBeInTheDocument();
     });
 
     it("should render Browse button for directory selection", () => {
@@ -625,6 +713,208 @@ describe("ProjectSetupModal", () => {
     });
   });
 
+  describe("Workflow identity and existing folders", () => {
+    /** Folders on "disk": path → the workflow saved there (null = empty folder). */
+    function mockFolders(folders: Record<string, { id?: string; name: string } | null>) {
+      mockFetch.mockImplementation((url: string) => {
+        if (url === "/api/env-status") {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+        }
+        if (url.startsWith("/api/workflow?")) {
+          const params = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+          const folder = params.get("path") ?? "";
+          const exists = folder in folders;
+          if (params.get("load") === "true") {
+            const workflow = folders[folder];
+            return Promise.resolve({
+              ok: !!workflow,
+              json: () => Promise.resolve(workflow ? { success: true, workflow: { version: 1, nodes: [], edges: [], ...workflow } } : { success: false }),
+            });
+          }
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, exists, isDirectory: exists }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true }) });
+      });
+    }
+
+    function fillAndCreate(projectName: string, directory: string) {
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: projectName } });
+      fireEvent.change(screen.getByPlaceholderText("/Users/username/projects/my-project"), { target: { value: directory } });
+      fireEvent.click(screen.getByText("Create"));
+    }
+
+    it("keeps the id of a canvas that has never had a folder, so its generations join the project", async () => {
+      mockFolders({});
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ workflowId: "wf_canvas", saveDirectoryPath: null })));
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("wf_canvas", "Fox", "/projects/Fox"));
+    });
+
+    it("gives a canvas that already has a folder a new id", async () => {
+      mockFolders({});
+      mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState({ workflowId: "wf_canvas", saveDirectoryPath: "/projects/Old" })));
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+    });
+
+    it("asks before saving over a different workflow, and replaces it when told to", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_someone_else", name: "Their Fox" } });
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+
+      expect(await screen.findByText("Folder already has a workflow")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("“Their Fox” is saved in /projects/Fox");
+      expect(onSave).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText("Replace"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+    });
+
+    it("saves as '<name> 2' in a folder of its own, leaving the other workflow alone", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_someone_else", name: "Their Fox" } });
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fillAndCreate("Fox", "/projects");
+      fireEvent.click(await screen.findByText("Save as “Fox 2”"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox 2", "/projects/Fox 2"));
+      expect(screen.getByPlaceholderText("my-project")).toHaveValue("Fox 2");
+    });
+
+    it("saves over its own workflow without asking", async () => {
+      mockFolders({ "/projects/Fox": { id: "wf_mine", name: "Fox" } });
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowId: "wf_mine", workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="settings" />);
+
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("wf_mine", "Fox", "/projects/Fox"));
+      expect(screen.queryByText("Folder already has a workflow")).toBeNull();
+    });
+
+    it("saves into the folder it already lives in without asking, even when its file has no id", async () => {
+      mockFolders({ "/projects/Fox": { name: "Fox" } });
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowId: null, workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="settings" />);
+
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+      expect(screen.queryByText("Folder already has a workflow")).toBeNull();
+    });
+  });
+
+  describe("Saving into the Node Banana folder", () => {
+    const ROOT = "/Users/me/Documents/Node Banana";
+    /** Folders already in the Node Banana folder, lower-cased, as the folder-name route numbers past them. */
+    let taken: string[] = [];
+
+    beforeEach(() => {
+      taken = [];
+      mockLibraryStatus.mockReturnValue({ available: true, root: ROOT });
+      mockFetch.mockImplementation((url: string) => {
+        if (url.startsWith("/api/assets/projects/folder-name?")) {
+          const name = new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("name") ?? "";
+          let folder = name;
+          for (let n = 2; taken.includes(folder.toLowerCase()); n++) folder = `${name} ${n}`;
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ folder, path: `${ROOT}/${folder}`, taken: folder !== name }),
+          });
+        }
+        if (url.startsWith("/api/workflow?")) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, exists: false }) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      });
+    });
+
+    afterEach(() => {
+      mockLibraryStatus.mockReturnValue(null);
+    });
+
+    it("saves a new project in a folder of its own there, named after it", async () => {
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+      expect(screen.queryByLabelText("Project directory")).toBeNull();
+
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Lookbook" } });
+      expect(await screen.findByText("~/Documents/Node Banana/Lookbook")).toBeInTheDocument();
+      expect(screen.getByText(/Saves to/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Lookbook", `${ROOT}/Lookbook`));
+      // Only a chosen directory is remembered as the next one to offer
+      expect(localStorageMock.setItem).not.toHaveBeenCalledWith("node-banana-last-project-dir", expect.anything());
+    });
+
+    it("numbers the folder past one that is taken, and says why", async () => {
+      taken = ["lookbook"];
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Lookbook" } });
+      expect(await screen.findByText("~/Documents/Node Banana/Lookbook 2")).toBeInTheDocument();
+      expect(screen.getByText("There’s already a “Lookbook” folder there, so this one gets a number.")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Lookbook", `${ROOT}/Lookbook 2`));
+    });
+
+    it("chooses another location, starting at the Node Banana folder, and comes back", async () => {
+      const onSave = vi.fn();
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={onSave} mode="new" />);
+      fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "Fox" } });
+
+      fireEvent.click(screen.getByText("Choose another location…"));
+      expect(screen.getByLabelText("Project directory")).toHaveValue(ROOT);
+      expect(screen.getByText("Only this project is saved here. Its generations still show in Assets.")).toBeInTheDocument();
+      expect(screen.queryByText(/Saves to/)).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("Project directory"), { target: { value: "/projects" } });
+      fireEvent.click(screen.getByText("Create"));
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith("mock-workflow-id", "Fox", "/projects/Fox"));
+
+      fireEvent.click(screen.getByText("Use the Node Banana folder"));
+      expect(screen.queryByLabelText("Project directory")).toBeNull();
+      expect(await screen.findByText("~/Documents/Node Banana/Fox")).toBeInTheDocument();
+    });
+
+    it("keeps a saved project's own directory in its settings", () => {
+      mockUseWorkflowStore.mockImplementation((selector) =>
+        selector(createDefaultState({ workflowName: "Fox", saveDirectoryPath: "/projects/Fox" }))
+      );
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+      expect(screen.getByLabelText("Project directory")).toHaveValue("/projects/Fox");
+      expect(screen.getByText("Use the Node Banana folder")).toBeInTheDocument();
+    });
+
+    it("asks for a directory when there is no Node Banana folder", () => {
+      mockLibraryStatus.mockReturnValue({ available: false, root: null });
+      render(<ProjectSetupModal isOpen onClose={vi.fn()} onSave={vi.fn()} mode="new" />);
+      expect(screen.getByLabelText("Project directory")).toBeInTheDocument();
+      expect(screen.queryByText("Use the Node Banana folder")).toBeNull();
+      expect(screen.queryByText("Choose another location…")).toBeNull();
+    });
+  });
+
   describe("Browse Button", () => {
     it("should call browse-directory API when Browse is clicked", async () => {
       mockFetch.mockImplementation((url: string) => {
@@ -894,8 +1184,7 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      const modalDiv = container.querySelector(".bg-neutral-800");
-      fireEvent.keyDown(modalDiv!, { key: "Escape" });
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 
       expect(onClose).toHaveBeenCalled();
     });
@@ -936,12 +1225,39 @@ describe("ProjectSetupModal", () => {
         target: { value: "/path/to/project" },
       });
 
-      const modalDiv = container.querySelector(".bg-neutral-800");
-      fireEvent.keyDown(modalDiv!, { key: "Enter" });
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter" });
 
       await waitFor(() => {
         expect(onSave).toHaveBeenCalled();
       });
+    });
+
+    it("should not save and close when Enter is pressed inside the model browser", async () => {
+      const onClose = vi.fn();
+
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={onClose}
+          onSave={vi.fn()}
+          mode="settings"
+        />
+      );
+
+      fireEvent.click(screen.getByText("Node defaults"));
+      fireEvent.click(screen.getAllByText("Select model")[0]);
+
+      const search = screen.getByPlaceholderText("Search models...");
+      fireEvent.keyDown(search, { key: "Enter" });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId("model-search-dialog")).toBeInTheDocument();
+
+      // The pick still lands in the draft, and the settings dialog stays open.
+      fireEvent.click(screen.getByText("Test Model"));
+      expect(screen.queryByTestId("model-search-dialog")).not.toBeInTheDocument();
+      expect(screen.getByText("Test Model")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 
@@ -958,19 +1274,46 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Providers"));
+      fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
       await waitFor(() => {
         expect(screen.getByText("Google Gemini")).toBeInTheDocument();
         expect(screen.getByText("OpenAI")).toBeInTheDocument();
         expect(screen.getByText("Replicate")).toBeInTheDocument();
         expect(screen.getByText("fal.ai")).toBeInTheDocument();
-        // "ComfyUI" is also the settings tab label, so the provider card is
-        // identified by its Comfy Cloud fallback hint as well.
+        // "ComfyUI" is also the settings tab label, so the provider row is
+        // identified by its key input as well.
         expect(screen.getAllByText("ComfyUI").length).toBeGreaterThanOrEqual(2);
-        expect(
-          screen.getByText("Uses your Comfy Cloud key from the ComfyUI tab when left empty.")
-        ).toBeInTheDocument();
+        expect(screen.getByLabelText("ComfyUI API key")).toBeInTheDocument();
+      });
+    });
+
+    it("the ComfyUI page reports the Comfy key from Providers and links there", async () => {
+      render(
+        <ProjectSetupModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          mode="settings"
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "ComfyUI" }));
+      await waitFor(() => {
+        expect(screen.getByText("No Comfy key yet")).toBeInTheDocument();
+        expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Add in Providers/ }));
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("comfyui-...")).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByLabelText("ComfyUI API key"), { target: { value: "comfyui-abc" } });
+
+      fireEvent.click(screen.getByRole("button", { name: "ComfyUI" }));
+      await waitFor(() => {
+        expect(screen.getByText("Using your Comfy key")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Change/ })).toBeInTheDocument();
       });
     });
 
@@ -984,7 +1327,7 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Providers"));
+      fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
       await waitFor(() => {
         // Check for placeholder texts
@@ -1015,7 +1358,7 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Providers"));
+      fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
       await waitFor(() => {
         expect(screen.getByText("Configured via .env")).toBeInTheDocument();
@@ -1042,7 +1385,7 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Providers"));
+      fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
       await waitFor(() => {
         expect(screen.getByText("Override")).toBeInTheDocument();
@@ -1059,16 +1402,20 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Providers"));
+      fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
+      // Nothing to reveal while every field is empty
       await waitFor(() => {
-        const showButtons = screen.getAllByText("Show");
-        expect(showButtons.length).toBeGreaterThan(0);
+        expect(screen.getByLabelText("OpenAI API key")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Show")).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText("OpenAI API key"), { target: { value: "sk-test" } });
+      await waitFor(() => {
+        expect(screen.getAllByText("Show")).toHaveLength(1);
       });
 
-      // Click Show for first provider
-      fireEvent.click(screen.getAllByText("Show")[0]);
-
+      fireEvent.click(screen.getByText("Show"));
       await waitFor(() => {
         expect(screen.getByText("Hide")).toBeInTheDocument();
       });
@@ -1086,7 +1433,7 @@ describe("ProjectSetupModal", () => {
         />
       );
 
-      fireEvent.click(screen.getByText("Providers"));
+      fireEvent.click(screen.getByRole("button", { name: "Providers" }));
 
       await waitFor(() => {
         expect(screen.getByText("Google Gemini")).toBeInTheDocument();
@@ -1096,5 +1443,84 @@ describe("ProjectSetupModal", () => {
 
       expect(onClose).toHaveBeenCalled();
     });
+  });
+});
+
+describe("Noodles tab", () => {
+  // One stable object: the modal syncs it into local state in an effect,
+  // and a fresh object per render would loop.
+  const navSettings = { panMode: "space", zoomMode: "altScroll", selectionMode: "click" };
+
+  it("shows the connection settings under their own tab", () => {
+    mockUseWorkflowStore.mockImplementation((selector) =>
+      selector(createDefaultState({ canvasNavigationSettings: navSettings }))
+    );
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
+    render(<ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+    fireEvent.click(screen.getByRole("button", { name: "Noodles" }));
+    expect(screen.getByTestId("connection-preview")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Curved" })).toHaveAttribute("aria-checked", "true");
+    // The Canvas tab no longer carries them
+    fireEvent.click(screen.getByRole("button", { name: "Canvas" }));
+    expect(screen.queryByTestId("connection-preview")).toBeNull();
+  });
+});
+
+describe("Storage page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The env status plays no part here; left pending, it cannot update after a test ends.
+    mockFetch.mockReturnValue(new Promise(() => {}));
+    mockUseWorkflowStore.mockImplementation((selector) => selector(createDefaultState()));
+  });
+
+  it("sits second in the rail, after Project", () => {
+    render(<ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" />);
+    const rail = screen.getByRole("navigation", { name: "Settings pages" });
+    const pages = Array.from(rail.querySelectorAll("button")).map((button) => button.textContent);
+    expect(pages.slice(0, 3)).toEqual(["Project", "Storage", "Providers"]);
+  });
+
+  it("opens on the Storage page when asked, with Done in place of Cancel and Save", () => {
+    const onClose = vi.fn();
+    render(<ProjectSetupModal isOpen={true} onClose={onClose} onSave={vi.fn()} mode="settings" initialTab="library" />);
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("heading", { name: "Storage" })).toBeInTheDocument();
+    expect(screen.getByText("Where your projects and generations are saved.")).toBeInTheDocument();
+    expect(screen.getByTestId("library-settings")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockUpdateProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("moves an open dialog to a newly requested page, and only on a new request", () => {
+    const props = { isOpen: true, onClose: vi.fn(), onSave: vi.fn(), mode: "settings" as const };
+    const { rerender } = render(<ProjectSetupModal {...props} initialTab="project" pageRequest={1} />);
+    expect(screen.getByRole("button", { name: "Project" })).toHaveAttribute("aria-current", "page");
+
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={2} />);
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("library-settings")).toBeInTheDocument();
+
+    // The user moves on; a re-render without a new request leaves them there
+    fireEvent.click(screen.getByRole("button", { name: "Providers" }));
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={2} />);
+    expect(screen.getByRole("button", { name: "Providers" })).toHaveAttribute("aria-current", "page");
+
+    // The same page asked for again
+    rerender(<ProjectSetupModal {...props} initialTab="library" pageRequest={3} />);
+    expect(screen.getByRole("button", { name: "Storage" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("renders into the body, so it opens while its host is hidden", () => {
+    const { container } = render(
+      <div hidden>
+        <ProjectSetupModal isOpen={true} onClose={vi.fn()} onSave={vi.fn()} mode="settings" initialTab="library" />
+      </div>
+    );
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
   });
 });

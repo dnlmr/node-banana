@@ -7,13 +7,28 @@
 
 import type {
   NanoBananaNodeData,
+  ImageGenerationMetadata,
+  ModelType,
+  Resolution,
   SelectedModel,
 } from "@/types";
+import { isOpenAIImage25 } from "@/lib/providers/openaiImages";
 import { calculateGenerationCost } from "@/utils/costCalculator";
 import { buildGenerateHeaders } from "@/store/utils/buildApiHeaders";
 import { pollGenerateTask } from "./pollTaskCompletion";
 import { runWithFallback } from "./runWithFallback";
 import type { NodeExecutionContext } from "./types";
+import { MissingInputError } from "./missingInput";
+import {
+  assetCost,
+  assetModel,
+  assetParameters,
+  assetProducer,
+  followRecording,
+  parameterFraming,
+  recordOutput,
+  sizeFromString,
+} from "./assetRecording";
 
 export interface NanoBananaOptions {
   /** When true, falls back to stored inputImages/inputPrompt if no connections provide them. */
@@ -74,10 +89,10 @@ export async function executeNanoBanana(
 
   if (!promptText) {
     updateNodeData(node.id, {
-      status: "error",
+      status: "skipped",
       error: "Missing text input",
     });
-    throw new Error("Missing text input");
+    throw new MissingInputError("Missing text input");
   }
 
   // Capture promptText as a definitely-non-null string for use inside the closure.
@@ -175,22 +190,69 @@ export async function executeNanoBanana(
         const timestamp = Date.now();
         const imageId = `${timestamp}`;
 
+        const generation: ImageGenerationMetadata | undefined = provider === "openai" ? result.generation : undefined;
+        // The model that ran. The legacy `model` field only ever names a Gemini
+        // model, so it is wrong for any other pick and after a fallback.
+        const historyModel = provider === "gemini" ? modelToUse.modelId : modelToUse.displayName || modelToUse.modelId;
+
+        // What the run cost: the provider's own figure when it reports one
+        let runCost: number | null = null;
+        let costEstimated = true;
+        if (provider === "openai" && generation?.cost && Number.isFinite(generation.cost.amount) && generation.cost.amount >= 0) {
+          runCost = generation.cost.amount;
+          costEstimated = generation.cost.estimated;
+        } else if ((provider === "fal" || (provider === "openai" && !isOpenAIImage25(modelToUse.modelId))) && modelToUse.pricing) {
+          runCost = modelToUse.pricing.amount;
+        } else if (modelToUse.provider === "gemini") {
+          runCost = calculateGenerationCost(modelToUse.modelId as ModelType, requestPayload.resolution as Resolution);
+        }
+
         // Save to global history
         addToGlobalHistory({
           image: result.image,
           timestamp,
           prompt: finalPrompt,
           aspectRatio: nodeData.aspectRatio,
-          model: nodeData.model,
+          model: historyModel,
+          ...(generation ? { generation } : {}),
         });
 
-        // Add to node's carousel history
+        // Aspect ratio, resolution and search grounding are Gemini request
+        // fields; other providers carry their framing in their parameters.
+        const sentParameters = provider === "gemini"
+          ? {
+              ...requestPayload.parameters,
+              ...(requestPayload.useGoogleSearch ? { useGoogleSearch: true } : {}),
+              ...(requestPayload.useImageSearch ? { useImageSearch: true } : {}),
+            }
+          : requestPayload.parameters;
+        const framing = provider === "gemini"
+          ? { aspectRatio: requestPayload.aspectRatio, resolution: requestPayload.resolution }
+          : parameterFraming(requestPayload.parameters);
+        const recorded = recordOutput(ctx, {
+          kind: "image",
+          origin: "generated",
+          media: result.image,
+          prompt: finalPrompt,
+          model: assetModel(modelToUse),
+          parameters: assetParameters(sentParameters),
+          ...framing,
+          cost: assetCost(runCost, costEstimated),
+          producer: assetProducer(ctx),
+          ...sizeFromString(generation?.size),
+        });
+
+        // The carousel reloads its entries from the asset library, or from the
+        // generations folder, so only a generation saved to one gets an entry.
         const newHistoryItem = {
           id: imageId,
+          ...(recorded ? { assetId: recorded.assetId } : {}),
           timestamp,
           prompt: finalPrompt,
           aspectRatio: nodeData.aspectRatio,
-          model: nodeData.model,
+          model: historyModel,
+          ...(generation ? { generation } : {}),
+          ...(ctx.batch ? { batch: ctx.batch } : {}),
         };
         const updatedHistory = [newHistoryItem, ...(nodeData.imageHistory || [])].slice(0, 50);
 
@@ -198,8 +260,7 @@ export async function executeNanoBanana(
           outputImage: result.image,
           status: "complete",
           error: null,
-          imageHistory: updatedHistory,
-          selectedHistoryIndex: 0,
+          ...(generationsPath || recorded ? { imageHistory: updatedHistory, selectedHistoryIndex: 0 } : {}),
         });
 
         // Push new image to connected downstream outputGallery nodes (atomic append)
@@ -215,45 +276,51 @@ export async function executeNanoBanana(
           });
 
         // Track cost
-        if ((modelToUse.provider === "fal" || modelToUse.provider === "openai") && modelToUse.pricing) {
-          addIncurredCost(modelToUse.pricing.amount);
-        } else if (modelToUse.provider === "gemini") {
-          const generationCost = calculateGenerationCost(nodeData.model, nodeData.resolution);
-          addIncurredCost(generationCost);
+        if (runCost !== null) {
+          addIncurredCost(runCost);
         }
 
-        // Auto-save to generations folder if configured
-        if (generationsPath) {
-          const savePromise = fetch("/api/save-generation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              directoryPath: generationsPath,
-              image: result.image,
-              prompt: finalPrompt,
-              imageId,
-            }),
-          })
-            .then((res) => res.json())
-            .then((saveResult) => {
-              if (saveResult.success && saveResult.imageId && saveResult.imageId !== imageId) {
-                const currentNode = getNodes().find((n) => n.id === node.id);
-                if (currentNode) {
-                  const currentData = currentNode.data as NanoBananaNodeData;
-                  const histCopy = [...(currentData.imageHistory || [])];
-                  const entryIndex = histCopy.findIndex((h) => h.id === imageId);
-                  if (entryIndex !== -1) {
-                    histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
-                    updateNodeData(node.id, { imageHistory: histCopy });
+        // The save to the generations folder: a project's only save without
+        // the asset library, and its fallback when a recording fails
+        const saveToFolder = generationsPath
+          ? () =>
+              fetch("/api/save-generation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  directoryPath: generationsPath,
+                  image: result.image,
+                  prompt: finalPrompt,
+                  imageId,
+                }),
+              })
+                .then((res) => res.json())
+                .then((saveResult) => {
+                  if (saveResult.success && saveResult.imageId && saveResult.imageId !== imageId) {
+                    const currentNode = getNodes().find((n) => n.id === node.id);
+                    if (currentNode) {
+                      const currentData = currentNode.data as NanoBananaNodeData;
+                      const histCopy = [...(currentData.imageHistory || [])];
+                      const entryIndex = histCopy.findIndex((h) => h.id === imageId);
+                      if (entryIndex !== -1) {
+                        histCopy[entryIndex] = { ...histCopy[entryIndex], id: saveResult.imageId };
+                        updateNodeData(node.id, { imageHistory: histCopy });
+                      }
+                    }
                   }
-                }
-              }
-            })
-            .catch((err) => {
-              console.error("Failed to save generation:", err);
-            });
+                })
+                .catch((err) => {
+                  console.error("Failed to save generation:", err);
+                })
+          : null;
 
-          trackSaveGeneration(imageId, savePromise);
+        if (recorded) {
+          // The recorder writes a project's generations into its folder; the
+          // carousel entry then takes the file's name, as a save there always did.
+          followRecording(ctx, "imageHistory", imageId, recorded, saveToFolder);
+        } else if (saveToFolder) {
+          // No asset library: auto-save to the generations folder
+          trackSaveGeneration(imageId, saveToFolder());
         }
       } else {
         updateNodeData(node.id, {

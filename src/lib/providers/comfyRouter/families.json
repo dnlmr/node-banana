@@ -1179,6 +1179,22 @@
      "capabilities": [
       "text-to-audio"
      ]
+    },
+    {
+     "id": "elevenlabs/eleven_v4",
+     "name": "Eleven v4",
+     "description": "ElevenLabs' Eleven v4 speech model: converts text to speech in the chosen voice, through the same dialogue route as Eleven v3.",
+     "capabilities": [
+      "text-to-audio"
+     ]
+    },
+    {
+     "id": "elevenlabs/eleven_v4_turbo",
+     "name": "Eleven v4 Turbo",
+     "description": "The Turbo tier of ElevenLabs' Eleven v4 speech model: converts text to speech in the chosen voice.",
+     "capabilities": [
+      "text-to-audio"
+     ]
     }
    ],
    "notes": "Route is ElevenLabs Text-to-Dialogue; the binding sends one dialogue line (the prompt) with one voice. voice_id is REQUIRED with no default; use \"21m00Tcm4TlvDq8ikWAM\" (Rachel, the schema's example) as the app default. Response is raw audio bytes (*/*), audio/mpeg by default. Other params: apply_text_normalization, language_code, seed.",
@@ -1410,6 +1426,105 @@
     }
    ],
    "notes": "Schema says input_image* are raw base64. Width/height are integers 256-2048 (no multiple-of constraint stated). The schema describes safety_tolerance (0-5) as 'Flux 2 Max only'; it is accepted on both schemas, so it is exposed on both. Router polls BFL itself and returns the terminal get_result document; `result.sample` is a Comfy-hosted signed URL (up to 24h, can be as short as ~1h on replay, or BFL's own ~10 min image / ~2h video URL if re-hosting failed) - download it at once. `status` is forwarded in BFL's own spelling and compared case-insensitively by Router, so the error rule lists Ready/ready/READY; a failed task arrives as a Router error (provider_failed), not as this body."
+  },
+  {
+   "family": "bflFlux3Image",
+   "provider": "bfl",
+   "output": "image",
+   "inputs": [
+    {
+     "name": "prompt",
+     "type": "text",
+     "required": true,
+     "label": "Prompt"
+    },
+    {
+     "name": "image",
+     "type": "image",
+     "required": false,
+     "label": "Reference images",
+     "max": 10,
+     "encoding": "base64"
+    }
+   ],
+   "params": {
+    "at": "",
+    "exclude": [
+     "prompt",
+     "images",
+     "version"
+    ],
+    "extra": []
+   },
+   "body": {
+    "prompt": "{{prompt}}",
+    "images": {
+     "$if": "input.image",
+     "then": "{{input.image}}"
+    },
+    "$params": true
+   },
+   "result": {
+    "media": [
+     "result.sample"
+    ],
+    "errors": [
+     {
+      "path": "status",
+      "notIn": [
+       "Ready",
+       "ready",
+       "READY"
+      ],
+      "message": "Black Forest Labs: {value}"
+     }
+    ]
+   },
+   "models": [
+    {
+     "id": "bfl/flux-3-image",
+     "name": "FLUX 3 Image",
+     "description": "Black Forest Labs' FLUX 3 image model for text-to-image, editing and multi-reference generation from up to 10 reference images, with optional web and image search grounding.",
+     "capabilities": [
+      "text-to-image",
+      "image-to-image"
+     ]
+    }
+   ],
+   "notes": "images takes 1-10 http(s) URLs or raw base64 strings (a single string is a one-item list); the binding sends raw base64. aspect_ratio and resolution are free strings in the schema; their values are listed only in the descriptions, so paramOverrides gives them as enums (auto follows the first reference image). grounding (web and image search before generating, default true) and safety_tolerance (0-4) are exposed. version is pinned to its default by omission. additionalProperties is false. The result is BFL's get_result document with the re-hosted result.sample, as for FLUX.2.",
+   "paramOverrides": {
+    "aspect_ratio": {
+     "enum": [
+      "auto",
+      "21:9",
+      "2:1",
+      "16:9",
+      "3:2",
+      "7:5",
+      "4:3",
+      "5:4",
+      "1:1",
+      "4:5",
+      "3:4",
+      "5:7",
+      "2:3",
+      "9:16",
+      "1:2",
+      "9:21"
+     ],
+     "default": "auto"
+    },
+    "resolution": {
+     "enum": [
+      "768sq",
+      "1k",
+      "1.5k",
+      "2k",
+      "4k"
+     ],
+     "default": "1k"
+    }
+   }
   },
   {
    "family": "bflFluxKontext",
@@ -1798,78 +1913,6 @@
     }
    ],
    "notes": "Proposed capability: outpainting (mapped to image-to-image). top/bottom/left/right (0-2048 px) all default to 0, so a run with no expansion set returns an unexpanded image - the UI should nudge the user to set at least one side. Router polls BFL itself and returns the terminal get_result document; `result.sample` is a Comfy-hosted signed URL (up to 24h, can be as short as ~1h on replay, or BFL's own ~10 min image / ~2h video URL if re-hosting failed) - download it at once. `status` is forwarded in BFL's own spelling and compared case-insensitively by Router, so the error rule lists Ready/ready/READY; a failed task arrives as a Router error (provider_failed), not as this body."
-  },
-  {
-   "family": "bflFluxControl",
-   "provider": "bfl",
-   "output": "image",
-   "inputs": [
-    {
-     "name": "prompt",
-     "type": "text",
-     "required": true,
-     "label": "Prompt"
-    },
-    {
-     "name": "image",
-     "type": "image",
-     "required": true,
-     "label": "Control image",
-     "max": 1,
-     "encoding": "base64"
-    }
-   ],
-   "params": {
-    "at": "",
-    "exclude": [
-     "prompt",
-     "control_image",
-     "preprocessed_image",
-     "webhook_url",
-     "webhook_secret"
-    ],
-    "extra": []
-   },
-   "body": {
-    "prompt": "{{prompt}}",
-    "control_image": "{{input.image[0]}}",
-    "$params": true
-   },
-   "result": {
-    "media": [
-     "result.sample"
-    ],
-    "errors": [
-     {
-      "path": "status",
-      "notIn": [
-       "Ready",
-       "ready",
-       "READY"
-      ],
-      "message": "Black Forest Labs: {value}"
-     }
-    ]
-   },
-   "models": [
-    {
-     "id": "bfl/flux-pro-1.0-canny",
-     "name": "FLUX.1 Canny Pro",
-     "description": "Black Forest Labs' FLUX.1 Canny [pro] generates an image that follows the Canny edge map of a control image, guided by a prompt.",
-     "capabilities": [
-      "image-to-image"
-     ]
-    },
-    {
-     "id": "bfl/flux-pro-1.0-depth",
-     "name": "FLUX.1 Depth Pro",
-     "description": "Black Forest Labs' FLUX.1 Depth [pro] generates an image that follows the depth map of a control image, guided by a prompt.",
-     "capabilities": [
-      "image-to-image"
-     ]
-    }
-   ],
-   "notes": "Neither schema marks control_image required, but BFL needs control_image or preprocessed_image, so the image input is required here. The image goes to control_image and BFL runs its own Canny/depth preprocessor; `preprocessed_image` (an already-extracted edge/depth map that skips preprocessing) is not wired - it could be offered as a per-model toggle later. Canny also exposes canny_low_threshold/canny_high_threshold (0-500, defaults 50/200); guidance defaults differ (canny 30, depth 15), both come from each model's own schema. Router polls BFL itself and returns the terminal get_result document; `result.sample` is a Comfy-hosted signed URL (up to 24h, can be as short as ~1h on replay, or BFL's own ~10 min image / ~2h video URL if re-hosting failed) - download it at once. `status` is forwarded in BFL's own spelling and compared case-insensitively by Router, so the error rule lists Ready/ready/READY; a failed task arrives as a Router error (provider_failed), not as this body."
   },
   {
    "family": "bflErase",
@@ -3233,6 +3276,51 @@
         "2K"
        ],
        "default": "1K"
+      }
+     },
+     "inputs": [
+      {
+       "name": "prompt",
+       "type": "text",
+       "required": true,
+       "label": "Prompt"
+      },
+      {
+       "name": "image",
+       "type": "image",
+       "required": false,
+       "label": "Reference images",
+       "max": 10,
+       "encoding": "dataUrl"
+      }
+     ],
+     "body": {
+      "prompt": "{{prompt}}",
+      "image": {
+       "$if": "input.image",
+       "then": "{{input.image}}"
+      },
+      "response_format": "url",
+      "watermark": false,
+      "$params": true
+     }
+    },
+    {
+     "id": "byteplus/seedream-5-0-flash-260915",
+     "name": "Seedream 5.0 Flash",
+     "description": "ByteDance's fast Seedream 5.0 tier for generation and editing with up to 10 reference images at 1K, 1.5K or 2K.",
+     "capabilities": [
+      "text-to-image",
+      "image-to-image"
+     ],
+     "paramOverrides": {
+      "size": {
+       "enum": [
+        "1K",
+        "1.5K",
+        "2K"
+       ],
+       "default": "2K"
       }
      },
      "inputs": [
@@ -4881,6 +4969,84 @@
    "notes": "Exactly one of text_prompt / json_prompt; the app sends text_prompt. Exposed params: rendering_speed (DEFAULT|TURBO|QUALITY, optional here) and resolution (optional WxH; the schema lists the supported 2K values: 2048x2048, 1440x2880, 2880x1440, 1664x2496, 2496x1664, 1792x2240, 2240x1792, 1440x2560, 2560x1440, 1600x2560, 2560x1600, 1728x2304, 2304x1728, 1296x3168, 3168x1296, 1152x2944, 2944x1152, 1248x3328, 3328x1248, 1280x3072, 3072x1280 — omit to let the model choose). enable_copyright_detection left off. No image inputs. Direct-return. Matches the existing hand-verified ideogramV4 mapper."
   },
   {
+   "family": "ideogram45",
+   "provider": "ideogram",
+   "output": "image",
+   "inputs": [
+    {
+     "name": "prompt",
+     "type": "text",
+     "required": true,
+     "label": "Prompt"
+    },
+    {
+     "name": "image",
+     "type": "image",
+     "required": false,
+     "label": "Source images",
+     "max": 5,
+     "encoding": "dataUrl"
+    },
+    {
+     "name": "mask",
+     "type": "image",
+     "required": false,
+     "label": "Mask",
+     "max": 1,
+     "encoding": "dataUrl"
+    }
+   ],
+   "params": {
+    "at": "",
+    "exclude": [
+     "prompt",
+     "image",
+     "images",
+     "mask",
+     "reference_images",
+     "num_images",
+     "enable_copyright_detection"
+    ],
+    "extra": []
+   },
+   "body": {
+    "prompt": "{{prompt}}",
+    "images": {
+     "$if": "input.image",
+     "then": "{{input.image}}"
+    },
+    "mask": "{{input.mask[0]}}",
+    "num_images": 1,
+    "$params": true
+   },
+   "result": {
+    "media": [
+     "data[*].url"
+    ]
+   },
+   "models": [
+    {
+     "id": "ideogram/ideogram-4-5",
+     "name": "Ideogram 4.5",
+     "description": "Ideogram 4.5 for text-to-image and editing from up to five source images, with an optional mask, at four quality tiers.",
+     "capabilities": [
+      "text-to-image",
+      "image-to-image"
+     ]
+    }
+   ],
+   "notes": "Binds the generate operation: no images is text-to-image; `images` (https URL or data URI, png/webp/jpeg, up to 5, or 4 with a mask) edits, the first being the primary source. The mask is black where Ideogram edits and white where it preserves, matching images[0]'s size; `size` must be omitted with a mask (left empty by default, so it is). Precise Edit (`image` plus `reference_images`) is a separate operation selected by the presence of `image` and is not exposed. quality: very_low is refused without source images. magic_prompt is a free string; paramOverrides gives its documented values. size is free: auto, source or WIDTHxHEIGHT. Direct-return; data[*].url (first match), as for Ideogram 4.0.",
+   "paramOverrides": {
+    "magic_prompt": {
+     "enum": [
+      "auto",
+      "on",
+      "off"
+     ]
+    }
+   }
+  },
+  {
    "family": "krea2",
    "provider": "krea",
    "output": "image",
@@ -5779,6 +5945,15 @@
      ]
     },
     {
+     "id": "xai/grok-imagine-video-1.5-lite",
+     "name": "Grok Imagine Video 1.5 Lite",
+     "description": "The Lite tier of xAI's Grok Imagine Video 1.5, text or image to video from 1 to 15 seconds.",
+     "capabilities": [
+      "text-to-video",
+      "image-to-video"
+     ]
+    },
+    {
      "id": "xai/grok-imagine-video-1.5-preview",
      "name": "Grok Imagine Video 1.5 Preview",
      "description": "The preview release of xAI's Grok Imagine Video 1.5.",
@@ -5797,7 +5972,7 @@
      ]
     }
    ],
-   "notes": "Matches the hand-verified grokVideo family. The three schemas are identical. image accepts a data URI or https URL. Not exposed: reference_images (reference-to-video, up to N data-URL images, mutually exclusive with image - would need a second image handle) and input video (mentioned in the description but absent from the schema properties). resolution is a free nullable string (xAI accepts 480p/720p) and duration an integer 1-15 (default 8); prompt maxLength 4096. video.url is nullable: an empty url on a done status is 'success without output'."
+   "notes": "Matches the hand-verified grokVideo family. The four schemas are identical. image accepts a data URI or https URL. Not exposed: reference_images (reference-to-video, up to N data-URL images, mutually exclusive with image - would need a second image handle) and input video (mentioned in the description but absent from the schema properties). resolution is a free nullable string (xAI accepts 480p/720p) and duration an integer 1-15 (default 8); prompt maxLength 4096. video.url is nullable: an empty url on a done status is 'success without output'."
   },
   {
    "family": "wanVideoLegacy",
@@ -7455,6 +7630,7 @@
   "anthropic/claude-sonnet-4-5-20250929": "text model; out of scope",
   "anthropic/claude-sonnet-4-6": "text model; out of scope",
   "anthropic/claude-sonnet-5": "text model; out of scope",
+  "anthropic/claude-sonnet-5-5": "text model; out of scope",
   "bria/structured-instruction": "text model; out of scope",
   "bria/video-edit-erase": "Requires a mask VIDEO (public URL) alongside the source video; the app has only one video handle and its mask handle is an image.",
   "byteplus/seed-2-0-lite-260228": "text model; out of scope",
@@ -7490,6 +7666,8 @@
   "openai/gpt-5.6-sol": "text model; out of scope",
   "openai/gpt-5.6-terra": "text model; out of scope",
   "openai/gpt-6-astra": "text model; out of scope",
+  "openai/gpt-6-luna": "text model; out of scope",
+  "openai/gpt-6-sol": "text model; out of scope",
   "openai/o1": "text model; out of scope",
   "openai/o1-pro": "text model; out of scope",
   "openai/o3": "text model; out of scope",

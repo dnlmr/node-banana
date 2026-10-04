@@ -52,6 +52,14 @@ export function generateMediaId(prefix: "img" | "vid" | "aud" = "img"): string {
 }
 
 /**
+ * The id of a file named after its content: saving the same bytes again, on
+ * this save or a later one, lands on the same file instead of a new copy.
+ */
+export function contentMediaId(prefix: "img" | "vid" | "aud", contentHash: string): string {
+  return `${prefix}-${contentHash.slice(0, 20)}`;
+}
+
+/**
  * Generate a unique image ID for external storage (backward compat)
  */
 export function generateImageId(): string {
@@ -83,6 +91,13 @@ export async function externalizeWorkflowMedia(
   const savedImageIds = new Map<string, string>(); // base64 hash -> imageId (for deduplication)
   const savedMediaIds = new Map<string, string>(); // base64 hash -> mediaId (for video/audio deduplication)
 
+  // A ref is only trusted when its file is really in this folder. A workflow
+  // saved into a new folder, or whose refs came from another project, used to
+  // drop the embedded media on save and keep a ref to nothing; now such a ref
+  // is set aside so the media is written out again under this folder.
+  const present = await listPresentMediaIds(workflowPath);
+  if (present) workflow = { ...workflow, nodes: workflow.nodes.map((node) => demoteMissingRefs(node, present)) };
+
   // Process nodes in parallel batches with controlled concurrency
   const BATCH_SIZE = 3;
   const externalizedNodes: WorkflowNode[] = new Array(workflow.nodes.length);
@@ -92,6 +107,13 @@ export async function externalizeWorkflowMedia(
     const results = await Promise.all(
       batch.map((node, batchIndex) =>
         externalizeNodeMedia(node, workflowPath, savedImageIds, savedMediaIds)
+          // A node whose media can't be written out (bytes the server refuses to
+          // decode, a failed write) keeps it inline, as an unsaved workflow does,
+          // rather than failing the whole save.
+          .catch((error) => {
+            console.warn(`[mediaStorage] Kept ${node.id}'s media in the workflow file:`, error instanceof Error ? error.message : error);
+            return node;
+          })
           .then(result => ({ index: i + batchIndex, result }))
       )
     );
@@ -105,6 +127,55 @@ export async function externalizeWorkflowMedia(
     ...workflow,
     nodes: externalizedNodes,
   };
+}
+
+/** The media ids a workflow folder holds, or null when the server could not say (then refs are trusted as before). */
+async function listPresentMediaIds(workflowPath: string): Promise<Set<string> | null> {
+  try {
+    const params = new URLSearchParams({ workflowPath, list: "1" });
+    const response = await fetch(`/api/workflow-images?${params.toString()}`);
+    const body = await response.json();
+    if (!body?.success || !Array.isArray(body.ids)) return null;
+    return new Set(body.ids.filter((id: unknown): id is string => typeof id === "string"));
+  } catch {
+    return null;
+  }
+}
+
+/** Fields that pair a ref with the media it stands for: `imageRef` ↔ `image`, `inputImageRefs[i]` ↔ `inputImages[i]`. */
+function mediaFieldFor(refKey: string): string | null {
+  if (refKey.endsWith("Refs")) return refKey.slice(0, -4) + "s";
+  if (refKey.endsWith("Ref")) return refKey.slice(0, -3);
+  return null;
+}
+
+/**
+ * Drops a ref whose file is not in the folder while the media it stands for is
+ * still embedded, so the save writes the file out instead of trusting the ref.
+ * A ref with no embedded media behind it is left alone: there is nothing to
+ * write, and the loader will report it missing.
+ */
+export function demoteMissingRefs(node: WorkflowNode, present: Set<string>): WorkflowNode {
+  const data = node.data as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+  const change = () => (next ??= { ...data });
+  for (const [key, value] of Object.entries(data)) {
+    const mediaKey = mediaFieldFor(key);
+    if (!mediaKey) continue;
+    if (typeof value === "string") {
+      if (value && !present.has(value) && isDataUrl(data[mediaKey] as string | null | undefined)) delete change()[key];
+    } else if (Array.isArray(value)) {
+      const media = data[mediaKey];
+      if (!Array.isArray(media)) continue;
+      let changed = false;
+      const refs = value.map((ref, i) => {
+        if (typeof ref === "string" && ref && !present.has(ref) && isDataUrl(media[i] as string | null | undefined)) { changed = true; return ""; }
+        return ref;
+      });
+      if (changed) change()[key] = refs;
+    }
+  }
+  return next ? ({ ...node, data: next as WorkflowNode["data"] }) : node;
 }
 
 /**
@@ -208,7 +279,7 @@ async function externalizeNodeMedia(
       const d = data as import("@/types").NanoBananaNodeData;
       let outputImageRef = d.outputImageRef;
       let outputImage = d.outputImage;
-      let inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
+      const inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
       const inputImages: string[] = [];
 
       // Handle output image - AI generated, save to generations
@@ -269,6 +340,7 @@ async function externalizeNodeMedia(
               prompt: item.prompt,
               aspectRatio: item.aspectRatio,
               model: item.model,
+              ...(item.generation ? { generation: item.generation } : {}),
             });
           } else {
             cleanedHistory.push(item);
@@ -289,7 +361,7 @@ async function externalizeNodeMedia(
 
     case "llmGenerate": {
       const d = data as import("@/types").LLMGenerateNodeData;
-      let inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
+      const inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
       const inputImages: string[] = [];
 
       // Handle input images array (save to inputs)
@@ -318,7 +390,7 @@ async function externalizeNodeMedia(
 
     case "generateVideo": {
       const d = data as import("@/types").GenerateVideoNodeData;
-      let inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
+      const inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
       const inputImages: string[] = [];
       let outputVideoRef = d.outputVideoRef;
       let outputVideo = d.outputVideo;
@@ -369,7 +441,7 @@ async function externalizeNodeMedia(
 
     case "generate3d": {
       const d = data as import("@/types").Generate3DNodeData;
-      let inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
+      const inputImageRefs = d.inputImageRefs ? [...d.inputImageRefs] : [];
       const inputImages: string[] = [];
 
       // Handle input images array (same pattern as generateVideo)
@@ -676,8 +748,9 @@ async function saveImageAndGetId(
     return inFlightSaves.get(hash)!;
   }
 
-  // Use existing ID if provided (for consistency with imageHistory), otherwise generate new
-  const imageId = existingId || generateImageId();
+  // Use existing ID if provided (for consistency with imageHistory), otherwise one named
+  // after the content, so a later save of the same image reuses its file
+  const imageId = existingId || contentMediaId("img", computeContentHash(imageData));
 
   const savePromise = (async () => {
     const response = await fetchWithTimeout(

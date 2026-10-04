@@ -12,8 +12,11 @@
 
 import type { ComfyAppNodeData } from "@/types";
 import type { ComfyAppInput, ComfyResolvedOutput } from "@/lib/comfy/types";
+import type { RecordedAssetHandle } from "@/lib/assets/types";
 import { buildComfyHeaders, comfyConfigError, getComfySettings } from "@/lib/comfy/settings";
 import type { NodeExecutionContext } from "./types";
+import { MissingInputError } from "./missingInput";
+import { assetParameters, assetProducer, recordOutput, withFolderFallback } from "./assetRecording";
 
 /** Polling cadence — starts responsive, then backs off for long renders. */
 const INITIAL_INTERVAL = 1500;
@@ -177,8 +180,8 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
 
   if (!app) {
     const message = "No ComfyUI workflow attached to this node";
-    updateNodeData(node.id, { status: "error", error: message });
-    throw new Error(message);
+    updateNodeData(node.id, { status: "skipped", error: message });
+    throw new MissingInputError(message);
   }
 
   const settings = getComfySettings();
@@ -227,8 +230,8 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
     .map((input) => input.label);
   if (missing.length > 0) {
     const message = `Missing required input: ${missing.join(", ")}`;
-    updateNodeData(node.id, { status: "error", error: message });
-    throw new Error(message);
+    updateNodeData(node.id, { status: "skipped", error: message });
+    throw new MissingInputError(message);
   }
 
   updateNodeData(node.id, {
@@ -240,6 +243,8 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
 
   const headers = buildComfyHeaders(settings);
   let jobId: string | null = null;
+  // The server derives randomised seeds from this, so it reproduces the run
+  const seedKey = `${node.id}-${Date.now()}`;
 
   try {
     const submitRes = await fetch("/api/comfy/run", {
@@ -250,7 +255,7 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         inputs,
         params: nodeData.paramValues ?? {},
         randomizeSeeds: settings.randomizeSeeds,
-        seedKey: `${node.id}-${Date.now()}`,
+        seedKey,
       }),
       ...(signal ? { signal } : {}),
     });
@@ -336,37 +341,60 @@ export async function executeComfyApp(ctx: NodeExecutionContext): Promise<void> 
         jobId: null,
       });
 
-      // A Comfy app's image is a generation like any other: it belongs in the
-      // global history and in the project's generations folder, so it can be
-      // browsed and reloaded alongside everything else.
+      // Every media output is a generation like any other, so each goes to the
+      // asset library under its own handle.
+      const prompt = describeRun(app.name, inputs, nodeData.paramValues ?? {});
+      const parameters = assetParameters({
+        ...(nodeData.paramValues ?? {}),
+        ...(settings.randomizeSeeds ? { seedKey } : {}),
+      });
+      let imageRecording: RecordedAssetHandle | null = null;
+      for (const output of outputs) {
+        if (output.type === "text" || !output.value) continue;
+        const recorded = recordOutput(ctx, {
+          kind: output.type,
+          origin: "generated",
+          media: output.value,
+          prompt,
+          model: { provider: "comfyui", modelId: app.name, displayName: app.name },
+          parameters,
+          producer: assetProducer(ctx, { outputHandle: output.handleId }),
+        });
+        if (recorded && !imageRecording && output.value === resolved.outputImage) imageRecording = recorded;
+      }
+
+      // A Comfy app's image also belongs in the global history, and — without
+      // the asset library, or when its recording fails or is held up — in the
+      // project's generations folder, so it can be browsed and reloaded
+      // alongside everything else.
       if (resolved.outputImage) {
         const timestamp = Date.now();
         const imageId = `${timestamp}`;
+        const image = resolved.outputImage;
         addToGlobalHistory({
-          image: resolved.outputImage,
+          image,
           timestamp,
-          prompt: describeRun(app.name, inputs, nodeData.paramValues ?? {}),
+          prompt,
           aspectRatio: "1:1",
           model: app.name,
         });
         if (generationsPath) {
-          trackSaveGeneration(
-            imageId,
+          const saveToFolder = () =>
             fetch("/api/save-generation", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 directoryPath: generationsPath,
-                image: resolved.outputImage,
-                prompt: describeRun(app.name, inputs, nodeData.paramValues ?? {}),
+                image,
+                prompt,
                 imageId,
               }),
             })
               .then(() => undefined)
               .catch((err) => {
                 console.error("Failed to save ComfyUI generation:", err);
-              })
-          );
+              });
+          trackSaveGeneration(imageId, imageRecording ? withFolderFallback(imageRecording, saveToFolder) : saveToFolder());
         }
       }
       return;

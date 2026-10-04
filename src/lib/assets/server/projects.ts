@@ -1,0 +1,421 @@
+/**
+ * Finding the Node Banana projects under a folder the user picked, for
+ * "Import generations from existing projects". A project is a folder with a
+ * direct `generations` subfolder holding at least one media file, however
+ * deeply it is nested. Nothing is written.
+ *
+ * The same walk lists the projects in the Node Banana folder itself
+ * (`match: "project"`), where a project is any folder with a Node Banana
+ * workflow file or a `generations` folder, media or not.
+ *
+ * The walk is breadth-first and bounded (depth, folders visited, projects
+ * found, time), so a whole drive answers in seconds and says it stopped
+ * early rather than hanging. It never follows a symbolic link or a Windows
+ * junction, which also rules out loops, and it skips what can't hold a
+ * project: hidden folders, package and build folders, the library's own
+ * data, system folders and paths too long for an import to take, and a
+ * project's own media folders. A project's other subfolders are still
+ * searched, since projects can nest.
+ */
+
+import { promises as fs, type Dirent } from "fs";
+import os from "os";
+import path from "path";
+import { validateWorkflowPath } from "@/utils/pathValidation";
+import { FOUND_MEDIA_COUNT_CAP, MAX_IMPORT_PROJECTS, type FoundProject, type ScanProjectsResult } from "../types";
+import { errnoCode, LibraryError } from "./errors";
+import { foldsCase, isInsideRoot, mapConcurrent, pathKey } from "./fsutil";
+import { readHead } from "./media";
+import { extOf, isMediaExtension, MAX_PROJECT_DIR_LENGTH, normaliseProjectDir } from "./validate";
+
+export interface ScanLimits {
+  /** Levels below the root that are searched (the root is level 0). */
+  maxDepth: number;
+  /** Folders read before the search stops. */
+  maxDirs: number;
+  /** Projects reported before the search stops. */
+  maxProjects: number;
+  timeoutMs: number;
+  /** A project's media count stops here. */
+  maxMediaCount: number;
+  /** Longer folder paths are not searched: the import refuses them. */
+  maxPathLength: number;
+}
+
+export const SCAN_LIMITS: Readonly<ScanLimits> = {
+  maxDepth: 8,
+  maxDirs: 20_000,
+  maxProjects: MAX_IMPORT_PROJECTS,
+  timeoutMs: 15_000,
+  maxMediaCount: FOUND_MEDIA_COUNT_CAP,
+  maxPathLength: MAX_PROJECT_DIR_LENGTH,
+};
+
+export interface ScanOptions {
+  /** Folders never entered, wherever they turn up: the library's Generations and data folders, the thumbnail cache. */
+  exclude?: readonly string[];
+  /** Smaller bounds (tests). */
+  limits?: Partial<ScanLimits>;
+  /** The clock the time bound reads (tests). */
+  now?: () => number;
+  /** The user's home folder, whose app-data folder is never searched (tests). */
+  home?: string;
+  /** The platform whose folder conventions apply (tests). */
+  platform?: NodeJS.Platform;
+  /**
+   * `media` (the import's): a `generations` folder holding media.
+   * `project` (the Node Banana folder's list): a workflow file or a
+   * `generations` folder; each project found carries `lastModified`.
+   */
+  match?: "media" | "project";
+  /** Whether the folder searched can itself be a project (default true). */
+  includeRoot?: boolean;
+}
+
+/** A project as {@link findProjects} reports it; `lastModified` only with `match: "project"`. */
+export type ScannedProject = FoundProject & { lastModified?: number };
+
+/** Folders read at once. A network drive answers each one slowly. */
+const SCAN_CONCURRENCY = 8;
+/** Never searched, wherever they are; nor is anything whose name starts with ".". */
+const SKIPPED_NAMES = new Set(["node_modules", "__pycache__"]);
+/** What makes a folder a project: exactly the name the app writes, which is the name the import reads. */
+const GENERATIONS = "generations";
+/**
+ * Apps' own data in the home folder (macOS ~/Library, Windows AppData):
+ * thousands of folders and no projects, and on macOS reading into other
+ * apps' containers asks for permission.
+ */
+const HOME_APP_DATA: Partial<Record<NodeJS.Platform, string>> = { darwin: "Library", win32: "AppData" };
+/**
+ * macOS packages — apps, the Photos and Music libraries, bundles — are
+ * folders the Finder shows as files; searching them is slow, and the Photos
+ * library asks for permission.
+ */
+const MAC_PACKAGE = /\.(app|bundle|framework|plugin|kext|photoslibrary|photolibrary|musiclibrary|tvlibrary|imovielibrary|fcpbundle|lrdata|lrlibrary|aplibrary|xcodeproj|xcworkspace|pkg)$/i;
+/** Windows' own folders at the root of every drive. */
+const WINDOWS_SYSTEM = new Set(["$recycle.bin", "system volume information", "recovery", "config.msi"]);
+/** A project's own folders hold its media, never another project. */
+const PROJECT_MEDIA_DIRS = new Set([GENERATIONS, "inputs", "outputs", ".images"]);
+/** A workflow file names itself near its start (list-workflows reads as much). */
+const WORKFLOW_HEAD_BYTES = 1024;
+const NAME_FIELD = /"name"\s*:\s*"((?:\\.|[^"\\])*)"/;
+/** Where a workflow file's `edges` is looked for when its head doesn't have it: the end of the file. */
+const WORKFLOW_TAIL_BYTES = 256 * 1024;
+/** Workflow candidates read per folder: a folder of JSON data is not worth reading through. */
+const MAX_WORKFLOW_CANDIDATES = 16;
+
+/** The folder to search: absolute, no `..`, resolved, and a folder that exists. */
+export async function resolveScanRoot(value: unknown): Promise<string> {
+  const root = normaliseProjectDir(value, process.platform, "folder to search");
+  let isDirectory: boolean;
+  try {
+    isDirectory = (await fs.stat(root)).isDirectory();
+  } catch (error) {
+    const code = errnoCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") throw new LibraryError(`"${root}" doesn't exist.`, 404, "not_found");
+    throw new LibraryError(`Node Banana can't open "${root}" (${code ?? "unknown error"}).`, 400, "bad_request");
+  }
+  if (!isDirectory) throw new LibraryError(`"${root}" isn't a folder.`, 400, "bad_request");
+  return root;
+}
+
+/** What reading one folder found. */
+interface Visit {
+  project: ScannedProject | null;
+  /** Subfolders to search next. */
+  children: string[];
+  /** Its generations folder could not be read. */
+  unreadableGenerations: boolean;
+}
+
+/**
+ * Every project under `root` (itself included), sorted by path. `root`
+ * must already be resolved ({@link resolveScanRoot}).
+ */
+export async function findProjects(
+  root: string,
+  options: ScanOptions = {},
+): Promise<ScanProjectsResult & { projects: ScannedProject[] }> {
+  const limits = { ...SCAN_LIMITS, ...options.limits };
+  const match = options.match ?? "media";
+  const includeRoot = options.includeRoot ?? true;
+  const now = options.now ?? Date.now;
+  const deadline = now() + limits.timeoutMs;
+  const platform = options.platform ?? process.platform;
+  const fold = foldsCase(platform);
+  const nameKey = (name: string) => (fold ? name.toLowerCase() : name);
+  const homeKey = pathKey(options.home ?? os.homedir());
+  const homeAppData = HOME_APP_DATA[platform];
+  // Excluded folders are compared by where they really are, so a root picked
+  // through a link (macOS's /tmp, a linked home) still leaves them out. No
+  // link below the root is followed, so a folder's real path is the root's
+  // real path plus the rest of it.
+  const real = (dir: string) => fs.realpath(dir).catch(() => dir);
+  const realRoot = await real(root);
+  const realKey = (dir: string) => pathKey(realRoot === root ? dir : path.join(realRoot, dir.slice(root.length)));
+  const exclude = await Promise.all((options.exclude ?? []).map(real));
+  const excluded = new Set(exclude.map((dir) => pathKey(dir)));
+
+  const result: ScanProjectsResult & { projects: ScannedProject[] } = { root, projects: [], truncated: false, unreadable: 0 };
+  // Searching inside the library's own data finds nothing an import could use.
+  if (exclude.some((dir) => isInsideRoot(dir, realRoot, { allowEqual: true }))) return result;
+
+  const searchable = (dir: string, entry: Dirent, inProject: boolean): boolean => {
+    // A Dirent describes the entry itself: a link to a folder is a link, never a folder.
+    if (!entry.isDirectory()) return false;
+    if (entry.name.startsWith(".") || SKIPPED_NAMES.has(entry.name)) return false;
+    if (inProject && PROJECT_MEDIA_DIRS.has(nameKey(entry.name))) return false;
+    if (homeAppData && nameKey(entry.name) === nameKey(homeAppData) && pathKey(dir) === homeKey) return false;
+    if (platform === "darwin" && MAC_PACKAGE.test(entry.name)) return false;
+    if (platform === "win32" && WINDOWS_SYSTEM.has(entry.name.toLowerCase())) return false;
+    const child = path.join(dir, entry.name);
+    // The import refuses system folders and over-long paths, so a project there could never be imported
+    // (and one such folder would refuse the whole import).
+    if (child.length > limits.maxPathLength) return false;
+    return !excluded.has(realKey(child)) && validateWorkflowPath(child).valid;
+  };
+
+  const visit = async (dir: string, descend: boolean): Promise<Visit | "late" | "unreadable"> => {
+    if (now() > deadline) return "late";
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return "unreadable";
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    let project: ScannedProject | null = null;
+    let unreadableGenerations = false;
+    const generations = entries.find(
+      (entry) => entry.isDirectory() && entry.name === GENERATIONS && !excluded.has(realKey(path.join(dir, entry.name))),
+    );
+    let mediaCount: number | null = 0;
+    if (generations) {
+      mediaCount = await countMedia(path.join(dir, generations.name), limits.maxMediaCount);
+      if (mediaCount === null) unreadableGenerations = true;
+    }
+    if (match === "media") {
+      if (mediaCount) project = { dir, name: (await newestWorkflow(dir, entries, false))?.name ?? path.basename(dir), mediaCount };
+    } else if (includeRoot || dir !== root) {
+      const workflow = await newestWorkflow(dir, entries, true);
+      if (workflow || generations) {
+        project = {
+          dir,
+          name: workflow?.name ?? path.basename(dir),
+          mediaCount: mediaCount ?? 0,
+          lastModified: workflow?.mtime ?? (await folderMtime(dir)),
+        };
+      }
+    }
+    const children = descend
+      ? entries
+          // A generations folder that couldn't be read is counted once, not again as a subfolder.
+          .filter((entry) => !(unreadableGenerations && entry === generations) && searchable(dir, entry, project !== null))
+          .map((entry) => path.join(dir, entry.name))
+      : [];
+    return { project, children, unreadableGenerations };
+  };
+
+  // A folder that never answers (a network drive that went away, a file the
+  // cloud is still fetching) is given up on when time runs out, so the
+  // search answers on time with what it has.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"late">((resolve) => {
+    // setTimeout fires at once past its 32-bit limit.
+    timer = setTimeout(() => resolve("late"), Math.min(limits.timeoutMs, 2 ** 31 - 1));
+    timer.unref?.();
+  });
+  try {
+    await walk(root, limits, result, (dir, descend) => Promise.race([visit(dir, descend), expired]));
+  } finally {
+    clearTimeout(timer);
+  }
+
+  result.projects.sort((a, b) => (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0));
+  return result;
+}
+
+/** Level by level from `root`, within the folder and project bounds, filling `result`. */
+async function walk(
+  root: string,
+  limits: ScanLimits,
+  result: ScanProjectsResult,
+  visit: (dir: string, descend: boolean) => Promise<Visit | "late" | "unreadable">,
+): Promise<void> {
+  let level = [root];
+  let visited = 0;
+  for (let depth = 0; level.length > 0; depth++) {
+    const room = limits.maxDirs - visited;
+    if (room <= 0) {
+      result.truncated = true;
+      break;
+    }
+    const batch = level.length > room ? level.slice(0, room) : level;
+    if (batch.length < level.length) result.truncated = true;
+    visited += batch.length;
+    // Results keep the level's order, so which projects a bound cuts off is the same every time.
+    const visits = await mapConcurrent(batch, SCAN_CONCURRENCY, (dir) => visit(dir, depth < limits.maxDepth));
+    const next: string[] = [];
+    for (const found of visits) {
+      if (found === "late") {
+        result.truncated = true;
+        continue;
+      }
+      if (found === "unreadable") {
+        result.unreadable++;
+        continue;
+      }
+      if (found.unreadableGenerations) result.unreadable++;
+      if (found.project) {
+        if (result.projects.length >= limits.maxProjects) {
+          result.truncated = true;
+          break;
+        }
+        result.projects.push(found.project);
+      }
+      // One past what the next level may read is enough to know it stops there.
+      for (const child of found.children) if (next.length <= limits.maxDirs - visited) next.push(child);
+    }
+    if (result.truncated) break;
+    level = next;
+  }
+}
+
+/** Media files directly in `dir`, up to `cap`; null when the folder can't be read. */
+async function countMedia(dir: string, cap: number): Promise<number | null> {
+  let handle: import("fs").Dir;
+  try {
+    handle = await fs.opendir(dir);
+  } catch {
+    return null;
+  }
+  let count = 0;
+  try {
+    // Leaving the loop closes the folder.
+    for await (const entry of handle) {
+      if (entry.isFile() && isMediaExtension(extOf(entry.name)) && ++count >= cap) break;
+    }
+  } catch {
+    // It stopped reading part-way: what was counted stands.
+  }
+  return count;
+}
+
+/**
+ * The newest Node Banana workflow file directly in `dir`: its name (else the
+ * folder's own name) and mtime; null when there is none. Only the head of
+ * each file is read, and with `strict` the tail too (where `edges` is): a
+ * workflow with its media inline can run to hundreds of megabytes.
+ */
+async function newestWorkflow(
+  dir: string,
+  entries: readonly Dirent[],
+  strict: boolean,
+): Promise<{ name: string; mtime: number } | null> {
+  const fallback = path.basename(dir);
+  const files = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"));
+  const dated = await mapConcurrent(files, SCAN_CONCURRENCY, async (entry) => {
+    const file = path.join(dir, entry.name);
+    try {
+      const stat = await fs.stat(file);
+      return { file, mtime: stat.mtimeMs, size: stat.size };
+    } catch {
+      return null;
+    }
+  });
+  const newestFirst = dated
+    .filter((candidate): candidate is { file: string; mtime: number; size: number } => candidate !== null)
+    .sort((a, b) => b.mtime - a.mtime || (a.file < b.file ? -1 : 1))
+    .slice(0, MAX_WORKFLOW_CANDIDATES);
+  for (const { file, mtime, size } of newestFirst) {
+    let head: string;
+    try {
+      head = (await readHead(file, WORKFLOW_HEAD_BYTES)).toString("utf8");
+    } catch {
+      continue;
+    }
+    if (!head.includes('"version"') || !head.includes('"nodes"')) continue;
+    if (strict && !head.includes('"edges"') && !(await tailIncludes(file, size, '"edges"'))) continue;
+    const match = NAME_FIELD.exec(head);
+    return { name: (match && jsonString(match[1]).trim()) || fallback, mtime };
+  }
+  return null;
+}
+
+/** Whether the last {@link WORKFLOW_TAIL_BYTES} of a file hold `needle`. */
+async function tailIncludes(file: string, size: number, needle: string): Promise<boolean> {
+  const length = Math.min(size, WORKFLOW_TAIL_BYTES);
+  let handle: import("fs").promises.FileHandle | undefined;
+  try {
+    handle = await fs.open(file, "r");
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, size - length);
+    return buffer.subarray(0, bytesRead).toString("utf8").includes(needle);
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function folderMtime(dir: string): Promise<number> {
+  try {
+    return (await fs.stat(dir)).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * One folder as a project of the Node Banana folder's list (`match:
+ * "project"`): its name, newest workflow time and media count; null when it
+ * holds neither a workflow file nor a `generations` folder (or, with
+ * `requireWorkflow`, no workflow file).
+ */
+export async function inspectProject(
+  dir: string,
+  options: { requireWorkflow?: boolean; maxMediaCount?: number } = {},
+): Promise<ScannedProject | null> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const workflow = await newestWorkflow(dir, entries, true);
+  const generations = entries.some((entry) => entry.isDirectory() && entry.name === GENERATIONS);
+  if (!workflow && (options.requireWorkflow || !generations)) return null;
+  const mediaCount = generations
+    ? ((await countMedia(path.join(dir, GENERATIONS), options.maxMediaCount ?? SCAN_LIMITS.maxMediaCount)) ?? 0)
+    : 0;
+  return {
+    dir,
+    name: workflow?.name ?? path.basename(dir),
+    mediaCount,
+    lastModified: workflow?.mtime ?? (await folderMtime(dir)),
+  };
+}
+
+/** Whether `file` is a Node Banana workflow file (by its head and tail, never parsed whole). */
+export async function isWorkflowFile(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(file);
+    if (!stat.isFile()) return false;
+    const head = (await readHead(file, WORKFLOW_HEAD_BYTES)).toString("utf8");
+    if (!head.includes('"version"') || !head.includes('"nodes"')) return false;
+    return head.includes('"edges"') || (await tailIncludes(file, stat.size, '"edges"'));
+  } catch {
+    return false;
+  }
+}
+
+/** The value of a JSON string literal's body, escapes and all. */
+function jsonString(body: string): string {
+  try {
+    const value: unknown = JSON.parse(`"${body}"`);
+    return typeof value === "string" ? value : "";
+  } catch {
+    return body;
+  }
+}

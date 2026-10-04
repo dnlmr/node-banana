@@ -148,6 +148,14 @@ describe("GenerateImageNode", () => {
     type: "nanoBanana" as const,
     data: createNodeData(data),
     selected: false,
+    dragging: false,
+    zIndex: 0,
+    selectable: true,
+    deletable: true,
+    draggable: true,
+    isConnectable: true,
+    positionAbsoluteX: 0,
+    positionAbsoluteY: 0,
   });
 
   describe("Basic Rendering", () => {
@@ -527,6 +535,28 @@ describe("GenerateImageNode", () => {
       });
     });
 
+    describe("Comfy Router image inputs", () => {
+      it("gives each image input its own socket after the fixed image socket", () => {
+        const { container } = render(
+          <TestWrapper>
+            <GenerateImageNode {...createNodeProps({
+              selectedModel: { provider: "comfy", modelId: "bfl/flux-pro-1.0-fill", displayName: "FLUX.1 Fill" },
+              inputSchema: [
+                { name: "image", type: "image", required: true, label: "Image" },
+                { name: "mask", type: "image", required: false, label: "Mask" },
+                { name: "prompt", type: "text", required: false, label: "Prompt" },
+              ],
+            })} />
+          </TestWrapper>
+        );
+
+        const imageHandles = [...container.querySelectorAll('[data-handletype="image"][class*="target"]')];
+        expect(imageHandles.map((h) => h.getAttribute("data-handleid"))).toEqual(["image", "image-1"]);
+        expect(screen.getByText("Mask")).toBeInTheDocument();
+        expect(container.querySelectorAll('[data-handletype="text"]').length).toBe(1);
+      });
+    });
+
     describe("Handle Ordering", () => {
       it("should render image handle above text handle", () => {
         const { container } = render(
@@ -549,6 +579,56 @@ describe("GenerateImageNode", () => {
         const textTop = parseFloat(textHandle.style.top);
         expect(imageTop).toBeLessThan(textTop);
       });
+    });
+  });
+
+
+  describe("Schema reported on mount", () => {
+    // ModelParameters reports its inputs on every mount, and a culled node
+    // remounts on every pan. The cache is the path a remount takes.
+    const inputs = [
+      { name: "image", type: "image" as const, required: true, label: "Input Image" },
+      { name: "prompt", type: "text" as const, required: true, label: "Prompt" },
+    ];
+    const model = { provider: "fal" as const, modelId: "cached/image-model", displayName: "Cached Model" };
+
+    beforeEach(() => {
+      localStorage.setItem(
+        "node-banana-schema-cache",
+        JSON.stringify({ [`fal:${model.modelId}`]: { parameters: [], inputs, timestamp: Date.now() } })
+      );
+    });
+    afterEach(() => {
+      localStorage.removeItem("node-banana-schema-cache");
+    });
+
+    it("does not rewrite an inputSchema the node already has", () => {
+      render(
+        <TestWrapper>
+          <GenerateImageNode {...createNodeProps({
+            selectedModel: model,
+            inputSchema: inputs.map((input) => ({ ...input })),
+          })} />
+        </TestWrapper>
+      );
+
+      expect(mockUpdateNodeData).not.toHaveBeenCalledWith(
+        "test-node-1",
+        expect.objectContaining({ inputSchema: expect.anything() })
+      );
+    });
+
+    it("writes the inputSchema when the model's inputs differ", () => {
+      render(
+        <TestWrapper>
+          <GenerateImageNode {...createNodeProps({
+            selectedModel: model,
+            inputSchema: [inputs[1]],
+          })} />
+        </TestWrapper>
+      );
+
+      expect(mockUpdateNodeData).toHaveBeenCalledWith("test-node-1", { inputSchema: inputs });
     });
   });
 
@@ -610,7 +690,8 @@ describe("GenerateImageNode", () => {
         </TestWrapper>
       );
 
-      expect(screen.getByText("FLUX Dev")).toBeInTheDocument();
+      // The primary name is also the summary row title, so it appears twice.
+      expect(screen.getAllByText("FLUX Dev").length).toBeGreaterThanOrEqual(2);
       expect(screen.getByText("FLUX Schnell")).toBeInTheDocument();
     });
 

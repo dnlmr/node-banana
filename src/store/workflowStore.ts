@@ -1,5 +1,10 @@
+import { desktopCredentialsReady } from "@/lib/desktop/credentials";
+import type { QuickstartView } from "@/types/quickstart";
+import { pushGenerationToast } from "@/components/GenerationToast";
 import { create, StateCreator } from "zustand";
-import { COMFY_SETTINGS_CHANGED_EVENT, getComfySettings } from "@/lib/comfy/settings";
+import { COMFY_SETTINGS_CHANGED_EVENT, getComfySettings, migrateLegacyComfyCloudKey } from "@/lib/comfy/settings";
+import { createAutoSave, type AutoSave } from "./utils/autoSave";
+import { saveShortcutLabel } from "@/utils/saveShortcut";
 import { useShallow } from "zustand/shallow";
 import {
   Connection,
@@ -27,13 +32,29 @@ import {
   CanvasNavigationSettings,
   MatchMode,
   MODEL_DISPLAY_NAMES,
+  EdgeStyle,
+  EdgeAppearance,
+  WorkflowEdgeData,
 } from "@/types";
 import { UndoManager, UndoSnapshot, clonePreservingStrings } from "./undoHistory";
 import { useToast } from "@/components/Toast";
 import { logger } from "@/utils/logger";
+import { hasHistoryEntries, historyAssetIds, isHistoryEntryAvailable, pruneMissingHistory } from "./utils/historyPruning";
+import type { AssetExistence, AssetRunContext, RecordAssetInput, RecordedAssetHandle } from "@/lib/assets/types";
+import { beginRun, endRun, isRecorderEnabled, recordAsset } from "@/lib/assets/client/recorder";
+import { captureGraph } from "@/lib/assets/client/snapshot";
+import { newRunId } from "@/lib/assets/client/ids";
+import { fetchAssetExistence, upsertWorkflowEntry } from "@/lib/assets/client/api";
+import type { ProviderModel } from "@/lib/providers/types";
+import { isGenerateNodeType, modelSelectionData } from "./utils/modelSelection";
 import { externalizeWorkflowMedia, hydrateWorkflowMedia } from "@/utils/mediaStorage";
 import { EditOperation, applyEditOperations as executeEditOps } from "@/lib/chat/editOperations";
+import { applyGraphOps } from "@/lib/agent/graph/applyOps";
+import type { AgentGraphOpBatch } from "@/lib/agent/types";
 import { findNearestFreePosition } from "@/utils/spatialLayout";
+import { getNodeSize } from "@/utils/nodeDimensions";
+import { hookHandles, insertHookHandle, withHookHandles } from "@/lib/edges/hook";
+import { nextArrayItemIndex } from "@/lib/edges/arrayItems";
 import {
   loadSaveConfigs,
   saveSaveConfig,
@@ -48,10 +69,25 @@ import {
   generateWorkflowId,
   getCanvasNavigationSettings,
   saveCanvasNavigationSettings,
+  getEdgeDefaults,
+  loadAutoSaveEnabled,
+  saveAutoSaveEnabled,
 } from "./utils/localStorage";
+import { normalizeEdgeAppearance } from "@/lib/edges/appearance";
+import {
+  captureWorkflowTabSnapshot,
+  createTabId,
+  emptyWorkflowTabSnapshot,
+  isWorkflowTabPristine,
+  tabToActivateAfterClose,
+  type WorkflowTab,
+  type WorkflowTabSnapshot,
+} from "./utils/workflowTabs";
+import { shareHandleAt, sharedEnd, bundleIdAt, type BundleEnd, MIN_BUNDLE_REACH, MAX_BUNDLE_REACH } from "@/lib/edges/bundles";
 import {
   createDefaultNodeData,
   defaultNodeDimensions,
+  migrateNodeGeometry,
   GROUP_COLORS,
   GROUP_COLOR_ORDER,
 } from "./utils/nodeDefaults";
@@ -65,10 +101,14 @@ import {
   findLoopSubgraph,
   copyLoopOutput,
   revokeBlobUrl,
+  stripDeadBlobUrls,
+  wouldCreateCycle,
 } from "./utils/executionUtils";
-import { getConnectedInputsPure, validateWorkflowPure, type ConnectedInputs } from "./utils/connectedInputs";
+import { getConnectedInputsPure, validateWorkflowPure, nodeReadinessPure, type ConnectedInputs, type NodeReadiness } from "./utils/connectedInputs";
+import { isMissingInputError } from "./execution/missingInput";
 import {
   buildCellInstances,
+  fitSplitGridCellMeasurements,
   clampGridDimension,
   computeMaterializedKey,
   getRouterConnections,
@@ -76,9 +116,18 @@ import {
   getSplitGridTemplate,
   needsMaterialization,
 } from "./utils/splitGridTemplate";
-import type { SplitGridTemplate } from "@/types";
+import type { ArrayNodeData, SplitGridTemplate } from "@/types";
 import { evaluateRule } from "./utils/ruleEvaluation";
 import { computeDimmedNodes } from "./utils/dimmingUtils";
+import {
+  batchTag,
+  clampRunCount,
+  newBatchId,
+  runBatchLoop,
+  type RunBatch,
+  type RunOutcome,
+  type RunScope,
+} from "./utils/runBatch";
 import {
   executeAnnotation,
   executeArray,
@@ -152,7 +201,8 @@ function saveLogSession(): void {
   }
 }
 
-export type EdgeStyle = "angular" | "curved";
+// Re-exported for existing imports; the type lives in src/types/workflow.ts.
+export type { EdgeStyle };
 
 function buildConnectionEdgeData(
   connection: Connection,
@@ -163,47 +213,9 @@ function buildConnectionEdgeData(
   const sourceNode = nodes.find((n) => n.id === connection.source);
 
   // Array node uses a single output handle; assign each edge a stable item index.
+  // Batch mode is derived in connectedInputs.ts from the source's batchMode.
   if (sourceNode?.type === "array" && (connection.sourceHandle || "text") === "text") {
-    const sourceData = sourceNode.data as Record<string, unknown>;
-
-    // Batch mode is now derived dynamically in connectedInputs.ts from
-    // the source node's batchMode — no need to stamp edge metadata.
-
-    const selectedIndex = sourceData.selectedOutputIndex;
-    const outputItems = Array.isArray(sourceData.outputItems) ? sourceData.outputItems : [];
-    const outputCount = outputItems.length;
-
-    if (
-      typeof selectedIndex === "number" &&
-      Number.isInteger(selectedIndex) &&
-      selectedIndex >= 0 &&
-      (outputCount === 0 || selectedIndex < outputCount)
-    ) {
-      baseData.arrayItemIndex = selectedIndex;
-      return baseData;
-    }
-
-    if (outputCount > 0) {
-      const existingArrayEdges = edges.filter(
-        (e) => e.source === connection.source && (e.sourceHandle || "text") === "text"
-      );
-
-      const lastEdge = existingArrayEdges.reduce<WorkflowEdge | null>((latest, edge) => {
-        if (!latest) return edge;
-        const latestTime = (latest.data as Record<string, unknown> | undefined)?.createdAt;
-        const edgeTime = (edge.data as Record<string, unknown> | undefined)?.createdAt;
-        return (typeof edgeTime === "number" && typeof latestTime === "number" && edgeTime > latestTime) ? edge : latest;
-      }, null);
-
-      const lastIndex = (lastEdge?.data as Record<string, unknown> | undefined)?.arrayItemIndex;
-      const startIndex = typeof lastIndex === "number" && Number.isInteger(lastIndex) && lastIndex >= 0
-        ? lastIndex + 1
-        : existingArrayEdges.length;
-
-      baseData.arrayItemIndex = startIndex % outputCount;
-    } else {
-      baseData.arrayItemIndex = 0;
-    }
+    baseData.arrayItemIndex = nextArrayItemIndex(sourceNode.id, sourceNode.data as ArrayNodeData, edges);
   }
 
   return baseData;
@@ -240,19 +252,31 @@ export interface WorkflowFile {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   edgeStyle: EdgeStyle;
+  edgeAppearance?: EdgeAppearance;  // Optional: older files fall back to the user default
   groups?: Record<string, NodeGroup>;  // Optional for backward compatibility
+  /** Runs per press of Run ("Run 10×"); absent means one. */
+  runCount?: number;
 }
 
 // Clipboard data structure for copy/paste
 interface ClipboardData {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
+  /** The folder the copied nodes' file refs are relative to. */
+  imageRefBasePath?: string | null;
 }
 
-interface WorkflowStore {
+/** A run as the asset library knows it, and the canvas it started on. */
+export interface CurrentAssetRun {
+  run: AssetRunContext;
+  canvasGeneration: number;
+}
+
+export interface WorkflowStore {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   edgeStyle: EdgeStyle;
+  edgeAppearance: EdgeAppearance;
   clipboard: ClipboardData | null;
   groups: Record<string, NodeGroup>;
 
@@ -264,10 +288,13 @@ interface WorkflowStore {
 
   // Settings
   setEdgeStyle: (style: EdgeStyle) => void;
+  setEdgeAppearance: (patch: Partial<EdgeAppearance>) => void;
 
   // Node operations
   addNode: (type: NodeType, position: XYPosition, initialData?: Partial<WorkflowNodeData>) => string;
   updateNodeData: (nodeId: string, data: Partial<WorkflowNodeData>) => void;
+  /** Put one model on several generation nodes of the same type, as one undo step. */
+  applyModelToNodes: (nodeIds: string[], model: ProviderModel) => void;
   removeNode: (nodeId: string) => void;
   onNodesChange: (changes: NodeChange<WorkflowNode>[]) => void;
 
@@ -276,7 +303,35 @@ interface WorkflowStore {
   onConnect: (connection: Connection, edgeDataOverrides?: Record<string, unknown>) => void;
   addEdgeWithType: (connection: Connection, edgeType: string, edgeDataOverrides?: Record<string, unknown>) => void;
   removeEdge: (edgeId: string) => void;
+  /**
+   * Move one end of an existing edge to a new source/target (drag-to-replug).
+   * Keeps the edge's data (pause, creation order, offsets) and re-evaluates
+   * whether it forms a loop. Returns false when nothing changed: unknown edge,
+   * incomplete connection, or an identical edge already present.
+   */
+  reconnectEdge: (edgeId: string, connection: Connection) => boolean;
   toggleEdgePause: (edgeId: string) => void;
+  /** Remove several edges as one undo step. */
+  removeEdges: (edgeIds: string[]) => void;
+  /** Pause or resume several edges as one undo step. */
+  setEdgesPause: (edgeIds: string[], hasPause: boolean) => void;
+  /** Hide or show several edges as one undo step. Hidden edges still execute. */
+  setEdgesHidden: (edgeIds: string[], hidden: boolean) => void;
+  /** Hide or show every edge as one undo step. */
+  setAllEdgesHidden: (hidden: boolean) => void;
+  /** Set an edge's own label; blank clears it so the automatic label shows. */
+  setEdgeLabel: (edgeId: string, label: string) => void;
+  /** Gives several connections one label (or clears it) in one undo step. */
+  setEdgesLabel: (edgeIds: string[], label: string) => void;
+  /** Bundle edges that share an output handle or an input handle. Returns false otherwise. */
+  bundleEdges: (edgeIds: string[], end?: BundleEnd) => boolean;
+  hookEdges: (edgeIds: string[], position: { x: number; y: number }) => void;
+  moveHookBundle: (bundleId: string, position: { x: number; y: number }, checkpoint?: boolean) => void;
+  removeHookBundle: (bundleId: string) => void;
+  /** Dissolve the manual bundles the given edges belong to. */
+  unbundleEdges: (edgeIds: string[], end?: BundleEnd) => void;
+  /** Set where the bundle on a node's handle splits (px from the handle). */
+  setBundleClamp: (nodeId: string, key: string, reach: number) => void;
   setLoopCount: (edgeId: string, count: number) => void;
 
   // Copy/Paste operations
@@ -305,17 +360,34 @@ interface WorkflowStore {
    */
   materializeSplitGridCells: (
     nodeId: string,
-    options?: { force?: boolean; template?: SplitGridTemplate }
+    /** skipCheckpoint: the caller already pushed this change's undo step. */
+    options?: { force?: boolean; template?: SplitGridTemplate; skipCheckpoint?: boolean }
   ) => boolean;
 
   // UI State
+  /** The handle under the pointer, so hidden connections on it can ghost back. */
+  hoveredHandle: { nodeId: string; handleId: string | null; type: "source" | "target" } | null;
+  setHoveredHandle: (handle: { nodeId: string; handleId: string | null; type: "source" | "target" } | null) => void;
+  /** The handle whose hidden connections are shown one per row instead of as a single pill. */
+  expandedStubGroup: string | null;
+  activeHookBundleId: string | null;
+  /** The hook sweep in progress: the noodles caught so far follow this point until release. Never saved. */
+  hookDrag: { x: number; y: number; edgeIds: string[] } | null;
+  setHookDrag: (drag: { x: number; y: number; edgeIds: string[] } | null) => void;
+  edgeMenuAnchor: { edgeId: string; x: number; y: number } | null;
+  setExpandedStubGroup: (key: string | null) => void;
+  /** Measured width of each collapsed stub pill, by group key, so every member's ghost can start at its outer edge. */
+  stubGroupWidths: Record<string, number>;
+  setStubGroupWidth: (key: string, width: number) => void;
   openModalCount: number;
   isModalOpen: boolean;
   showQuickstart: boolean;
+  /** Which view the welcome dialog opens on; the menu's Templates entry opens it on "templates". */
+  quickstartView: QuickstartView;
   hoveredNodeId: string | null;
   incrementModalCount: () => void;
   decrementModalCount: () => void;
-  setShowQuickstart: (show: boolean) => void;
+  setShowQuickstart: (show: boolean, view?: QuickstartView) => void;
   setHoveredNodeId: (id: string | null) => void;
 
   // Execution
@@ -324,23 +396,61 @@ interface WorkflowStore {
   pausedAtNodeId: string | null;
   maxConcurrentCalls: number;  // Configurable concurrency limit (1-10)
   _abortController: AbortController | null;  // Internal: for cancellation
-  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal) => NodeExecutionContext;
+  /** Internal: the run the asset library is recording, set with `_abortController`; null when it is not recording. */
+  _currentRun: CurrentAssetRun | null;
+  /** `assetRun`: the asset library run to record under (a single node's own run); defaults to `_currentRun`. */
+  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null) => NodeExecutionContext;
   executeWorkflow: (startFromNodeId?: string) => Promise<void>;
   regenerateNode: (nodeId: string) => Promise<void>;
   executeSelectedNodes: (nodeIds: string[]) => Promise<void>;
   stopWorkflow: () => void;
+  /** Runs per press of Run, saved with the workflow (1–MAX_RUN_COUNT). */
+  runCount: number;
+  setRunCount: (count: number) => void;
+  /** The batch in progress, or null (a single run, or nothing running). */
+  batch: RunBatch | null;
+  /** Run `scope` runCount times, one run after another. */
+  runBatch: (scope: RunScope) => Promise<void>;
+  /** The Run button's Stop: mid-batch the first press lets this run finish, the second stops now. */
+  requestStop: () => void;
   mockTutorialExecution: () => Promise<void>;
   setMaxConcurrentCalls: (value: number) => void;
 
   // Save/Load
   saveWorkflow: (name?: string) => void;
-  loadWorkflow: (workflow: WorkflowFile, workflowPath?: string, options?: { preserveSnapshot?: boolean }) => Promise<void>;
+  loadWorkflow: (workflow: WorkflowFile, workflowPath?: string) => Promise<void>;
+  /** Drop carousel entries whose files are no longer in the generations folder. */
+  pruneMissingHistory: () => Promise<void>;
   clearWorkflow: () => void;
+
+  // Workflow tabs: several workflows open, one live in the canvas
+  desktopConnected: boolean;
+  setDesktopConnected: (online: boolean) => void;
+  restoreDesktopSession: (tabs: { id: string; snapshot: WorkflowTabSnapshot }[], activeTabId: string) => void;
+  tabs: WorkflowTab[];
+  activeTabId: string;
+  /** Last known pan/zoom of the live workflow, parked with its tab. */
+  canvasViewport: { x: number; y: number; zoom: number } | null;
+  setCanvasViewport: (viewport: { x: number; y: number; zoom: number }) => void;
+  /** Media saves still writing to disk after a run; they update nodes by id when they land. */
+  pendingMediaSaves: number;
+  /** Why tab changes are refused right now, or null when they are allowed. */
+  tabsBusyReason: () => string | null;
+  /** Park the live workflow and open an empty tab. Returns the new tab id, or null while a run or save is in flight. */
+  newTab: () => string | null;
+  /** Park the live workflow and bring `tabId` into the canvas. False when nothing changed. */
+  switchTab: (tabId: string) => boolean;
+  /** Close a tab. Closing the only tab leaves an empty one. False when nothing changed. */
+  closeTab: (tabId: string) => boolean;
+  /** Load a workflow into a new tab, or into the current one when it is untouched. */
+  openWorkflowInNewTab: (workflow: WorkflowFile, workflowPath?: string) => Promise<void>;
 
   // Helpers
   getNodeById: (id: string) => WorkflowNode | undefined;
   getConnectedInputs: (nodeId: string) => ConnectedInputs;
   validateWorkflow: () => { valid: boolean; errors: string[] };
+  /** Which nodes cannot run as wired, and why. Advisory only; Run is never blocked by it. */
+  nodeReadiness: () => Record<string, NodeReadiness>;
 
   // Global Image History
   globalImageHistory: ImageHistoryItem[];
@@ -350,6 +460,8 @@ interface WorkflowStore {
   // Auto-save state
   workflowId: string | null;
   workflowName: string | null;
+  /** Bumped on every loadWorkflow, so the canvas can re-measure handles once the new nodes are in the DOM. */
+  workflowLoadCount: number;
   saveDirectoryPath: string | null;
   generationsPath: string | null;
   lastSavedAt: number | null;
@@ -359,6 +471,15 @@ interface WorkflowStore {
   useExternalImageStorage: boolean;  // Store images as separate files vs embedded base64
   imageRefBasePath: string | null;  // Directory from which current imageRefs are valid
 
+  /** Give the live workflow an id if it has none, so its assets have a workflow to belong to. Returns the id. */
+  ensureWorkflowId: () => string;
+  /**
+   * Save what a UI action made (an annotation, a split) to the asset library,
+   * as one run of its own. Call it after the edit is applied. Returns a handle
+   * per input; none while the library is off.
+   */
+  recordUiAsset: (input: RecordAssetInput | RecordAssetInput[]) => RecordedAssetHandle[];
+
   // Auto-save actions
   setWorkflowMetadata: (id: string, name: string, path: string, generationsPath?: string | null) => void;
   setWorkflowName: (name: string) => void;
@@ -366,7 +487,8 @@ interface WorkflowStore {
   setAutoSaveEnabled: (enabled: boolean) => void;
   setUseExternalImageStorage: (enabled: boolean) => void;
   markAsUnsaved: () => void;
-  saveToFile: () => Promise<boolean>;
+  /** Save the workflow to its folder. A manual save reports failure in a toast; autosave reports through its own notice. */
+  saveToFile: (options?: { reason?: "manual" | "auto" }) => Promise<boolean>;
   saveAsFile: (name: string) => Promise<boolean>;
   initializeAutoSave: () => void;
   cleanupAutoSave: () => void;
@@ -420,21 +542,19 @@ interface WorkflowStore {
   setFocusedCommentNodeId: (nodeId: string | null) => void;
   resetViewedComments: () => void;
 
-  // AI change snapshot state
-  previousWorkflowSnapshot: {
-    nodes: WorkflowNode[];
-    edges: WorkflowEdge[];
-    groups: Record<string, NodeGroup>;
-    edgeStyle: EdgeStyle;
-  } | null;
-  manualChangeCount: number;
-
-  // AI change snapshot actions
-  captureSnapshot: () => void;
-  revertToSnapshot: () => void;
-  clearSnapshot: () => void;
-  incrementManualChangeCount: () => void;
   applyEditOperations: (operations: EditOperation[]) => { applied: number; skipped: string[] };
+  /**
+   * Applies one batch of resolved canvas changes from the agent as a single
+   * undo step. Ops that no longer fit the live canvas are skipped and
+   * returned with reasons.
+   */
+  applyAgentGraphOps: (batch: AgentGraphOpBatch) => { applied: number; skipped: string[] };
+  /**
+   * Bumped whenever a different canvas replaces the live one (loadWorkflow,
+   * clearWorkflow, a tab switch). An agent turn remembers the generation it
+   * was sent from and drops edits that arrive after its canvas was replaced.
+   */
+  canvasGeneration: number;
 
   // Canvas navigation settings state
   canvasNavigationSettings: CanvasNavigationSettings;
@@ -455,7 +575,23 @@ interface WorkflowStore {
 
 let nodeIdCounter = 0;
 let groupIdCounter = 0;
-let autoSaveIntervalId: ReturnType<typeof setInterval> | null = null;
+
+/** Keep generated ids clear of the ids already present in a graph. */
+function syncIdCounters(nodes: WorkflowNode[], groups: Record<string, NodeGroup> | undefined): void {
+  const maxSuffix = (ids: string[]) =>
+    ids.reduce((max, id) => {
+      const match = id.match(/-(\d+)$/);
+      return match ? Math.max(max, parseInt(match[1], 10)) : max;
+    }, 0);
+  nodeIdCounter = maxSuffix(nodes.map((node) => node.id));
+  groupIdCounter = maxSuffix(Object.keys(groups || {}));
+}
+let autoSave: AutoSave | null = null;
+let autoSaveWindowListeners: (() => void) | null = null;
+// The save in flight, if any. Saves run one at a time: a manual save that
+// overlapped an autosave could finish first and be overwritten on disk by the
+// older snapshot, or have its isSaving cleared from under it.
+let activeSave: Promise<void> | null = null;
 
 // Undo/redo state (module-level, not in Zustand to avoid serialization)
 const undoManager = new UndoManager();
@@ -475,6 +611,39 @@ let deleteCheckpointActive = false;
 // RAF debounce for hover updates — coalesces rapid mouseenter/mouseleave events
 // into a single store update per animation frame
 let hoverRafId: number | null = null;
+
+// Single-node runs (a node's own Run button) in flight, by node. Several can
+// run at once, each with its own abort and asset library run; `isRunning`
+// stays set until the last one ends. A workflow or selection run still holds
+// the canvas on its own.
+const nodeRuns = new Map<string, { controller: AbortController; assetRun: CurrentAssetRun | null }>();
+
+/** Aborts every single-node run and closes its asset run (Stop, load, clear, tab switch, disconnect). */
+function abortNodeRuns(state: WorkflowStore, reason: string): void {
+  for (const { controller, assetRun } of nodeRuns.values()) {
+    controller.abort(reason);
+    if (assetRun) closeAssetRun(assetRun, state);
+  }
+  nodeRuns.clear();
+}
+
+// How the latest executeWorkflow / executeSelectedNodes went, for runBatch:
+// the serial moves when a run starts, `failed` is set when it ends in error.
+const lastRun = { serial: 0, failed: false };
+
+// Counts every run started (workflow, selection, single node), so the
+// writes of a stopped run can tell whether a newer run has begun since.
+let runStarts = 0;
+
+/**
+ * Whether a run started with `controller` may still set the run state
+ * (isRunning, the controller, the current nodes): it is the current run, or
+ * it was stopped and nothing has started since. A stopped run that finishes
+ * late must not unlock, or end, the run that replaced it.
+ */
+function ownsRunState(state: WorkflowStore, controller: AbortController): boolean {
+  return state._abortController === controller || (state._abortController === null && !state.isRunning);
+}
 
 // Track pending save-generation syncs to ensure IDs are resolved before workflow save
 const pendingImageSyncs = new Map<string, Promise<void>>();
@@ -501,6 +670,105 @@ async function waitForPendingImageSyncs(timeout: number = 60000): Promise<void> 
   }
 }
 
+/**
+ * Start a run for the asset library, when it is recording: the workflow gets
+ * an id if it had none, the run gets its own, and the recorder holds the
+ * graph as the run starts. Null while the library is off — the run then
+ * saves the way it always has.
+ */
+function openAssetRun(get: () => WorkflowStore): CurrentAssetRun | null {
+  if (!isRecorderEnabled()) return null;
+  const workflowId = get().ensureWorkflowId();
+  const state = get();
+  const run: AssetRunContext = {
+    runId: newRunId(),
+    workflowId,
+    workflowName: state.workflowName,
+    projectDir: state.saveDirectoryPath,
+    startedAt: Date.now(),
+    ...(state.batch ? { batch: batchTag(state.batch) } : {}),
+  };
+  try {
+    beginRun(run, captureGraph(state));
+  } catch (error) {
+    console.error("Failed to start recording the run:", error);
+    return null;
+  }
+  return { run, canvasGeneration: state.canvasGeneration };
+}
+
+/**
+ * The run a node's outputs are recorded under, and a recorder bound to it —
+ * captured when the node's context is built, so a later run (or none) never
+ * claims them. Nothing while the library is off.
+ */
+function assetRecordingFor(current: CurrentAssetRun | null): Pick<NodeExecutionContext, "assetRun" | "recordAsset"> {
+  if (!current || !isRecorderEnabled()) return {};
+  const { run } = current;
+  return { assetRun: run, recordAsset: (input) => recordAsset(input, run) };
+}
+
+/**
+ * End a run for the asset library, with the graph it ended on — unless the
+ * canvas it ran on was replaced (a load, a clear, a tab switch, a new id),
+ * when that graph is someone else's.
+ */
+function closeAssetRun(current: CurrentAssetRun, state: WorkflowStore): void {
+  const sameCanvas =
+    state.canvasGeneration === current.canvasGeneration && state.workflowId === current.run.workflowId;
+  try {
+    endRun(current.run.runId, sameCanvas ? captureGraph(state) : null);
+  } catch (error) {
+    console.error("Failed to finish recording the run:", error);
+  }
+}
+
+/**
+ * Tell the asset library which project a workflow belongs to: one write,
+ * after which every asset recorded under the id is classified with it.
+ * Best effort; a library that is off or unreachable changes nothing here.
+ * Stamped with now, so a run that started earlier and records late never
+ * puts back the name or folder it started with.
+ */
+function classifyWorkflow(workflowId: string, name: string | null, projectPath: string | null, forkedFrom?: string): void {
+  if (!isRecorderEnabled()) return;
+  const asOf = Date.now();
+  Promise.resolve()
+    .then(() => upsertWorkflowEntry(workflowId, { name, projectPath, ...(forkedFrom ? { forkedFrom } : {}), asOf }))
+    .catch((error) => {
+      console.warn("Failed to update the asset library's workflow entry:", error);
+    });
+}
+
+/** The producing node's custom title, when the caller did not give one. */
+function withProducerTitle(input: RecordAssetInput, nodes: WorkflowNode[]): RecordAssetInput {
+  if (input.producer.nodeTitle !== undefined) return input;
+  const title = (nodes.find((n) => n.id === input.producer.nodeId)?.data as { customTitle?: unknown } | undefined)?.customTitle;
+  if (typeof title !== "string" || !title.trim()) return input;
+  return { ...input, producer: { ...input.producer, nodeTitle: title.trim() } };
+}
+
+/** The ids a generations folder holds, or null when it could not be listed. */
+async function listGenerationIds(generationsPath: string): Promise<Set<string> | null> {
+  try {
+    const response = await fetch(`/api/list-generations?path=${encodeURIComponent(generationsPath)}`);
+    const result = await response.json();
+    if (!result?.success || !Array.isArray(result.ids)) return null;
+    return new Set<string>(result.ids);
+  } catch {
+    return null;
+  }
+}
+
+/** What the asset library says about these ids; every one "unknown" when it cannot say. */
+async function assetExistence(ids: string[]): Promise<Record<string, AssetExistence>> {
+  if (ids.length === 0) return {};
+  try {
+    return (await fetchAssetExistence(ids)) ?? {};
+  } catch {
+    return {};
+  }
+}
 
 // Re-export for backward compatibility
 export { generateWorkflowId, saveGenerateImageDefaults, saveNanoBananaDefaults } from "./utils/localStorage";
@@ -572,6 +840,7 @@ function captureUndoSnapshot(state: WorkflowStore): UndoSnapshot {
     edges: state.edges,
     groups: state.groups,
     edgeStyle: state.edgeStyle,
+    edgeAppearance: state.edgeAppearance,
   }) as UndoSnapshot;
   // Strip transient selection state from cloned nodes
   for (const node of cloned.nodes) {
@@ -581,6 +850,16 @@ function captureUndoSnapshot(state: WorkflowStore): UndoSnapshot {
 }
 
 /** Flush pending debounced data snapshot, capture current state, push to undoManager */
+/** Split Grids an agent batch gave cells or a new size. */
+function splitGridsToBuild(ops: AgentGraphOpBatch["ops"]): string[] {
+  const ids = new Set<string>();
+  for (const op of ops) {
+    if (op.op === "addNode" && op.nodeType === "splitGrid" && op.data.template) ids.add(op.id);
+    if (op.op === "updateNode" && ("template" in op.data || "gridRows" in op.data || "gridCols" in op.data)) ids.add(op.id);
+  }
+  return [...ids];
+}
+
 function pushUndoCheckpoint(
   get: () => WorkflowStore,
   set: (partial: Partial<WorkflowStore>) => void,
@@ -608,62 +887,187 @@ function syncUndoFlags(set: (partial: Partial<WorkflowStore>) => void): void {
 // unbounded across a session (each item can be 1-2MB).
 const MAX_GLOBAL_IMAGE_HISTORY = 50;
 
-// Scan a node's data for blob: object URLs and revoke them to free the
-// backing Blob memory. Used when nodes are permanently discarded (workflow
-// clear/reload) where the undo history that referenced them is also cleared.
-function revokeNodeBlobUrls(nodes: WorkflowNode[]): void {
+// Every blob: object URL a set of nodes holds.
+function nodeBlobUrls(nodes: readonly WorkflowNode[]): Set<string> {
+  const urls = new Set<string>();
   // Recursively walk strings, arrays, and nested plain objects so blob: URLs
-  // held in gallery/video arrays or nested media metadata are revoked too.
+  // held in gallery/video arrays or nested media metadata are found too.
   // The depth cap guards against cycles / pathologically deep structures.
-  const revokeDeep = (value: unknown, depth: number): void => {
+  const visitDeep = (value: unknown, depth: number): void => {
     if (depth > 8) return;
     if (typeof value === "string") {
-      if (value.startsWith("blob:")) revokeBlobUrl(value);
+      if (value.startsWith("blob:")) urls.add(value);
       return;
     }
     if (Array.isArray(value)) {
-      for (const item of value) revokeDeep(item, depth + 1);
+      for (const item of value) visitDeep(item, depth + 1);
       return;
     }
     if (value && typeof value === "object") {
       for (const item of Object.values(value as Record<string, unknown>)) {
-        revokeDeep(item, depth + 1);
+        visitDeep(item, depth + 1);
       }
     }
   };
-  for (const node of nodes) {
-    const data = node.data as Record<string, unknown> | undefined;
-    if (!data) continue;
-    revokeDeep(data, 0);
+  for (const node of nodes) visitDeep(node.data, 0);
+  return urls;
+}
+
+// Revoke the blob: object URLs of nodes being discarded for good (workflow
+// clear/reload, a closed tab) where the undo history that referenced them is
+// also cleared, unless `retainedNodes` (still alive elsewhere) hold them too.
+function revokeNodeBlobUrls(nodes: WorkflowNode[], retainedNodes: readonly WorkflowNode[] = []): void {
+  const retained = nodeBlobUrls(retainedNodes);
+  for (const url of nodeBlobUrls(nodes)) {
+    if (!retained.has(url)) revokeBlobUrl(url);
   }
 }
 
+/**
+ * Nodes that keep their media URLs alive when a graph is discarded: the
+ * clipboard, whose copies share URL strings with their source, and every
+ * other tab, which may hold pasted copies.
+ */
+function retainedMediaNodes(state: WorkflowStore, discardedTabId = state.activeTabId): WorkflowNode[] {
+  return [
+    ...(state.clipboard?.nodes ?? []),
+    ...(state.activeTabId !== discardedTabId ? state.nodes : []),
+    ...state.tabs.filter((tab) => tab.id !== discardedTabId).flatMap((tab) => tab.snapshot?.nodes ?? []),
+  ];
+}
+
+/**
+ * Make `snapshot` the live workflow. Mirrors what loadWorkflow does around a
+ * graph swap (abort a run, reset id counters, drop stub UI state, clear undo),
+ * without touching disk: a parked tab's media stays as it was in memory.
+ */
+function applyTabSnapshot(
+  set: (partial: Partial<WorkflowStore>) => void,
+  get: () => WorkflowStore,
+  snapshot: WorkflowTabSnapshot
+): void {
+  const inflight = get()._abortController;
+  if (inflight) inflight.abort("workflow-switched");
+  abortNodeRuns(get(), "workflow-switched");
+  syncIdCounters(snapshot.nodes, snapshot.groups);
+  set({
+    ...snapshot,
+    hoveredHandle: null,
+    expandedStubGroup: null,
+    stubGroupWidths: {},
+    isRunning: false,
+    currentNodeIds: [],
+    _abortController: null,
+    batch: null,
+    workflowLoadCount: get().workflowLoadCount + 1,
+    showQuickstart: false,
+    // A different canvas: a running agent turn must not edit it
+    canvasGeneration: get().canvasGeneration + 1,
+  });
+  // Undo history belongs to the outgoing graph; a switch starts fresh
+  pendingDataSnapshot = null;
+  if (dataChangeTimer) {
+    clearTimeout(dataChangeTimer);
+    dataChangeTimer = null;
+  }
+  undoManager.clear();
+  syncUndoFlags(set);
+  get().recomputeDimmedNodes();
+}
+
+/** Explain blocked run attempts instead of silently dropping node-button clicks. */
+function canStartExecution(connected: boolean): boolean {
+  const reason = !desktopCredentialsReady()
+    ? "Provider keys are still loading. Wait for setup to finish before running."
+    : !connected ? "Local server disconnected. Use Help → Restart Local Server to reconnect." : null;
+  if (!reason) return true;
+  logger.warn('workflow.start', reason);
+  useToast.getState().show(reason, "warning");
+  return false;
+}
+
+const initialTabId = createTabId();
+
 const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
+  setDesktopConnected: (online) => {
+    // Stop the old execution chain before a replacement backend can accept work.
+    if (!online) {
+      get()._abortController?.abort("desktop-backend-disconnected");
+      abortNodeRuns(get(), "desktop-backend-disconnected");
+    }
+    set({ desktopConnected: online });
+  },
+  desktopConnected: typeof window === "undefined" || !window.nodeBananaDesktop,
   nodes: [],
   edges: [],
-  edgeStyle: "curved" as EdgeStyle,
+  edgeStyle: getEdgeDefaults().edgeStyle,
+  edgeAppearance: getEdgeDefaults().appearance,
   clipboard: null,
   groups: {},
+  hoveredHandle: null,
+  setHoveredHandle: (handle) => {
+    const current = get().hoveredHandle;
+    if (
+      (current === null && handle === null) ||
+      (current && handle && current.nodeId === handle.nodeId && current.handleId === handle.handleId && current.type === handle.type)
+    ) return;
+    set({ hoveredHandle: handle });
+  },
+  expandedStubGroup: null,
+  activeHookBundleId: null,
+  hookDrag: null,
+  setHookDrag: (drag) => {
+    if (drag === null && get().hookDrag === null) return;
+    set({ hookDrag: drag });
+  },
+  edgeMenuAnchor: null,
+  setExpandedStubGroup: (key) => {
+    if (get().expandedStubGroup !== key) set({ expandedStubGroup: key });
+  },
+  stubGroupWidths: {},
+  setStubGroupWidth: (key, width) => {
+    if (get().stubGroupWidths[key] === width) return;
+    set({ stubGroupWidths: { ...get().stubGroupWidths, [key]: width } });
+  },
   openModalCount: 0,
   isModalOpen: false,
   showQuickstart: true,
+  quickstartView: "initial",
   hoveredNodeId: null,
   isRunning: false,
   currentNodeIds: [],  // Changed from currentNodeId for parallel execution
   pausedAtNodeId: null,
   maxConcurrentCalls: loadConcurrencySetting(),  // Default 3, configurable 1-10
   _abortController: null,  // Internal: for cancellation
+  _currentRun: null,
+  runCount: 1,
+  batch: null,
   globalImageHistory: [],
 
   // Auto-save initial state
   workflowId: null,
   workflowName: null,
+  workflowLoadCount: 0,
   saveDirectoryPath: null,
   generationsPath: null,
   lastSavedAt: null,
   hasUnsavedChanges: false,
-  autoSaveEnabled: true,
+  autoSaveEnabled: loadAutoSaveEnabled(),
   isSaving: false,
+
+  // Workflow tabs initial state: one live tab
+  tabs: [{ id: initialTabId, snapshot: null }],
+  activeTabId: initialTabId,
+  canvasViewport: null,
+  setCanvasViewport: (viewport) => set({ canvasViewport: viewport }),
+  pendingMediaSaves: 0,
+  tabsBusyReason: () => {
+    const { isRunning, isSaving, pendingMediaSaves } = get();
+    if (isRunning) return "Wait for the run to finish";
+    if (isSaving) return "Wait for the save to finish";
+    if (pendingMediaSaves > 0) return "Wait for the media to finish saving";
+    return null;
+  },
   useExternalImageStorage: true,  // Default: store images as separate files
   imageRefBasePath: null,  // Directory from which current imageRefs are valid
 
@@ -689,9 +1093,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   navigationTarget: null,
   focusedCommentNodeId: null,
 
-  // AI change snapshot initial state
-  previousWorkflowSnapshot: null,
-  manualChangeCount: 0,
+  canvasGeneration: 0,
 
   // Canvas navigation settings initial state
   canvasNavigationSettings: getCanvasNavigationSettings(),
@@ -724,6 +1126,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: previous.edges,
         groups: previous.groups,
         edgeStyle: previous.edgeStyle,
+        edgeAppearance: previous.edgeAppearance,
         hasUnsavedChanges: true,
       });
       get().recomputeDimmedNodes();
@@ -749,6 +1152,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: next.edges,
         groups: next.groups,
         edgeStyle: next.edgeStyle,
+        edgeAppearance: next.edgeAppearance,
         hasUnsavedChanges: true,
       });
       get().recomputeDimmedNodes();
@@ -757,8 +1161,14 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   setEdgeStyle: (style: EdgeStyle) => {
+    if (get().edgeStyle === style) return;
     pushUndoCheckpoint(get, set);
-    set({ edgeStyle: style });
+    set({ edgeStyle: style, hasUnsavedChanges: true });
+  },
+
+  setEdgeAppearance: (patch: Partial<EdgeAppearance>) => {
+    pushUndoCheckpoint(get, set);
+    set((state) => ({ edgeAppearance: { ...state.edgeAppearance, ...patch }, hasUnsavedChanges: true }));
   },
 
   incrementModalCount: () => {
@@ -775,8 +1185,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     });
   },
 
-  setShowQuickstart: (show: boolean) => {
-    set({ showQuickstart: show });
+  setShowQuickstart: (show: boolean, view: QuickstartView = "initial") => {
+    set({ showQuickstart: show, quickstartView: view });
   },
 
   setHoveredNodeId: (id: string | null) => {
@@ -790,7 +1200,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   addNode: (type: NodeType, position: XYPosition, initialData?: Partial<WorkflowNodeData>) => {
     const id = `${type}-${++nodeIdCounter}`;
 
-    const { width, height } = defaultNodeDimensions[type];
+    const { width } = defaultNodeDimensions[type];
 
     // Find collision-free position
     const state = get();
@@ -802,12 +1212,14 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       ? ({ ...defaultData, ...initialData } as WorkflowNodeData)
       : defaultData;
 
+    // Height is derived from content by the node shell; only width is stored.
     const newNode: WorkflowNode = {
       id,
       type,
       position: finalPosition,
       data: nodeData,
-      style: { width, height },
+      width,
+      style: { width },
     };
 
     pushUndoCheckpoint(get, set);
@@ -815,8 +1227,6 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       nodes: [...state.nodes, newNode],
       hasUnsavedChanges: true,
     }));
-
-    get().incrementManualChangeCount();
 
     return id;
   },
@@ -858,6 +1268,21 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     }
   },
 
+  applyModelToNodes: (nodeIds: string[], model: ProviderModel) => {
+    const ids = new Set(nodeIds);
+    const targets = get().nodes.filter((node) => ids.has(node.id) && isGenerateNodeType(node.type));
+    if (targets.length === 0) return;
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      nodes: state.nodes.map((node) =>
+        ids.has(node.id) && isGenerateNodeType(node.type)
+          ? { ...node, data: { ...node.data, ...modelSelectionData(node.type, model) } as WorkflowNodeData }
+          : node
+      ) as WorkflowNode[],
+      hasUnsavedChanges: true,
+    }));
+  },
+
   removeNode: (nodeId: string) => {
     pushUndoCheckpoint(get, set);
     set((state) => {
@@ -877,7 +1302,6 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         hasUnsavedChanges: true,
       };
     });
-    get().incrementManualChangeCount();
   },
 
   onNodesChange: (changes: NodeChange<WorkflowNode>[]) => {
@@ -913,8 +1337,18 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     }
 
     set((state) => {
+      const measuredIds = new Set(changes.filter((change) => change.type === "dimensions").map((change) => change.id));
+      // React Flow mutates the nested measured object while applying changes.
+      const previousNodes = measuredIds.size > 0 ? state.nodes.map((node) =>
+        measuredIds.has(node.id) ? { ...node, measured: { ...node.measured } } : node
+      ) : state.nodes;
       let nextNodes = applyNodeChanges(changes, state.nodes);
       let groups = state.groups;
+      if (measuredIds.size > 0) {
+        const fitted = fitSplitGridCellMeasurements(previousNodes, nextNodes, groups, measuredIds);
+        nextNodes = fitted.nodes;
+        groups = fitted.groups;
+      }
       if (hasRemoveChange) {
         const removedIds = new Set(
           changes.filter((c) => c.type === "remove").map((c) => c.id)
@@ -925,14 +1359,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }
       return {
         nodes: nextNodes,
+        ...(nextNodes.some((n) => n.selected) && state.edges.some((e) => e.selected) ? { edges: state.edges.map((e) => e.selected ? { ...e, selected: false } : e) } : {}),
         ...(groups !== state.groups ? { groups } : {}),
         ...(hasMeaningfulChange ? { hasUnsavedChanges: true } : {}),
       };
     });
-
-    if (hasRemoveChange) {
-      get().incrementManualChangeCount();
-    }
   },
 
   onEdgesChange: (changes: EdgeChange<WorkflowEdge>[]) => {
@@ -963,12 +1394,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     set((state) => ({
       edges: applyEdgeChanges(changes, state.edges),
+      ...(changes.some((c) => c.type === "select" && c.selected) && state.nodes.some((n) => n.selected) ? { nodes: state.nodes.map((n) => n.selected ? { ...n, selected: false } : n) } : {}),
       ...(hasMeaningfulChange ? { hasUnsavedChanges: true } : {}),
     }));
 
     if (hasRemoveChange) {
       clearStaleInputImages(removedEdges, get);
-      get().incrementManualChangeCount();
     }
 
     // Recompute dimming when edges are added or removed
@@ -992,7 +1423,6 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         hasUnsavedChanges: true,
       };
     });
-    get().incrementManualChangeCount();
     get().recomputeDimmedNodes();
   },
 
@@ -1028,7 +1458,60 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         deleteCheckpointActive = false;
       }
     }
-    get().incrementManualChangeCount();
+  },
+
+  reconnectEdge: (edgeId: string, connection: Connection) => {
+    const { edges } = get();
+    const oldEdge = edges.find((e) => e.id === edgeId);
+    if (!oldEdge || !connection.source || !connection.target) return false;
+
+    const others = edges.filter((e) => e.id !== edgeId);
+    const newId = `edge-${connection.source}-${connection.target}-${connection.sourceHandle || "default"}-${connection.targetHandle || "default"}`;
+    if (others.some((e) => e.id === newId)) return false;
+
+    const unchanged =
+      oldEdge.source === connection.source &&
+      oldEdge.target === connection.target &&
+      (oldEdge.sourceHandle ?? null) === (connection.sourceHandle ?? null) &&
+      (oldEdge.targetHandle ?? null) === (connection.targetHandle ?? null);
+    if (unchanged) return false;
+
+    pushUndoCheckpoint(get, set);
+
+    // Loop status depends on the new geometry, and a bundle belongs to the
+    // handle it was made on, so the moved end leaves its bundle; everything
+    // else carries over.
+    const { isLoop: _wasLoop, loopCount, ...kept } = (oldEdge.data ?? {}) as WorkflowEdgeData;
+    void _wasLoop;
+    const sourceMoved = oldEdge.source !== connection.source || (oldEdge.sourceHandle ?? null) !== (connection.sourceHandle ?? null);
+    const targetMoved = oldEdge.target !== connection.target || (oldEdge.targetHandle ?? null) !== (connection.targetHandle ?? null);
+    if (sourceMoved) delete kept.sourceBundleId;
+    if (targetMoved) delete kept.targetBundleId;
+    const loops = wouldCreateCycle(connection.source, connection.target, others);
+    const data: WorkflowEdgeData = loops ? { ...kept, isLoop: true, loopCount: loopCount ?? 3 } : kept;
+
+    const newEdge: WorkflowEdge = {
+      ...oldEdge,
+      id: newId,
+      source: connection.source,
+      sourceHandle: connection.sourceHandle ?? undefined,
+      target: connection.target,
+      targetHandle: connection.targetHandle ?? undefined,
+      data,
+      selected: false,
+    };
+
+    set({ edges: [...others, newEdge], hasUnsavedChanges: true });
+
+    // The old target may have lost its only image source.
+    deleteCheckpointActive = true;
+    try {
+      clearStaleInputImages([oldEdge], get);
+    } finally {
+      deleteCheckpointActive = false;
+    }
+    get().recomputeDimmedNodes();
+    return true;
   },
 
   toggleEdgePause: (edgeId: string) => {
@@ -1041,6 +1524,203 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       ),
       hasUnsavedChanges: true,
     }));
+  },
+
+  removeEdges: (edgeIds: string[]) => {
+    const ids = new Set(edgeIds);
+    const removed = get().edges.filter((e) => ids.has(e.id));
+    if (removed.length === 0) return;
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      edges: state.edges.filter((edge) => !ids.has(edge.id)),
+      hasUnsavedChanges: true,
+    }));
+    deleteCheckpointActive = true;
+    try {
+      clearStaleInputImages(removed, get);
+    } finally {
+      deleteCheckpointActive = false;
+    }
+    get().recomputeDimmedNodes();
+  },
+
+  setEdgesPause: (edgeIds: string[], hasPause: boolean) => {
+    const ids = new Set(edgeIds);
+    if (!get().edges.some((e) => ids.has(e.id) && Boolean(e.data?.hasPause) !== hasPause)) return;
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      edges: state.edges.map((edge) =>
+        ids.has(edge.id) ? { ...edge, data: { ...edge.data, hasPause } } : edge
+      ),
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  setEdgesHidden: (edgeIds: string[], hidden: boolean) => {
+    const ids = new Set(edgeIds);
+    if (!get().edges.some((e) => ids.has(e.id) && Boolean(e.data?.hidden) !== hidden)) return;
+    pushUndoCheckpoint(get, set);
+    set((state) => {
+      // A noodle hidden on a handle whose hidden noodles all carry one label
+      // joins that stack: it takes the label, so "Model" stays "Model" at the
+      // downstream node without being typed again. Its own label always wins.
+      const inherited = (edge: WorkflowEdge): string | undefined => {
+        if (!hidden || edge.data?.label?.trim()) return undefined;
+        const labels = new Set<string>();
+        for (const other of state.edges) {
+          if (ids.has(other.id) || !other.data?.hidden) continue;
+          if (other.source !== edge.source || (other.sourceHandle ?? null) !== (edge.sourceHandle ?? null)) continue;
+          labels.add(other.data.label?.trim() ?? "");
+        }
+        if (labels.size !== 1) return undefined;
+        const [label] = labels;
+        return label || undefined;
+      };
+      return {
+        edges: state.edges.map((edge) => {
+          if (!ids.has(edge.id)) return edge;
+          const label = inherited(edge);
+          return {
+            ...edge,
+            data: { ...edge.data, hidden, ...(label ? { label } : {}) },
+            selected: hidden ? false : edge.selected,
+          };
+        }),
+        hasUnsavedChanges: true,
+      };
+    });
+  },
+
+  setAllEdgesHidden: (hidden: boolean) => {
+    const { edges } = get();
+    if (!edges.some((e) => Boolean(e.data?.hidden) !== hidden)) return;
+    get().setEdgesHidden(edges.map((e) => e.id), hidden);
+  },
+
+  setEdgeLabel: (edgeId: string, label: string) => {
+    get().setEdgesLabel([edgeId], label);
+  },
+
+  setEdgesLabel: (edgeIds: string[], label: string) => {
+    const trimmed = label.trim();
+    const ids = new Set(edgeIds);
+    if (!get().edges.some((e) => ids.has(e.id) && (e.data?.label ?? "") !== trimmed)) return;
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      edges: state.edges.map((e) => {
+        if (!ids.has(e.id)) return e;
+        const { label: _old, ...rest } = e.data ?? {};
+        void _old;
+        return { ...e, data: trimmed ? { ...rest, label: trimmed } : rest };
+      }),
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  bundleEdges: (edgeIds: string[], end?: BundleEnd) => {
+    const ids = new Set(edgeIds);
+    const members = get().edges.filter((e) => ids.has(e.id) && !e.data?.hidden && e.type !== "reference");
+    const bundleEnd = end ?? sharedEnd(members);
+    if (!bundleEnd || !shareHandleAt(members, bundleEnd)) return false;
+    const key = bundleEnd === "source" ? "sourceBundleId" : "targetBundleId";
+    const bundleId = `bundle-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      edges: state.edges.map((e) => (ids.has(e.id) ? { ...e, data: { ...e.data, [key]: bundleId } } : e)),
+      hasUnsavedChanges: true,
+    }));
+    return true;
+  },
+
+  hookEdges: (edgeIds, position) => {
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return;
+    const requested = new Set(edgeIds);
+    const eligible = get().edges.filter((e) => !e.hidden && !e.data?.hidden && e.type !== "reference");
+    // Sweeping an existing clamp gathers its whole bundle.
+    const existing = new Set(eligible.filter((e) => requested.has(e.id)).flatMap((e) => hookHandles(e.data).map((handle) => handle.id)));
+    const members = eligible.filter((e) => requested.has(e.id) || hookHandles(e.data).some((handle) => existing.has(handle.id)));
+    if (members.length < 2) return;
+    const ids = new Set(members.map((e) => e.id));
+    const hookBundle = { id: `hook-${crypto.randomUUID()}`, ...position };
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      activeHookBundleId: hookBundle.id,
+      edges: state.edges.map((e) => {
+        if (!ids.has(e.id)) return { ...e, selected: false };
+        const source = state.nodes.find((node) => node.id === e.source);
+        const target = state.nodes.find((node) => node.id === e.target);
+        const handles = hookHandles(e.data);
+        const start = source ? { x: source.position.x + getNodeSize(source).width, y: source.position.y + getNodeSize(source).height / 2 } : { x: 0, y: position.y };
+        const end = target ? { x: target.position.x, y: target.position.y + getNodeSize(target).height / 2 } : { x: Math.max(position.x, ...handles.map((h) => h.x)) + 1, y: position.y };
+        return { ...e, selected: true, data: withHookHandles(e.data, insertHookHandle(handles, hookBundle, start, end)) };
+      }),
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  moveHookBundle: (bundleId, position, checkpoint = false) => {
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return;
+    if (!get().edges.some((e) => hookHandles(e.data).some((handle) => handle.id === bundleId))) return;
+    if (checkpoint) pushUndoCheckpoint(get, set);
+    set((state) => ({
+      edges: state.edges.map((e) => hookHandles(e.data).some((handle) => handle.id === bundleId)
+        ? { ...e, data: withHookHandles(e.data, hookHandles(e.data).map((handle) => handle.id === bundleId ? { id: bundleId, ...position } : handle)) } : e),
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  removeHookBundle: (bundleId) => {
+    if (!get().edges.some((e) => hookHandles(e.data).some((handle) => handle.id === bundleId))) return;
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      edges: state.edges.map((e) => {
+        const handles = hookHandles(e.data);
+        if (!handles.some((handle) => handle.id === bundleId)) return e;
+        const data = withHookHandles(e.data, handles.filter((handle) => handle.id !== bundleId));
+        return { ...e, selected: false, data };
+      }),
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  unbundleEdges: (edgeIds: string[], end?: BundleEnd) => {
+    const ids = new Set(edgeIds);
+    const ends: BundleEnd[] = end ? [end] : ["source", "target"];
+    const edges = get().edges;
+    // Every bundle these edges sit in at the chosen end(s) dissolves entirely
+    const gone = ends
+      .map((at) => ({
+        at,
+        key: at === "source" ? "sourceBundleId" : "targetBundleId",
+        bundleIds: new Set(edges.flatMap((e) => (ids.has(e.id) ? [bundleIdAt(e, at)].filter((b): b is string => Boolean(b)) : []))),
+      }))
+      .filter((g) => g.bundleIds.size > 0);
+    if (gone.length === 0) return;
+    pushUndoCheckpoint(get, set);
+    set((state) => ({
+      edges: state.edges.map((e) => {
+        let data = e.data;
+        for (const g of gone) {
+          const id = bundleIdAt(e, g.at);
+          if (id && g.bundleIds.has(id) && data) {
+            const { [g.key]: _dropped, ...rest } = data as Record<string, unknown>;
+            void _dropped;
+            data = rest as typeof e.data;
+          }
+        }
+        return data === e.data ? e : { ...e, data };
+      }),
+      hasUnsavedChanges: true,
+    }));
+  },
+
+  setBundleClamp: (nodeId: string, key: string, reach: number) => {
+    const node = get().nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const clamped = Math.round(Math.min(MAX_BUNDLE_REACH, Math.max(MIN_BUNDLE_REACH, reach)));
+    const existing = ((node.data as { bundleClamps?: Record<string, number> }).bundleClamps) ?? {};
+    if (existing[key] === clamped) return;
+    get().updateNodeData(nodeId, { bundleClamps: { ...existing, [key]: clamped } } as Partial<WorkflowNodeData>);
   },
 
   setLoopCount: (edgeId: string, count: number) => {
@@ -1073,7 +1753,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const clonedNodes = clonePreservingStrings(selectedNodes) as WorkflowNode[];
     const clonedEdges = clonePreservingStrings(connectedEdges) as WorkflowEdge[];
 
-    set({ clipboard: { nodes: clonedNodes, edges: clonedEdges } });
+    set({ clipboard: { nodes: clonedNodes, edges: clonedEdges, imageRefBasePath: get().imageRefBasePath } });
   },
 
   pasteNodes: (offset: XYPosition = { x: 50, y: 50 }) => {
@@ -1092,10 +1772,15 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       idMapping.set(node.id, newId);
     });
 
+    // File refs are relative to the folder they were copied from. Pasted into
+    // another one, the media is written again there rather than pointing at
+    // files this folder does not have.
+    const clipboardNodes = clipboard.imageRefBasePath && clipboard.imageRefBasePath === get().imageRefBasePath
+      ? clipboard.nodes
+      : clearNodeImageRefs(clipboard.nodes);
     // Create new nodes with updated IDs and offset positions
     const pastedCellMemberIds = new Set<string>();
-    const newNodes: WorkflowNode[] = clipboard.nodes.map((node) => {
-      const defaults = defaultNodeDimensions[node.type as NodeType] || { width: 300, height: 280 };
+    const newNodes: WorkflowNode[] = clipboardNodes.map((node) => {
       let data = clonePreservingStrings(node.data) as WorkflowNodeData;
 
       // A pasted splitGrid must not keep driving the original's cell nodes:
@@ -1150,7 +1835,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
 
-      return {
+      return migrateNodeGeometry({
         ...node,
         id: idMapping.get(node.id)!,
         position: {
@@ -1158,14 +1843,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           y: node.position.y + offset.y,
         },
         selected: true, // Select newly pasted nodes
-        // Reset height to defaults so BaseNode's ResizeObserver
-        // can correctly add settings panel height from the right baseline
-        style: { width: node.style?.width ?? defaults.width, height: defaults.height },
-        width: undefined,
-        height: undefined,
-        measured: undefined,
         data,
-      };
+      });
     });
 
     // Pasted cell nodes must not stay members of the ORIGINAL cell groups
@@ -1175,11 +1854,24 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       : newNodes;
 
     // Create new edges with updated source/target IDs
+    const pastedHookIds = new Map<string, string>();
+    for (const edge of clipboard.edges) {
+      for (const bundle of hookHandles(edge.data)) {
+        if (!pastedHookIds.has(bundle.id)) pastedHookIds.set(bundle.id, `hook-${crypto.randomUUID()}`);
+      }
+    }
     const newEdges: WorkflowEdge[] = clipboard.edges.map((edge) => ({
       ...edge,
       id: `edge-${idMapping.get(edge.source)}-${idMapping.get(edge.target)}-${edge.sourceHandle || "default"}-${edge.targetHandle || "default"}`,
       source: idMapping.get(edge.source)!,
       target: idMapping.get(edge.target)!,
+      ...(hookHandles(edge.data).length > 0 && {
+        data: withHookHandles(edge.data, hookHandles(edge.data).map((handle) => ({
+          id: pastedHookIds.get(handle.id)!,
+          x: handle.x + offset.x,
+          y: handle.y + offset.y,
+        }))),
+      }),
     }));
 
     // Deselect existing nodes and add new ones
@@ -1228,10 +1920,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     // Calculate bounding box of selected nodes
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     nodesToGroup.forEach((node) => {
-      // Use measured dimensions (actual rendered size) first, then style, then type-specific defaults
-      const defaults = defaultNodeDimensions[node.type as NodeType] || { width: 300, height: 280 };
-      const width = node.measured?.width || (node.style?.width as number) || defaults.width;
-      const height = node.measured?.height || (node.style?.height as number) || defaults.height;
+      const { width, height } = getNodeSize(node);
 
       minX = Math.min(minX, node.position.x);
       minY = Math.min(minY, node.position.y);
@@ -1368,7 +2057,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     }));
   },
 
-  materializeSplitGridCells: (nodeId: string, options?: { force?: boolean; template?: SplitGridTemplate }) => {
+  materializeSplitGridCells: (nodeId: string, options?: { force?: boolean; template?: SplitGridTemplate; skipCheckpoint?: boolean }) => {
     const state = get();
     const splitNode = state.nodes.find((n) => n.id === nodeId && n.type === "splitGrid");
     if (!splitNode) return false;
@@ -1410,7 +2099,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     const removedRouterId = !hasRouter ? existingRouterId : null;
 
     // Single checkpoint: one undo restores replaced cells and removes new ones
-    pushUndoCheckpoint(get, set);
+    // (skipped when the caller's own change already took it, e.g. an agent batch)
+    if (!options?.skipCheckpoint) pushUndoCheckpoint(get, set);
 
     // Previously materialized cells are system-created — replace them
     const staleCells = getSplitGridCells(data);
@@ -1489,10 +2179,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
               // center it by its actual (possibly grown) height.
               if (existingRouterId && n.id === existingRouterId && built.routerPosition) {
                 if (n.position.x >= built.routerPosition.x) return n;
-                const height =
-                  (n.style?.height as number | undefined) ??
-                  n.measured?.height ??
-                  defaultNodeDimensions.router.height;
+                const height = getNodeSize(n).height;
                 const centerY = built.routerPosition.y + defaultNodeDimensions.router.height / 2;
                 return {
                   ...n,
@@ -1550,48 +2237,82 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     return validateWorkflowPure(nodes, edges);
   },
 
-  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal): NodeExecutionContext => ({
+  nodeReadiness: () => {
+    const { nodes, edges } = get();
+    return nodeReadinessPure(nodes, edges);
+  },
+
+  _buildExecutionContext: (node: WorkflowNode, signal?: AbortSignal, assetRun?: CurrentAssetRun | null): NodeExecutionContext => {
+    // An executor writes to the canvas it started on, and only until a newer
+    // run takes over after its own was stopped. Stopped with nothing after
+    // it, it may still put its node back to idle.
+    const generation = get().canvasGeneration;
+    const startedAfter = runStarts;
+    const isCurrent = () =>
+      get().canvasGeneration === generation && !(signal?.aborted && runStarts !== startedAfter);
+    return {
     node,
     getConnectedInputs: get().getConnectedInputs,
-    updateNodeData: get().updateNodeData,
+    updateNodeData: (id, data) => { if (isCurrent()) get().updateNodeData(id, data); },
     getFreshNode: (id: string) => get().nodes.find((n) => n.id === id),
     getEdges: () => get().edges,
     getNodes: () => get().nodes,
     signal,
     providerSettings: get().providerSettings,
-    addIncurredCost: (cost: number) => get().addIncurredCost(cost),
-    addToGlobalHistory: (item) => get().addToGlobalHistory(item),
+    addIncurredCost: (cost: number) => { if (isCurrent()) get().addIncurredCost(cost); },
+    addToGlobalHistory: (item) => { if (isCurrent()) get().addToGlobalHistory(item); },
+    batch: batchTag(get().batch),
     generationsPath: get().generationsPath,
     saveDirectoryPath: get().saveDirectoryPath,
     trackSaveGeneration: (key: string, promise: Promise<void>) => {
       pendingImageSyncs.set(key, promise);
-      promise.finally(() => pendingImageSyncs.delete(key));
+      set({ pendingMediaSaves: pendingImageSyncs.size });
+      promise.finally(() => {
+        pendingImageSyncs.delete(key);
+        set({ pendingMediaSaves: pendingImageSyncs.size });
+      });
     },
     appendOutputGalleryImage: (targetId: string, image: string) => {
+      if (!isCurrent()) return;
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
-            ? { ...n, data: { ...n.data, images: [image, ...((n.data as OutputGalleryNodeData).images || [])] } as WorkflowNodeData }
+            ? { ...n, data: { ...n.data, ...prependGalleryEntry(n.data as OutputGalleryNodeData, "images", "imageRefs", image) } as WorkflowNodeData }
             : n
         ) as WorkflowNode[],
         hasUnsavedChanges: true,
       }));
     },
     appendOutputGalleryVideo: (targetId: string, video: string) => {
+      if (!isCurrent()) return;
       set((state) => ({
         nodes: state.nodes.map((n) =>
           n.id === targetId && n.type === "outputGallery"
-            ? { ...n, data: { ...n.data, videos: [video, ...((n.data as OutputGalleryNodeData).videos || [])] } as WorkflowNodeData }
+            ? { ...n, data: { ...n.data, ...prependGalleryEntry(n.data as OutputGalleryNodeData, "videos", "videoRefs", video) } as WorkflowNodeData }
             : n
         ) as WorkflowNode[],
         hasUnsavedChanges: true,
       }));
     },
-    materializeSplitGridCells: (nodeId: string) => get().materializeSplitGridCells(nodeId),
+    materializeSplitGridCells: (nodeId: string) => isCurrent() && get().materializeSplitGridCells(nodeId),
+    releaseMediaUrl: (url) => {
+      if (!isCurrent() || !url?.startsWith("blob:")) return;
+      const state = get();
+      const owners = nodeBlobUrls([
+        ...state.nodes,
+        ...retainedMediaNodes(state),
+        ...undoManager.retainedNodes,
+        ...(pendingDataSnapshot?.nodes ?? []),
+      ]);
+      if (!owners.has(url)) revokeBlobUrl(url);
+    },
+    ...assetRecordingFor(assetRun !== undefined ? assetRun : get()._currentRun),
     get: get as () => unknown,
-  }),
+    };
+  },
 
   executeWorkflow: async (startFromNodeId?: string) => {
+    if (!canStartExecution(get().desktopConnected)) return;
     // Resume support: if Run is pressed with no explicit start node while the
     // workflow is paused at a node (pause edge), resume from that node instead
     // of restarting the whole graph (which would re-run/re-bill upstream nodes
@@ -1627,7 +2348,13 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
     };
-    set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController });
+    const assetRun = openAssetRun(get);
+    set({ isRunning: true, pausedAtNodeId: null, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: abortController, _currentRun: assetRun });
+    runStarts += 1;
+    lastRun.serial += 1;
+    lastRun.failed = false;
+    // Nodes that had nothing to work with, named for the end-of-run summary
+    const unreadyNodes: string[] = [];
 
     // Start logging session
     await logger.startSession();
@@ -1729,6 +2456,23 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
       const executionCtx = get()._buildExecutionContext(node, signal);
 
+      try {
+        await runNode(node, executionCtx);
+      } catch (error) {
+        // Nothing to work with is not a failure: the node and what depends on
+        // it are skipped, and the rest of the graph keeps going
+        if (!isMissingInputError(error) || !ownsRunState(get(), abortController)) throw error;
+        set({ skippedNodeIds: new Set([...get().skippedNodeIds, node.id]) });
+        unreadyNodes.push(String(nodeData.customTitle || node.type));
+        logger.info('node.execution', 'Node skipped (missing input)', {
+          nodeId: node.id,
+          nodeType: node.type,
+          reason: error.message,
+        });
+      }
+    };
+
+    const runNode = async (node: WorkflowNode, executionCtx: NodeExecutionContext): Promise<void> => {
       // Batch mode: for generate-type nodes, detect textItems and loop through them
       if (await runBatchIfApplicable(executionCtx)) {
         return;
@@ -1847,9 +2591,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: forwardDeps,
         maxConcurrent: maxConcurrentCalls,
         signal: abortController.signal,
-        isRunning: () => get().isRunning,
+        isRunning: () => get().isRunning && get()._abortController === abortController,
         getNode: (id) => get().nodes.find((n) => n.id === id),
-        setCurrentNodeIds: (ids) => set({ currentNodeIds: ids }),
+        setCurrentNodeIds: (ids) => {
+          if (get()._abortController === abortController) set({ currentNodeIds: ids });
+        },
         runNode: (node, signal) => executeSingleNode(node, signal),
         onNodeError: (node, err) => {
           logger.error('workflow.error', 'Node execution failed', {
@@ -1976,9 +2722,20 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
       // Check if we completed or were aborted
       if (!abortController.signal.aborted && get().isRunning) {
-        logger.info('workflow.end', 'Workflow execution completed successfully');
+        logger.info('workflow.end', 'Workflow execution completed successfully', { unreadyNodes });
+        if (unreadyNodes.length > 0) {
+          const skipped = get().skippedNodeIds.size;
+          useToast.getState().show(
+            `Skipped ${skipped} node${skipped === 1 ? "" : "s"}: ${unreadyNodes.length} had no input to work with`,
+            "warning",
+            false,
+            unreadyNodes.join(", ")
+          );
+        }
       }
 
+      // A newer run owns the canvas now: its state, skips and log session stay
+      if (!ownsRunState(get(), abortController)) return;
       // Reset skipped nodes' status back to idle
       resetSkippedNodes();
 
@@ -1987,10 +2744,12 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       saveLogSession();
       await logger.endSession();
     } catch (error) {
+      if (!ownsRunState(get(), abortController)) return;
       // Handle AbortError gracefully (user cancelled)
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('workflow.end', 'Workflow execution cancelled by user');
       } else {
+        lastRun.failed = true;
         logger.error('workflow.error', 'Workflow execution failed', {}, error instanceof Error ? error : undefined);
         // Show error toast for the failed node
         useToast.getState().show(
@@ -2013,7 +2772,59 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (controller) {
       controller.abort("user-cancelled");
     }
-    set({ isRunning: false, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: null });
+    abortNodeRuns(get(), "user-cancelled");
+    set({ isRunning: false, currentNodeIds: [], skippedNodeIds: new Set(), _abortController: null, batch: null });
+  },
+
+  setRunCount: (count: number) => {
+    const runCount = clampRunCount(count);
+    if (get().runCount === runCount) return;
+    set({ runCount, hasUnsavedChanges: true });
+  },
+
+  runBatch: async (scope: RunScope) => {
+    if (get().isRunning || get().batch) return;
+    const runOnce = async (): Promise<RunOutcome> => {
+      const serial = lastRun.serial;
+      if (scope.kind === "all") await get().executeWorkflow();
+      else if (scope.kind === "from") await get().executeWorkflow(scope.nodeId);
+      else await get().executeSelectedNodes(scope.nodeIds);
+      return { started: lastRun.serial !== serial, failed: lastRun.failed };
+    };
+    const count = clampRunCount(get().runCount);
+    if (count === 1) {
+      await runOnce();
+      return;
+    }
+    const id = newBatchId();
+    const canvasGeneration = get().canvasGeneration;
+    const ours = () => get().batch?.id === id;
+    set({ batch: { id, index: 1, count, stopping: false } });
+    try {
+      await runBatchLoop({
+        count,
+        setIndex: (index) => {
+          const batch = get().batch;
+          if (batch?.id === id && batch.index !== index) set({ batch: { ...batch, index } });
+        },
+        runOnce,
+        // A hard Stop clears the batch; a pause edge, or a canvas replaced
+        // under the batch, ends it too.
+        keepGoing: () =>
+          ours() && !get().batch?.stopping && !get().pausedAtNodeId && get().canvasGeneration === canvasGeneration,
+      });
+    } finally {
+      if (ours()) set({ batch: null });
+    }
+  },
+
+  requestStop: () => {
+    const batch = get().batch;
+    if (batch && !batch.stopping && batch.index < batch.count) {
+      set({ batch: { ...batch, stopping: true } });
+      return;
+    }
+    get().stopWorkflow();
   },
 
   mockTutorialExecution: async () => {
@@ -2106,10 +2917,16 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   regenerateNode: async (nodeId: string) => {
+    if (!canStartExecution(get().desktopConnected)) return;
     const { nodes, updateNodeData, isRunning } = get();
 
-    if (isRunning) {
+    // Other single-node runs do not block this one; a workflow or selection run does
+    if (isRunning && nodeRuns.size === 0) {
       logger.warn('node.execution', 'Cannot regenerate node, workflow already running', { nodeId });
+      return;
+    }
+    if (nodeRuns.has(nodeId)) {
+      logger.warn('node.execution', 'Node is already running', { nodeId });
       return;
     }
 
@@ -2125,18 +2942,37 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       get().materializeSplitGridCells(nodeId);
     }
 
-    // Create AbortController so stopWorkflow() can cancel regeneration
+    // Its own AbortController, so stopWorkflow() can cancel it, and its own
+    // asset run, so its outputs are recorded under this run alone
     const abortController = new AbortController();
-    set({ isRunning: true, currentNodeIds: [nodeId], _abortController: abortController });
+    const assetRun = openAssetRun(get);
+    const firstNodeRun = nodeRuns.size === 0;
+    nodeRuns.set(nodeId, { controller: abortController, assetRun });
+    set({ isRunning: true, currentNodeIds: [...get().currentNodeIds.filter((id) => id !== nodeId), nodeId] });
+    runStarts += 1;
 
-    await logger.startSession();
+    // The last node run to end clears the running state and the log session
+    const finish = async () => {
+      if (nodeRuns.get(nodeId)?.controller !== abortController) return; // stopped, or the canvas went away
+      nodeRuns.delete(nodeId);
+      if (assetRun) closeAssetRun(assetRun, get());
+      if (nodeRuns.size > 0) {
+        set({ currentNodeIds: get().currentNodeIds.filter((id) => id !== nodeId) });
+        return;
+      }
+      set({ isRunning: false, currentNodeIds: [] });
+      saveLogSession();
+      await logger.endSession();
+    };
+
+    if (firstNodeRun) await logger.startSession();
     logger.info('node.execution', 'Regenerating node', {
       nodeId,
       nodeType: node.type,
     });
 
     try {
-      const executionCtx = get()._buildExecutionContext(node, abortController.signal);
+      const executionCtx = get()._buildExecutionContext(node, abortController.signal, assetRun);
 
       const regenOptions = { useStoredFallback: true };
 
@@ -2161,45 +2997,37 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         await executeSplitGrid(executionCtx);
       } else if (node.type === "videoStitch") {
         await executeVideoStitch(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "easeCurve") {
         await executeEaseCurve(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "videoTrim") {
         await executeVideoTrim(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "videoFrameGrab") {
         await executeVideoFrameGrab(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "removeBackground") {
         await executeRemoveBackground(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "imageResize") {
         await executeImageResize(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "gifEncoder") {
         await executeGifEncoder(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       } else if (node.type === "comfyApp") {
         await executeComfyApp(executionCtx);
       } else if (node.type === "output") {
         await executeOutput(executionCtx);
-        set({ isRunning: false, currentNodeIds: [], _abortController: null });
-        await logger.endSession();
+        await finish();
         return;
       }
 
@@ -2208,9 +3036,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const { edges: currentEdges } = get();
       const downstreamEdges = currentEdges.filter(e => e.source === nodeId);
       for (const edge of downstreamEdges) {
+        if (abortController.signal.aborted) break;
         const targetNode = get().nodes.find(n => n.id === edge.target);
         if (!targetNode) continue;
-        const targetCtx = get()._buildExecutionContext(targetNode);
+        const targetCtx = get()._buildExecutionContext(targetNode, abortController.signal, assetRun);
         switch (targetNode.type) {
           case "glbViewer":
             await executeGlbViewer(targetCtx);
@@ -2228,26 +3057,23 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }
 
       logger.info('node.execution', 'Node regeneration completed successfully', { nodeId });
-      set({ isRunning: false, currentNodeIds: [], _abortController: null });
-
-      saveLogSession();
-      await logger.endSession();
+      await finish();
     } catch (error) {
       logger.error('node.error', 'Node regeneration failed', {
         nodeId,
       }, error instanceof Error ? error : undefined);
+      // Stopped and perhaps started again: the node is not this run's to mark
+      if (nodeRuns.get(nodeId)?.controller !== abortController) return;
       updateNodeData(nodeId, {
         status: "error",
         error: error instanceof Error ? error.message : "Regeneration failed",
       });
-      set({ isRunning: false, currentNodeIds: [], _abortController: null });
-
-      saveLogSession();
-      await logger.endSession();
+      await finish();
     }
   },
 
   executeSelectedNodes: async (nodeIds: string[]) => {
+    if (!canStartExecution(get().desktopConnected)) return;
     if (get().isRunning) {
       logger.warn('node.execution', 'Cannot execute nodes, workflow already running');
       return;
@@ -2281,7 +3107,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     // Create AbortController for this execution run
     const abortController = new AbortController();
-    set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController });
+    const assetRun = openAssetRun(get);
+    set({ isRunning: true, currentNodeIds: nodeIds, _abortController: abortController, _currentRun: assetRun });
+    runStarts += 1;
+    lastRun.serial += 1;
+    lastRun.failed = false;
 
     await logger.startSession();
     logger.info('node.execution', 'Executing selected nodes', {
@@ -2424,9 +3254,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         edges: selectedEdges,
         maxConcurrent: maxConcurrentCalls,
         signal: abortController.signal,
-        isRunning: () => get().isRunning,
+        isRunning: () => get().isRunning && get()._abortController === abortController,
         getNode: (id) => nodesToExecute.find((n) => n.id === id),
-        setCurrentNodeIds: (ids) => set({ currentNodeIds: ids }),
+        setCurrentNodeIds: (ids) => {
+          if (get()._abortController === abortController) set({ currentNodeIds: ids });
+        },
         runNode: (node, signal) => executeNode(node, signal),
         onNodeError: (node, err) => {
           logger.error('node.error', 'Node execution failed in batch', {
@@ -2445,9 +3277,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           const downstreamEdges = currentEdges.filter(e => e.source === nodeId);
           for (const edge of downstreamEdges) {
             if (selectedSet.has(edge.target) || propagated.has(edge.target)) continue;
+            if (abortController.signal.aborted) break;
             const targetNode = get().nodes.find(n => n.id === edge.target);
             if (!targetNode) continue;
-            const targetCtx = get()._buildExecutionContext(targetNode);
+            const targetCtx = get()._buildExecutionContext(targetNode, abortController.signal);
             switch (targetNode.type) {
               case "glbViewer":
                 await executeGlbViewer(targetCtx);
@@ -2470,15 +3303,18 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         }
       }
 
+      if (!ownsRunState(get(), abortController)) return;
       logger.info('node.execution', 'Selected nodes execution completed successfully');
       set({ isRunning: false, currentNodeIds: [], _abortController: null });
 
       saveLogSession();
       await logger.endSession();
     } catch (error) {
+      if (!ownsRunState(get(), abortController)) return;
       if (error instanceof DOMException && error.name === 'AbortError') {
         logger.info('node.execution', 'Selected nodes execution cancelled by user');
       } else {
+        lastRun.failed = true;
         logger.error('node.error', 'Selected nodes execution failed', {}, error instanceof Error ? error : undefined);
         useToast.getState().show(
           `Execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -2493,7 +3329,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   saveWorkflow: (name?: string) => {
-    const { nodes, edges, edgeStyle, groups } = get();
+    const { nodes, edges, edgeStyle, edgeAppearance, groups, runCount } = get();
 
     const workflow: WorkflowFile = {
       version: 1,
@@ -2502,7 +3338,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       nodes: nodes.map(({ selected, ...rest }) => rest),
       edges,
       edgeStyle,
+      edgeAppearance,
       groups: groups && Object.keys(groups).length > 0 ? groups : undefined,
+      ...(runCount > 1 ? { runCount } : {}),
     };
 
     const json = JSON.stringify(workflow, null, 2);
@@ -2518,33 +3356,17 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     URL.revokeObjectURL(url);
   },
 
-  loadWorkflow: async (workflow: WorkflowFile, workflowPath?: string, options?: { preserveSnapshot?: boolean }) => {
+  loadWorkflow: async (workflow: WorkflowFile, workflowPath?: string) => {
     // Abort any in-flight workflow run before swapping the graph. Otherwise old
     // executors keep polling/spending and stamp stale results (by node id) onto
     // the freshly loaded nodes — especially when ids are reused across reloads.
     const inflight = get()._abortController;
     if (inflight) inflight.abort("workflow-replaced");
-    set({ isRunning: false, pausedAtNodeId: null, currentNodeIds: [], _abortController: null });
-
-    // Update nodeIdCounter to avoid ID collisions
-    const maxNodeId = workflow.nodes.reduce((max, node) => {
-      const match = node.id.match(/-(\d+)$/);
-      if (match) {
-        return Math.max(max, parseInt(match[1], 10));
-      }
-      return max;
-    }, 0);
-    nodeIdCounter = maxNodeId;
-
-    // Update groupIdCounter to avoid ID collisions
-    const maxGroupId = Object.keys(workflow.groups || {}).reduce((max, id) => {
-      const match = id.match(/-(\d+)$/);
-      if (match) {
-        return Math.max(max, parseInt(match[1], 10));
-      }
-      return max;
-    }, 0);
-    groupIdCounter = maxGroupId;
+    abortNodeRuns(get(), "workflow-replaced");
+    // The canvas is being replaced from now on, not only once the media has
+    // loaded: a save or another load that finishes meanwhile must see it
+    const generation = get().canvasGeneration + 1;
+    set({ isRunning: false, pausedAtNodeId: null, currentNodeIds: [], _abortController: null, canvasGeneration: generation });
 
     // Migrate legacy nanoBanana nodes: derive selectedModel from model field if missing
     workflow.nodes = workflow.nodes.map((node) => {
@@ -2609,6 +3431,22 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     // Determine the workflow directory path (passed in, from saved config, or embedded in legacy workflow JSON)
     const directoryPath = workflowPath || savedConfig?.directoryPath || workflow.directoryPath || null;
+    // The generations folder used to come from the saved config alone, so a
+    // workflow opened without one (another profile, a dropped file, a cleared
+    // canvas) lost its carousel history. Derive it from the workflow folder
+    // the way setWorkflowMetadata does, and remember it for the next open.
+    const generationsPath =
+      savedConfig?.generationsPath ?? (directoryPath ? `${directoryPath}/generations` : null);
+    if (workflow.id && directoryPath && generationsPath && savedConfig?.generationsPath !== generationsPath) {
+      saveSaveConfig({
+        workflowId: workflow.id,
+        name: workflow.name,
+        directoryPath,
+        generationsPath,
+        lastSavedAt: savedConfig?.lastSavedAt ?? null,
+        useExternalImageStorage: savedConfig?.useExternalImageStorage,
+      });
+    }
 
     // Hydrate media if we have a directory path and the workflow has media refs
     let hydratedWorkflow = workflow;
@@ -2621,17 +3459,28 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       }
     }
 
+    // A newer load, a clear or a tab switch took the canvas while the media
+    // loaded. This graph must not replace that one (or another tab's unsaved work).
+    if (get().canvasGeneration !== generation) return;
+    // The outgoing graph stayed on screen while the media loaded, so a run
+    // may have started on it since. That run goes with its graph.
+    get()._abortController?.abort("workflow-replaced");
+    abortNodeRuns(get(), "workflow-replaced");
+    // Keep generated ids clear of the loaded graph's ids
+    syncIdCounters(hydratedWorkflow.nodes, hydratedWorkflow.groups);
+
     // Load cost data for this workflow
     const costData = workflow.id ? loadWorkflowCostData(workflow.id) : null;
 
     // Revoke any blob: object URLs held by the outgoing nodes before they are
     // replaced. Safe because the undo history that referenced them is cleared below.
-    revokeNodeBlobUrls(get().nodes);
+    revokeNodeBlobUrls(get().nodes, [...retainedMediaNodes(get()), ...hydratedWorkflow.nodes]);
 
     set({
       // Clear selected state - selection should not be persisted across sessions
       // Also validate position to ensure coordinates are finite numbers
-      nodes: hydratedWorkflow.nodes.map(node => ({
+      // A blob: URL in a file died with the session that wrote it; it cannot be shown or checkpointed
+      nodes: stripDeadBlobUrls(hydratedWorkflow.nodes).map(node => migrateNodeGeometry({
         ...node,
         selected: false,
         position: {
@@ -2640,15 +3489,31 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         },
       })),
       edges: hydratedWorkflow.edges,
+      // Stub UI state belongs to the outgoing graph
+      hoveredHandle: null,
+      expandedStubGroup: null,
+      stubGroupWidths: {},
+      hookDrag: null,
       edgeStyle: hydratedWorkflow.edgeStyle || "angular",
+      edgeAppearance: hydratedWorkflow.edgeAppearance
+        ? normalizeEdgeAppearance(hydratedWorkflow.edgeAppearance)
+        : getEdgeDefaults().appearance,
       groups: hydratedWorkflow.groups || {},
+      runCount: clampRunCount(hydratedWorkflow.runCount ?? 1),
+      batch: null,
       isRunning: false,
       currentNodeIds: [],
+      _abortController: null,
       // Restore workflow ID and paths from localStorage if available
       workflowId: workflow.id || null,
       workflowName: workflow.name,
+      workflowLoadCount: get().workflowLoadCount + 1,
+      // The file carries no viewport; the canvas frames the graph once it is measured
+      canvasViewport: null,
+      // A different canvas: a running agent turn must not edit it
+      canvasGeneration: get().canvasGeneration + 1,
       saveDirectoryPath: directoryPath || null,
-      generationsPath: savedConfig?.generationsPath || null,
+      generationsPath,
       lastSavedAt: savedConfig?.lastSavedAt || null,
       hasUnsavedChanges: false,
       // Restore cost data
@@ -2665,11 +3530,6 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       showQuickstart: false,
     });
 
-    // Clear snapshot unless explicitly preserving (e.g., AI workflow generation)
-    if (!options?.preserveSnapshot) {
-      get().clearSnapshot();
-    }
-
     // Clear undo history — loading a workflow is a fresh start
     // Cancel any pending debounced snapshot so it doesn't fire into the new workflow
     pendingDataSnapshot = null;
@@ -2682,20 +3542,149 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
     // Recompute dimming after loading workflow
     get().recomputeDimmedNodes();
+
+    // The carousels show only what the generations folder still holds
+    await get().pruneMissingHistory();
+  },
+
+  pruneMissingHistory: async () => {
+    const { generationsPath, nodes, canvasGeneration, workflowId } = get();
+    if (!hasHistoryEntries(nodes)) return;
+    // Entries with an asset id are asked about in the library (only while it
+    // is on: otherwise nothing can be said about them, and they stay); the
+    // rest, and the library's losses, in the generations folder
+    const assetIds = isRecorderEnabled() ? historyAssetIds(nodes) : [];
+    if (!generationsPath && assetIds.length === 0) return;
+    const [folderIds, assetStates] = await Promise.all([
+      // A folder that cannot be listed comes back null: its entries stay rather than be guessed away
+      generationsPath ? listGenerationIds(generationsPath) : Promise.resolve(null),
+      assetExistence(assetIds),
+    ]);
+    // The answers describe the canvas that asked. Another one (a tab switch,
+    // a load, a clear, a new id) is judged by its own prune, never by these.
+    const current = get();
+    if (current.canvasGeneration !== canvasGeneration || current.workflowId !== workflowId) return;
+    const sources = { folderIds, hasFolder: !!generationsPath, assetStates };
+    const pruned = pruneMissingHistory(get().nodes, (entry) => isHistoryEntryAvailable(entry, sources));
+    if (!pruned.changed) return;
+    set({ nodes: pruned.nodes, hasUnsavedChanges: true });
+  },
+
+  restoreDesktopSession: (tabs, activeTabId) => {
+    const active = tabs.find(tab => tab.id === activeTabId);
+    if (!active) return;
+    set({ tabs: tabs.map(tab => ({ ...tab, snapshot: tab.id === activeTabId ? null : tab.snapshot })), activeTabId });
+    applyTabSnapshot(set, get, active.snapshot);
+  },
+
+  newTab: () => {
+    if (get().tabsBusyReason()) return null;
+    const { tabs, activeTabId, edgeStyle, edgeAppearance, useExternalImageStorage } = get();
+    const parked = captureWorkflowTabSnapshot(get());
+    const id = createTabId();
+    set({
+      tabs: [
+        ...tabs.map((tab) => (tab.id === activeTabId ? { ...tab, snapshot: parked } : tab)),
+        { id, snapshot: null },
+      ],
+      activeTabId: id,
+    });
+    applyTabSnapshot(set, get, emptyWorkflowTabSnapshot({ edgeStyle, edgeAppearance, useExternalImageStorage }));
+    return id;
+  },
+
+  switchTab: (tabId: string) => {
+    const { tabs, activeTabId } = get();
+    const target = tabs.find((tab) => tab.id === tabId);
+    if (!target || tabId === activeTabId || !target.snapshot) return false;
+    if (get().tabsBusyReason()) return false;
+    const parked = captureWorkflowTabSnapshot(get());
+    set({
+      tabs: tabs.map((tab) =>
+        tab.id === activeTabId ? { ...tab, snapshot: parked } : tab.id === tabId ? { ...tab, snapshot: null } : tab
+      ),
+      activeTabId: tabId,
+    });
+    applyTabSnapshot(set, get, target.snapshot);
+    return true;
+  },
+
+  closeTab: (tabId: string) => {
+    const { tabs, activeTabId, edgeStyle, edgeAppearance, useExternalImageStorage } = get();
+    const closing = tabs.find((tab) => tab.id === tabId);
+    if (!closing) return false;
+    if (get().tabsBusyReason()) return false;
+
+    // Keep the busy check, durable discard and graph mutation in one turn.
+    // Both the tab strip and the menu close through this action.
+    if (typeof window !== 'undefined' && window.nodeBananaDesktop) {
+      try {
+        const result = window.nodeBananaDesktop.recovery.discardTab(tabId);
+        if (!result.ok) throw new Error(result.error);
+        if (result.value?.warning) useToast.getState().show(result.value.warning, 'warning');
+      } catch (error) {
+        useToast.getState().show(error instanceof Error ? error.message : 'The tab could not close safely. Try again.', 'error');
+        return false;
+      }
+    }
+
+    const empty = () => emptyWorkflowTabSnapshot({ edgeStyle, edgeAppearance, useExternalImageStorage });
+
+    if (tabs.length === 1) {
+      // The last tab never goes away; it just becomes a fresh one
+      revokeNodeBlobUrls(get().nodes, retainedMediaNodes(get()));
+      const id = createTabId();
+      set({ tabs: [{ id, snapshot: null }], activeTabId: id });
+      applyTabSnapshot(set, get, empty());
+      return true;
+    }
+
+    if (tabId !== activeTabId) {
+      // A parked tab: drop it, and the media object URLs only it referenced
+      if (closing.snapshot) revokeNodeBlobUrls(closing.snapshot.nodes, retainedMediaNodes(get(), tabId));
+      set({ tabs: tabs.filter((tab) => tab.id !== tabId) });
+      return true;
+    }
+
+    const nextId = tabToActivateAfterClose(tabs, tabId);
+    const next = tabs.find((tab) => tab.id === nextId);
+    if (!nextId || !next) return false;
+    // The live graph is being discarded, so its media object URLs go with it
+    revokeNodeBlobUrls(get().nodes, retainedMediaNodes(get()));
+    const remaining = tabs.filter((tab) => tab.id !== tabId).map((tab) => (tab.id === nextId ? { ...tab, snapshot: null } : tab));
+    set({ tabs: remaining, activeTabId: nextId });
+    applyTabSnapshot(set, get, next.snapshot ?? empty());
+    return true;
+  },
+
+  openWorkflowInNewTab: async (workflow: WorkflowFile, workflowPath?: string) => {
+    if (!isWorkflowTabPristine(get())) {
+      if (get().newTab() === null) return;
+    }
+    await get().loadWorkflow(workflow, workflowPath);
   },
 
   clearWorkflow: () => {
     // Abort any in-flight run so old executors stop writing into the cleared graph.
     const inflight = get()._abortController;
     if (inflight) inflight.abort("workflow-cleared");
+    abortNodeRuns(get(), "workflow-cleared");
     // Revoke any blob: object URLs held by the outgoing nodes before they are
     // discarded. Safe here because the undo history that also referenced them
     // is cleared below.
-    revokeNodeBlobUrls(get().nodes);
+    revokeNodeBlobUrls(get().nodes, retainedMediaNodes(get()));
     set({
       nodes: [],
       edges: [],
       groups: {},
+      hoveredHandle: null,
+      expandedStubGroup: null,
+      stubGroupWidths: {},
+      hookDrag: null,
+      edgeStyle: getEdgeDefaults().edgeStyle,
+      edgeAppearance: getEdgeDefaults().appearance,
+      runCount: 1,
+      batch: null,
       isRunning: false,
       currentNodeIds: [],
       pausedAtNodeId: null,
@@ -2719,8 +3708,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       dimmedNodeIds: new Set<string>(),
       // Reset skipped nodes
       skippedNodeIds: new Set<string>(),
+      // A different canvas: a running agent turn must not edit it
+      canvasGeneration: get().canvasGeneration + 1,
     });
-    get().clearSnapshot();
     // Clear undo history and cancel any pending debounced snapshot
     pendingDataSnapshot = null;
     if (dataChangeTimer) {
@@ -2732,8 +3722,10 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
   },
 
   addToGlobalHistory: (item: Omit<ImageHistoryItem, "id">) => {
+    const batch = batchTag(get().batch);
     const newItem: ImageHistoryItem = {
       ...item,
+      ...(batch && !item.batch ? { batch } : {}),
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
 
@@ -2743,16 +3735,65 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         MAX_GLOBAL_IMAGE_HISTORY
       ),
     }));
+    pushGenerationToast({
+      image: newItem.image,
+      model: newItem.model,
+      aspectRatio: newItem.aspectRatio,
+    });
   },
 
   clearGlobalHistory: () => {
     set({ globalImageHistory: [] });
   },
 
+  ensureWorkflowId: () => {
+    const existing = get().workflowId;
+    if (existing) return existing;
+    const id = generateWorkflowId();
+    set({ workflowId: id });
+    return id;
+  },
+
+  recordUiAsset: (input) => {
+    const inputs = Array.isArray(input) ? input : [input];
+    if (inputs.length === 0 || !isRecorderEnabled()) return [];
+    const workflowId = get().ensureWorkflowId();
+    const state = get();
+    const run: AssetRunContext = {
+      runId: newRunId(),
+      workflowId,
+      workflowName: state.workflowName,
+      projectDir: state.saveDirectoryPath,
+      startedAt: Date.now(),
+    };
+    try {
+      beginRun(run, captureGraph(state));
+    } catch (error) {
+      console.error("Failed to record assets:", error);
+      return [];
+    }
+    const handles: RecordedAssetHandle[] = [];
+    for (const item of inputs) {
+      try {
+        handles.push(recordAsset(withProducerTitle(item, state.nodes), run));
+      } catch (error) {
+        console.error("Failed to record asset:", error);
+      }
+    }
+    // The action has already been applied, so the graph now is how it ended
+    try {
+      endRun(run.runId, captureGraph(get()));
+    } catch (error) {
+      console.error("Failed to finish recording assets:", error);
+    }
+    return handles;
+  },
+
   // Auto-save actions
   setWorkflowMetadata: (id: string, name: string, path: string, generationsPath?: string | null) => {
     // Auto-derive generationsPath: use provided value, fall back to existing, then auto-derive
-    const currentGenPath = get().generationsPath;
+    const prev = get();
+    const currentGenPath = prev.generationsPath;
     const derivedGenerationsPath = generationsPath ?? currentGenPath ?? `${path}/generations`;
 
     set({
@@ -2761,6 +3802,11 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       saveDirectoryPath: path,
       generationsPath: derivedGenerationsPath,
     });
+    // The workflow's assets, including those made before it had a folder, now
+    // belong to this project. A workflow that already has a folder is left to
+    // the save that follows: only it knows whether the new folder is a fork,
+    // and filing the old id there first would hand its assets to the copy.
+    if (!prev.saveDirectoryPath || prev.workflowId !== id) classifyWorkflow(id, name, path);
   },
 
   setWorkflowName: (name: string) => {
@@ -2778,6 +3824,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
   setAutoSaveEnabled: (enabled: boolean) => {
     set({ autoSaveEnabled: enabled });
+    saveAutoSaveEnabled(enabled);
   },
 
   setUseExternalImageStorage: (enabled: boolean) => {
@@ -2788,29 +3835,40 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     set({ hasUnsavedChanges: true });
   },
 
-  saveToFile: async () => {
-    let {
+  saveToFile: async (options = {}) => {
+    while (activeSave) await activeSave;
+    const reason = options.reason ?? "manual";
+    const {
       nodes,
       edges,
       edgeStyle,
+      edgeAppearance,
       groups,
-      workflowId,
+      runCount,
       workflowName,
       saveDirectoryPath,
       useExternalImageStorage,
       imageRefBasePath,
     } = get();
+    let { workflowId } = get();
 
     if (!workflowId || !workflowName || !saveDirectoryPath) {
       return false;
     }
 
+    // The canvas this save belongs to. If another replaces it meanwhile (a
+    // load, a clear, a tab switch), the save must not touch the new one.
+    const generation = get().canvasGeneration;
+    const replaced = () => get().canvasGeneration !== generation;
+    let finishSave!: () => void;
+    activeSave = new Promise((resolve) => (finishSave = resolve));
     set({ isSaving: true });
 
     try {
       // Wait for any pending image/video saves to complete so their IDs are synced
       // This prevents saving workflows with temporary IDs that don't match saved files
       await waitForPendingImageSyncs();
+      if (replaced()) return false;
 
       // Re-fetch nodes after waiting, as imageHistory IDs may have been updated
       let currentNodes = get().nodes;
@@ -2832,6 +3890,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         (imageRefBasePath === null && hasExistingRefs)
       );
 
+      // A save into another folder is a fork: the new id starts its own
+      // project, and the old id's assets stay with the old one
+      const forkedFrom = isNewDirectory ? workflowId : undefined;
       if (isNewDirectory) {
         // Generate new workflow ID for the duplicate - prevents localStorage collision
         // This ensures the new project has independent config and preserves the original
@@ -2854,7 +3915,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       const savedNodesSnapshot = currentNodes;
       const savedEdgesSnapshot = edges;
       const savedEdgeStyleSnapshot = edgeStyle;
+      const savedEdgeAppearanceSnapshot = edgeAppearance;
       const savedGroupsSnapshot = groups;
+      const savedRunCountSnapshot = runCount;
       const savedWorkflowNameSnapshot = workflowName;
 
       let workflow: WorkflowFile = {
@@ -2862,16 +3925,20 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
         id: workflowId,
         name: workflowName,
         directoryPath: saveDirectoryPath,
-        nodes: currentNodes,
+        // Object URLs are only good in this session, so the file never carries them
+        nodes: stripDeadBlobUrls(currentNodes),
         edges,
         edgeStyle,
+        edgeAppearance,
         groups: groups && Object.keys(groups).length > 0 ? groups : undefined,
+        ...(runCount > 1 ? { runCount } : {}),
       };
 
       // If external media storage is enabled, externalize media before saving
       if (useExternalImageStorage) {
         workflow = await externalizeWorkflowMedia(workflow, saveDirectoryPath);
       }
+      if (replaced()) return false;
 
       const response = await fetch("/api/workflow", {
         method: "POST",
@@ -2884,6 +3951,7 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       });
 
       const result = await response.json();
+      if (replaced()) return false;
 
       if (result.success) {
         const timestamp = Date.now();
@@ -2898,7 +3966,9 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           freshNodes !== savedNodesSnapshot ||
           fresh.edges !== savedEdgesSnapshot ||
           fresh.edgeStyle !== savedEdgeStyleSnapshot ||
+          fresh.edgeAppearance !== savedEdgeAppearanceSnapshot ||
           fresh.groups !== savedGroupsSnapshot ||
+          fresh.runCount !== savedRunCountSnapshot ||
           fresh.workflowName !== savedWorkflowNameSnapshot;
 
         // If we externalized media, update store nodes with the refs
@@ -2911,6 +3981,15 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
             'capturedImageRef', 'videoRef', 'outputVideoRef', 'audioFileRef', 'outputAudioRef',
           ] as const;
           const ARRAY_REF_FIELDS = ['inputImageRefs', 'imageRefs', 'videoRefs'] as const;
+          // The media field each ref describes
+          const MEDIA_FIELD_BY_REF: Record<string, string> = {
+            imageRef: 'image', sourceImageRef: 'sourceImage', outputImageRef: 'outputImage',
+            imageARef: 'imageA', imageBRef: 'imageB', capturedImageRef: 'capturedImage',
+            videoRef: 'video', outputVideoRef: 'outputVideo', audioFileRef: 'audioFile',
+            outputAudioRef: 'outputAudio', inputImageRefs: 'inputImages',
+            imageRefs: 'images', videoRefs: 'videos',
+          };
+          const savedNodesById = new Map(savedNodesSnapshot.map((node) => [node.id, node]));
 
           // Index the externalized refs by node id (not array position) so the
           // merge is robust to nodes added/removed/reordered during the save.
@@ -2924,15 +4003,23 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           // returned untouched.
           const nodesWithRefs = freshNodes.map((node) => {
             const extData = extRefsById.get(node.id);
-            if (!extData) return node;
+            const savedNode = savedNodesById.get(node.id);
+            if (!extData || !savedNode || savedNode.type !== node.type) return node;
 
             const mergedData = { ...node.data } as Record<string, unknown>;
+            const savedData = savedNode.data as Record<string, unknown>;
+            // A ref names the file written for the media this save read. Media
+            // replaced since then must keep no ref, or the next save would point
+            // at the old file and the replacement would be lost on reopening.
+            const unchanged = (key: string) =>
+              mergedData[MEDIA_FIELD_BY_REF[key]] === savedData[MEDIA_FIELD_BY_REF[key]] &&
+              mergedData[key] === savedData[key];
             let touched = false;
             for (const key of STRING_REF_FIELDS) {
-              if (typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && typeof extData[key] === 'string') { mergedData[key] = extData[key]; touched = true; }
             }
             for (const key of ARRAY_REF_FIELDS) {
-              if (Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
+              if (unchanged(key) && Array.isArray(extData[key])) { mergedData[key] = extData[key]; touched = true; }
             }
             return touched ? ({ ...node, data: mergedData as WorkflowNodeData } as WorkflowNode) : node;
           });
@@ -2963,22 +4050,25 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
           lastSavedAt: timestamp,
           useExternalImageStorage,
         });
+        classifyWorkflow(workflowId, workflowName, saveDirectoryPath, forkedFrom);
 
         return true;
       } else {
-        useToast.getState().show(`Auto-save failed: ${result.error}`, "error");
+        // Autosave reports through its own notice, once, not on every attempt
+        if (reason === "manual") useToast.getState().show(`Couldn't save: ${result.error}`, "error");
         return false;
       }
     } catch (error) {
-      useToast
-        .getState()
-        .show(
-          `Auto-save failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-          "error"
-        );
+      if (reason === "manual") {
+        useToast
+          .getState()
+          .show(`Couldn't save: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
+      }
       return false;
     } finally {
       set({ isSaving: false });
+      activeSave = null;
+      finishSave();
     }
   },
 
@@ -2987,6 +4077,8 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     if (!trimmedName) {
       return false;
     }
+    // Change the identity only once a save in flight has finished with the old one
+    while (activeSave) await activeSave;
 
     const { saveDirectoryPath, workflowId: prevId, workflowName: prevName, hasUnsavedChanges: prevUnsaved } = get();
     if (!saveDirectoryPath) {
@@ -3001,36 +4093,48 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       hasUnsavedChanges: true,
     });
 
+    const generation = get().canvasGeneration;
     const success = await get().saveToFile();
-    if (!success) {
-      // Rollback to previous identity on failure
+    if (!success && get().canvasGeneration === generation && get().workflowId === newWorkflowId) {
+      // Rollback to previous identity on failure (never onto a canvas that replaced it)
       set({ workflowId: prevId, workflowName: prevName, hasUnsavedChanges: prevUnsaved });
     }
     return success;
   },
 
+  // Autosave follows the edits (src/store/utils/autoSave.ts): a few seconds
+  // after the last change, never mid-run, never when clean; and it saves at
+  // once when the window loses focus or the tab is hidden.
   initializeAutoSave: () => {
-    if (autoSaveIntervalId) return;
-
-    autoSaveIntervalId = setInterval(async () => {
-      const state = get();
-      if (
-        state.autoSaveEnabled &&
-        state.hasUnsavedChanges &&
-        state.workflowId &&
-        state.workflowName &&
-        state.saveDirectoryPath &&
-        !state.isSaving
-      ) {
-        await state.saveToFile();
-      }
-    }, 90 * 1000); // 90 seconds
+    if (autoSave) return;
+    autoSave = createAutoSave({
+      getState: () => get(),
+      subscribe: (listener) => useWorkflowStore.subscribe(listener),
+      save: () => get().saveToFile({ reason: "auto" }),
+      onFailure: (error) => {
+        const detail = error instanceof Error ? error.message : "";
+        useToast.getState().show(`Autosave is paused: it couldn't write the workflow${detail ? ` (${detail})` : ""}. Save with ${saveShortcutLabel()} to try now.`, "error");
+      },
+    });
+    autoSave.start();
+    if (typeof window !== "undefined") {
+      const flush = () => { void autoSave?.flush(); };
+      const onVisibility = () => { if (document.visibilityState === "hidden") flush(); };
+      window.addEventListener("blur", flush);
+      document.addEventListener("visibilitychange", onVisibility);
+      autoSaveWindowListeners = () => {
+        window.removeEventListener("blur", flush);
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
+    }
   },
 
   cleanupAutoSave: () => {
-    if (autoSaveIntervalId) {
-      clearInterval(autoSaveIntervalId);
-      autoSaveIntervalId = null;
+    if (autoSave) {
+      autoSave.stop();
+      autoSave = null;
+      autoSaveWindowListeners?.();
+      autoSaveWindowListeners = null;
     }
   },
 
@@ -3185,59 +4289,6 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
     set({ viewedCommentNodeIds: new Set<string>() });
   },
 
-  // AI change snapshot actions
-  captureSnapshot: () => {
-    const state = get();
-    // Deep copy the current workflow state to avoid reference sharing
-    const snapshot = clonePreservingStrings({
-      nodes: state.nodes,
-      edges: state.edges,
-      groups: state.groups,
-      edgeStyle: state.edgeStyle,
-    });
-    set({
-      previousWorkflowSnapshot: snapshot,
-      manualChangeCount: 0,
-    });
-  },
-
-  revertToSnapshot: () => {
-    const state = get();
-    if (state.previousWorkflowSnapshot) {
-      set({
-        nodes: state.previousWorkflowSnapshot.nodes,
-        edges: state.previousWorkflowSnapshot.edges,
-        groups: state.previousWorkflowSnapshot.groups,
-        edgeStyle: state.previousWorkflowSnapshot.edgeStyle,
-        previousWorkflowSnapshot: null,
-        manualChangeCount: 0,
-        hasUnsavedChanges: true,
-      });
-    }
-  },
-
-  clearSnapshot: () => {
-    set({
-      previousWorkflowSnapshot: null,
-      manualChangeCount: 0,
-    });
-  },
-
-  incrementManualChangeCount: () => {
-    const state = get();
-    const newCount = state.manualChangeCount + 1;
-
-    // Automatically clear snapshot after 3 manual changes
-    if (newCount >= 3) {
-      set({
-        previousWorkflowSnapshot: null,
-        manualChangeCount: 0,
-      });
-    } else {
-      set({ manualChangeCount: newCount });
-    }
-  },
-
   applyEditOperations: (operations) => {
     const state = get();
     const result = executeEditOps(operations, {
@@ -3250,6 +4301,60 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
       edges: result.edges,
       hasUnsavedChanges: true,
     });
+
+    return { applied: result.applied, skipped: result.skipped };
+  },
+
+  applyAgentGraphOps: (batch) => {
+    if (batch.ops.length === 0) return { applied: 0, skipped: [] };
+
+    const state = get();
+    const result = applyGraphOps({ nodes: state.nodes, edges: state.edges, groups: state.groups }, batch.ops, {
+      createDefaultNodeData,
+      defaultNodeDimensions,
+    });
+    // Nothing landed (every op was stale): leave undo history alone.
+    if (result.applied === 0) return { applied: 0, skipped: result.skipped };
+
+    pushUndoCheckpoint(get, set);
+
+    const remainingNodeIds = new Set(result.nodes.map((node) => node.id));
+    const removedNodeIds = new Set(
+      state.nodes.filter((node) => !remainingNodeIds.has(node.id)).map((node) => node.id)
+    );
+    const remainingEdgeIds = new Set(result.edges.map((edge) => edge.id));
+    const removedEdges = state.edges.filter((edge) => !remainingEdgeIds.has(edge.id));
+    // The batch's own group changes (a clearCanvas drops them all), then the
+    // groups whose nodes it deleted, as a manual delete does. Only groups that
+    // had nodes before the batch can be pruned, so a group the batch created
+    // with its nodes stays.
+    const batchGroups = result.groups ?? (result.clearedCanvas ? {} : state.groups);
+    const groups = pruneEmptiedGroups(batchGroups, state.nodes, removedNodeIds, result.nodes);
+
+    set({
+      nodes: removedNodeIds.size > 0 ? healSplitGridRouterRefs(result.nodes, removedNodeIds) : result.nodes,
+      edges: result.edges,
+      groups,
+      hasUnsavedChanges: true,
+    });
+
+    // Same follow-up as a manual disconnect, folded into this batch's undo step.
+    if (removedEdges.length > 0) {
+      deleteCheckpointActive = true;
+      try {
+        clearStaleInputImages(removedEdges, get);
+    } finally {
+        deleteCheckpointActive = false;
+      }
+    }
+    // A grid whose cells or size the agent set is built now, inside this undo
+    // step, so its cells and shared Router show before Run (Run would build it anyway).
+    for (const id of splitGridsToBuild(batch.ops)) {
+      if (get().nodes.some((node) => node.id === id && node.type === "splitGrid")) {
+        get().materializeSplitGridCells(id, { skipCheckpoint: true });
+      }
+    }
+    get().recomputeDimmedNodes();
 
     return { applied: result.applied, skipped: result.skipped };
   },
@@ -3274,7 +4379,39 @@ const workflowStoreImpl: StateCreator<WorkflowStore> = (set, get) => ({
 
 });
 
+/**
+ * Puts one entry first in an Output Gallery's media list, with a blank in front
+ * of its refs so the refs stay aligned with the media they name.
+ */
+function prependGalleryEntry(
+  data: OutputGalleryNodeData,
+  key: "images" | "videos",
+  refsKey: "imageRefs" | "videoRefs",
+  entry: string,
+): Partial<OutputGalleryNodeData> {
+  const refs = data[refsKey];
+  return {
+    [key]: [entry, ...(data[key] || [])],
+    ...(refs?.length ? { [refsKey]: ["", ...refs] } : {}),
+  };
+}
+
+// A Cloud key an older build kept on the ComfyUI tab moves into Providers
+// before the store first reads them (the desktop does this again once its
+// credentials have loaded, in DesktopSession).
+if (typeof window !== "undefined") migrateLegacyComfyCloudKey();
+
 export const useWorkflowStore = create<WorkflowStore>()(workflowStoreImpl);
+
+// A run ends wherever `isRunning` drops — it finished, Stop was pressed, an
+// early return, or a load, clear or tab switch aborted it — so its asset run
+// is closed in this one place rather than on every one of those paths.
+useWorkflowStore.subscribe((state, previous) => {
+  if (!previous.isRunning || state.isRunning || !state._currentRun) return;
+  const current = state._currentRun;
+  useWorkflowStore.setState({ _currentRun: null });
+  closeAssetRun(current, state);
+});
 
 // Keep the mirrored Comfy Cloud key current: the ComfyUI settings tab saves
 // to its own localStorage key and announces it with this event.
@@ -3304,7 +4441,8 @@ export function useProviderApiKeys() {
       kieApiKey: state.providerSettings.providers.kie?.apiKey ?? null,
       wavespeedApiKey: state.providerSettings.providers.wavespeed?.apiKey ?? null,
       openaiApiKey: state.providerSettings.providers.openai?.apiKey ?? null,
-      // Router accepts the Comfy Cloud key, so it stands in when no provider key is set.
+      // The Providers entry is the Comfy key; the mirror only still matters for
+      // a Cloud key an older build stored on the ComfyUI tab.
       comfyApiKey: state.providerSettings.providers.comfy?.apiKey || state.comfyCloudApiKey || null,
       // Provider enabled states (for conditional UI)
       replicateEnabled: state.providerSettings.providers.replicate?.enabled ?? false,
