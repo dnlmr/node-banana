@@ -496,6 +496,59 @@
   }, { passive: true });
   touched();
 
+  /* --- phones: at phone zoom the graph is wider than the screen, so it drifts
+     across by itself, out to one end and back, until the first touch on the
+     canvas hands the panning to the visitor for good. It rests while the fold
+     is off screen, and never runs for a visitor who asked for less motion. */
+  var autoPan = null, autoPanDone = false;
+  var phone = window.matchMedia ? window.matchMedia("(max-width: 599px)") : null;
+  function startAutoPan() {
+    if (autoPan || autoPanDone || reducedMotion || !phone || !phone.matches) return;
+    var stage = activeStage();
+    if (!stage) return;
+    var r = canvas.getBoundingClientRect(), left = Infinity, right = -Infinity;
+    Array.prototype.forEach.call(stage.querySelectorAll("[data-node]"), function (n) {
+      var b = n.getBoundingClientRect();
+      left = Math.min(left, b.left - r.left);
+      right = Math.max(right, b.right - r.left);
+    });
+    if (!isFinite(left) || right - left <= r.width) return;
+    var v = viewOf(stage), x0 = v.x;
+    var margin = 20;
+    var reachRight = Math.min(0, (r.width - margin) - right); /* pan left this far to show the right end */
+    var reachLeft = Math.max(0, margin - left);              /* pan right this far to show the left end */
+    var period = 36000, t0 = null, shift = 0;
+    var run = { stage: stage, frame: 0, paused: false, pausedAt: 0 };
+    function step(now) {
+      if (autoPan !== run || run.paused) return;
+      if (t0 === null) t0 = now;
+      var s = Math.sin(((now - t0 - shift) % period) / period * Math.PI * 2); /* -1..1, from the centre */
+      v.x = x0 + (s > 0 ? reachRight * s : reachLeft * -s);
+      applyView(stage);
+      run.frame = requestAnimationFrame(step);
+    }
+    run.pause = function () { if (run.paused) return; run.paused = true; run.pausedAt = performance.now(); cancelAnimationFrame(run.frame); };
+    run.resume = function () { if (!run.paused) return; run.paused = false; shift += performance.now() - run.pausedAt; run.frame = requestAnimationFrame(step); };
+    autoPan = run;
+    run.frame = requestAnimationFrame(step);
+  }
+  function stopAutoPan() {
+    if (!autoPan) return;
+    cancelAnimationFrame(autoPan.frame);
+    autoPan = null;
+  }
+  /* The first touch on the canvas ends the drift; the pan and pinch below take over. */
+  canvas.addEventListener("pointerdown", function () { autoPanDone = true; stopAutoPan(); }, true);
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(function (entries) {
+      var seen = entries[0].isIntersecting;
+      if (autoPan) { if (seen) autoPan.resume(); else autoPan.pause(); }
+      else if (seen) startAutoPan();
+    }, { threshold: 0.3 }).observe(canvas);
+  }
+  /* After the entry animation has settled the view. */
+  setTimeout(startAutoPan, 1500);
+
   /* --- pointer handling on the canvas: drag a node, or pan the stage. Two
      pointers pinch-zoom. Wheel pans, as the app does; ctrl/cmd + wheel zooms. */
   var pointers = {};
@@ -619,6 +672,7 @@
   /* --- tabs: click switches, the × closes, + opens an empty Untitled tab. */
   var untitled = 0;
   function activate(id) {
+    stopAutoPan();
     Array.prototype.forEach.call(tabs.querySelectorAll("[data-tab]"), function (t) {
       var on = t.getAttribute("data-tab") === id;
       t.classList.toggle("tab--active", on);
@@ -629,6 +683,7 @@
       s.classList.toggle("stage--active", on);
       if (on) { viewOf(s); applyView(s); redraw(s); playVideo(s); } else { pauseVideo(s); }
     });
+    setTimeout(startAutoPan, 50);
   }
   function closeTab(id) {
     var tab = tabs.querySelector('[data-tab="' + id + '"]');
