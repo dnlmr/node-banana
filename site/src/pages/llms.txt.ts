@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { FAQ } from "../lib/faq";
+import { FAQ, faqAnswerText } from "../lib/faq";
 import { minMac, minWindows, version } from "../lib/release";
 
 // /llms.txt: the page's facts as Markdown for language models that read a
@@ -16,7 +16,7 @@ export const GET: APIRoute = ({ site }) => {
     "",
     "## Facts",
     "",
-    ...FAQ.map(({ question, answer }) => `- **${question}** ${answer}`),
+    ...FAQ.map((entry) => `- **${entry.question}** ${faqAnswerText(entry)}`),
     "",
     "## Links",
     "",
