@@ -574,21 +574,65 @@
      is off screen, and never runs for a visitor who asked for less motion. */
   var autoPan = null, autoPanDone = false;
   var phone = window.matchMedia ? window.matchMedia("(max-width: 599px)") : null;
+
+  /* On a phone the mannequin workflow is laid out in two columns instead of one
+     long row, so most of it is on screen at once; the rest is below, and the
+     drift runs down the graph instead of across it. World positions only: the
+     edges are redrawn from the sockets as they are after the move. */
+  var PHONE_LAYOUTS = {
+    mannequin: {
+      /* Under 900px the stylesheet centres the view on (cx, cy): the graph's middle across, and
+         a point a little under its top row down, so the first view starts at the top. */
+      gx: 0, gy: 0, gw: 907, cx: 453, cy: 380, zoom: 0.38,
+      nodes: { "imageInput-22": [0, 0], "prompt-23": [0, 680], "nanoBanana-3": [520, 0], "promptConstructor-13": [520, 640], "generateVideo-17": [520, 900] },
+    },
+  };
+  function layoutForPhone(stage) {
+    var layout = PHONE_LAYOUTS[stage.getAttribute("data-stage")];
+    if (!layout || !phone || !phone.matches || stage._phoneLaidOut) return;
+    stage._phoneLaidOut = true;
+    Object.keys(layout.nodes).forEach(function (id) {
+      var node = stage.querySelector('[data-node="' + id + '"]');
+      if (!node) return;
+      node.style.setProperty("--x", layout.nodes[id][0] + "px");
+      node.style.setProperty("--y", layout.nodes[id][1] + "px");
+    });
+    stage.style.setProperty("--gx", layout.gx + "px");
+    stage.style.setProperty("--gy", layout.gy + "px");
+    stage.style.setProperty("--gw", layout.gw + "px");
+    stage.style.setProperty("--cx", layout.cx + "px");
+    stage.style.setProperty("--cy", layout.cy + "px");
+    stage.style.setProperty("--zoom-phone", String(layout.zoom));
+    /* Any view the script had written stays inline and would win over the new
+       CSS centring; drop it so the stylesheet lays the graph out afresh. */
+    ["--zoom", "--pan-x", "--pan-y"].forEach(function (name) { stage.style.removeProperty(name); });
+    stage._view = undefined;
+    redraw(stage);
+    homeTop(stage);        /* the scroll handoff measures from the laid-out top, not a drifted one */
+  }
+  Array.prototype.forEach.call(canvas.querySelectorAll(".stage"), layoutForPhone);
+
   function startAutoPan() {
     if (autoPan || autoPanDone || reducedMotion || !phone || !phone.matches) return;
     var stage = activeStage();
     if (!stage) return;
-    var r = canvas.getBoundingClientRect(), left = Infinity, right = -Infinity;
+    var r = canvas.getBoundingClientRect(), left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
     Array.prototype.forEach.call(stage.querySelectorAll("[data-node]"), function (n) {
       var b = n.getBoundingClientRect();
       left = Math.min(left, b.left - r.left);
       right = Math.max(right, b.right - r.left);
+      top = Math.min(top, b.top - r.top);
+      bottom = Math.max(bottom, b.bottom - r.top);
     });
-    if (!isFinite(left) || right - left <= r.width) return;
-    var v = viewOf(stage), x0 = v.x;
+    if (!isFinite(left)) return;
+    /* Drift along the axis the graph overflows most; none if it fits. */
+    var acrossBy = right - left - r.width, downBy = bottom - top - r.height;
+    if (acrossBy <= 0 && downBy <= 0) return;
+    var vertical = downBy > acrossBy;
+    var v = viewOf(stage), x0 = v.x, y0 = v.y;
     var margin = 20;
-    var reachRight = Math.min(0, (r.width - margin) - right); /* pan left this far to show the right end */
-    var reachLeft = Math.max(0, margin - left);              /* pan right this far to show the left end */
+    var reachRight = vertical ? Math.min(0, (r.height - margin) - bottom) : Math.min(0, (r.width - margin) - right); /* pan this far to show the far end */
+    var reachLeft = vertical ? Math.max(0, margin - top) : Math.max(0, margin - left);                               /* and this far to show the near end */
     /* From the centre: a breath, out to the right end, a pause there, across to
        the left end, a pause, back to the centre; eased, so it gathers and settles. */
     var at = driftTimeline([[0, 1400], [1, 6500], [1, 2200], [-1, 9000], [-1, 2200], [0, 6500]], 0);
@@ -597,8 +641,9 @@
     function step(now) {
       if (autoPan !== run || run.paused) return;
       if (t0 === null) t0 = now;
-      var s = at(now - t0 - shift); /* -1..1, from the centre */
-      v.x = x0 + (s > 0 ? reachRight * s : reachLeft * -s);
+      var s = at(now - t0 - shift); /* -1..1, from the start */
+      var d = s > 0 ? reachRight * s : reachLeft * -s;
+      if (vertical) v.y = y0 + d; else v.x = x0 + d;
       applyView(stage);
       run.frame = requestAnimationFrame(step);
     }
@@ -748,6 +793,8 @@
   var untitled = 0;
   function activate(id) {
     stopAutoPan();
+    var next = stageFor(id);
+    if (next) layoutForPhone(next);
     Array.prototype.forEach.call(tabs.querySelectorAll("[data-tab]"), function (t) {
       var on = t.getAttribute("data-tab") === id;
       t.classList.toggle("tab--active", on);
