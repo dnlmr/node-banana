@@ -24,7 +24,8 @@ keeps everything you generate, and every node rebuilt on one anatomy.
 - **Model browser** — Loads every provider's list once and filters, searches and tabs it locally, with **Search Replicate and fal.ai** for a deeper search, provider notices you can dismiss, an on-disk catalog refreshed behind the request, Replicate built from its curated collections, and a model change applied to a whole selection of generators.
 - **Models** — GPT Image 2.5 with OpenAI's image controls and multiple references; Gemini Omni video through the Interactions API; one catalogue for text models with the current lists (Sonnet 5.5 among them); and the Comfy Router catalog brought up to date: FLUX 3 Image (up to 10 reference images, with search grounding), Ideogram 4.5 (source images and a mask), Seedream 5.0 Flash, Eleven v4 and Eleven v4 Turbo, and Grok Imagine Video 1.5 Lite. FLUX.1 Canny and Depth, which the Router no longer serves, are gone.
 - **Media** — A full-screen viewer for the recent-generations drop-down and the output gallery (stage, filmstrip, details rail, add to graph); video plays on hover; the output gallery resizes vertically; the Split Grid cell editor builds a per-cell pipeline from any node type, video included.
-- **Landing page** — [nodebanana.app](https://nodebanana.app/) with the download buttons, a social preview image, and `/download/mac` and `/download/windows` resolving to the latest installers.
+- **Landing page** — [nodebanana.app](https://nodebanana.app/) with the download buttons, a social preview image, a FAQ, `/download/mac` and `/download/windows` resolving to the latest installers, a sitemap, `llms.txt`, and a phone layout of its own.
+- **Marquee** — A marquee takes a node once it holds the node's media card whole, controls card or not; a node without a media card is taken whole, as before.
 
 ### Changed
 
@@ -51,6 +52,7 @@ keeps everything you generate, and every node rebuilt on one anatomy.
 - **Media** — An upload lands only on the node and canvas that started it; a re-run video edit no longer kills a copy of its output; media copied between tabs survives closing the source tab; the gallery's detail view matches the history viewer and its close button can be clicked.
 - **Models** — A string setting like `video_size` is no longer offered as a video input (#135); a Comfy Router busy status is not a failed run; a sentinel-or-range setting keeps its range.
 - **Noodles** — A newly hidden connection inherits the label its handle's other hidden connections share; hidden stubs stack down the node side instead of overlapping.
+- **Canvas** — A workflow opened from a file starts at its first node instead of an empty corner of its bounding box; the multi-select bar lives on the canvas, pans with the nodes and is never hidden under the tab strip.
 
 ## [1.10.0] - 2026-09-24
 
