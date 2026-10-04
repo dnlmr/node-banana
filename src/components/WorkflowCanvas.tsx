@@ -9,11 +9,14 @@ import {
   Connection,
   Edge,
   type EdgeChange,
+  type NodeChange,
   useReactFlow,
   OnConnectEnd,
   Node,
   OnSelectionChangeParams,
+  SelectionMode,
   useStore,
+  useStoreApi,
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import { frameLoadedGraph } from "@/utils/frameGraph";
@@ -81,6 +84,7 @@ import { useViewportWidth } from "./agent/hooks/useViewportWidth";
 import { GroupBackgroundsPortal, GroupControlsOverlay } from "./GroupsOverlay";
 import { requestSave } from "@/store/saveRequestStore";
 import { insideAgentWindow, isSaveShortcut } from "@/utils/saveShortcut";
+import type { WorkflowNode } from "@/types";
 import { NodeType, NanoBananaNodeData, HandleType, PromptNodeData, LLMGenerateNodeData, PromptConstructorNodeData, AvailableVariable, WorkflowNodeData } from "@/types";
 import { isComfyWorkflow, isNodeBananaWorkflow } from "@/lib/comfy/detect";
 import { NODE_TITLES, getNodeHandles } from "@/lib/nodes/handles";
@@ -106,6 +110,8 @@ import { wouldCreateCycle } from "@/store/utils/executionUtils";
 import { parseVarTags } from "@/utils/parseVarTags";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { EdgeMarqueeSelection } from "./edges/EdgeMarqueeSelection";
+import { NodeMarqueeSelection } from "./NodeMarqueeSelection";
+import { boxOf, refineMarqueeChanges } from "@/lib/nodes/marqueeSelection";
 import { EdgeHookSelection } from "./edges/EdgeHookSelection";
 import { ModelSearchDialog } from "./modals/ModelSearchDialog";
 import { LLMFallbackPopover } from "./nodes/LLMFallbackPopover";
@@ -327,6 +333,29 @@ export function WorkflowCanvas() {
       skippedNodeIds: state.skippedNodeIds,
     })));
   const onNodesChange = useWorkflowStore((state) => state.onNodesChange);
+  const flowStore = useStoreApi();
+  // The marquee: React Flow runs on its overlap rule; every selection it
+  // proposes is checked against the node's media card (marqueeSelection), and
+  // NodeMarqueeSelection follows the rectangle to take nodes as they qualify.
+  const handleNodesChange = useCallback((changes: NodeChange<WorkflowNode>[]) => {
+    const { userSelectionActive, userSelectionRect, domNode } = flowStore.getState();
+    if (userSelectionActive && userSelectionRect && domNode && changes.some((change) => change.type === "select" && change.selected)) {
+      const bounds = domNode.getBoundingClientRect();
+      const marquee = {
+        left: bounds.left + userSelectionRect.x,
+        top: bounds.top + userSelectionRect.y,
+        right: bounds.left + userSelectionRect.x + userSelectionRect.width,
+        bottom: bounds.top + userSelectionRect.y + userSelectionRect.height,
+      };
+      changes = refineMarqueeChanges(changes, marquee, (id) => {
+        const element = domNode.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
+        if (!element) return null;
+        const card = element.querySelector("[data-media-card]");
+        return { node: boxOf(element.getBoundingClientRect()), mediaCard: card ? boxOf(card.getBoundingClientRect()) : null };
+      });
+    }
+    onNodesChange(changes);
+  }, [flowStore, onNodesChange]);
   const onEdgesChange = useWorkflowStore((state) => state.onEdgesChange);
   const reconnectEdge = useWorkflowStore((state) => state.reconnectEdge);
   const onConnect = useWorkflowStore((state) => state.onConnect);
@@ -2499,7 +2528,8 @@ export function WorkflowCanvas() {
       <ReactFlow
         nodes={allNodes}
         edges={isCanvasOverview ? OVERVIEW_EDGES : edges}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
+        selectionMode={SelectionMode.Partial}
         onEdgesChange={handleEdgesChange}
         onSelectionStart={handleSelectionStart}
         onSelectionEnd={handleSelectionEnd}
@@ -2611,6 +2641,7 @@ export function WorkflowCanvas() {
         />
       </ReactFlow>
       <EdgeMarqueeSelection canvas={reactFlowWrapper} disabled={isModalOpen || isCanvasOverview} />
+      <NodeMarqueeSelection disabled={isModalOpen || isCanvasOverview} />
       <EdgeHookSelection canvas={reactFlowWrapper} disabled={isModalOpen || isCanvasOverview} />
 
       {/* Connection drop menu */}
