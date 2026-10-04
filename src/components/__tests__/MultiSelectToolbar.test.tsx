@@ -859,7 +859,7 @@ describe("MultiSelectToolbar", () => {
       // bottom centre set a gap above it.
       const anchor = container.firstChild as HTMLElement;
       expect(anchor.style.transform).toContain("translate(360px, 200px)");
-      expect(anchor.style.transform).toContain("translate(-50%, calc(-100% - 14px))");
+      expect(anchor.style.transform).toContain("translate(-50%, calc(-100% - 48px))");
     });
 
     it("keeps its screen size at any zoom by unscaling in the canvas", () => {

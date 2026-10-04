@@ -36,8 +36,9 @@ const ARRANGEMENTS: { mode: Arrangement; label: string; shortcut?: string; Icon:
   { mode: "grid", label: "Arrange as grid", shortcut: "G", Icon: LayoutGrid },
 ];
 /** Keeps a press inside the menu or slider from panning, dragging or deselecting on the canvas beneath. */
-/** Screen px between the bar's bottom and the top of the selection. */
-const TOOLBAR_GAP = 14;
+/** Screen px between the bar's bottom and the top of the selection: room for the
+ *  spacing slider, which hangs under the bar, to clear a node's title row. */
+const TOOLBAR_GAP = 48;
 
 const stopCanvasEvents = {
   onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
@@ -240,7 +241,8 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
     <div
       // The viewport layer is pointer-events: none (nodes opt back in); so does the bar.
       // A press inside it is the bar's own, never the pane's.
-      className="absolute left-0 top-0 z-[1000] pointer-events-auto"
+      // Above every node: React Flow lifts a selected node to z-index 1000 in this same layer.
+      className="absolute left-0 top-0 z-[100000] pointer-events-auto"
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
       style={{
