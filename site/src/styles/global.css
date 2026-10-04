@@ -1359,7 +1359,9 @@ ul { margin: 0; padding: 0; list-style: none; }
      stage, so the whole stage (node, pill and cursor together) shifts right. */
   .dcard__stage:has(.dzoom--noodle) { transform: translateX(calc(-50% + 76px)); }
   /* The agent window's graph at the fold's phone zoom, scrolling sideways; the script drifts it. */
-  .agraph { --z: 0.42; height: calc(1010px * 0.42); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  /* 290px shows the two short columns whole; the tall concepts column, off to the right, scrolls
+     down inside the window rather than leaving a blank band under the short ones. */
+  .agraph { --z: 0.42; height: 290px; overflow: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
   .agraph::-webkit-scrollbar { display: none; }
   .agraph::after { content: ""; display: block; width: calc(1490px * 0.42 + 24px); height: 1px; }
   /* The agent pill board has nothing but the pill; it needs no 260px on a phone. */
