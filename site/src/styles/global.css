@@ -1387,10 +1387,12 @@ ul { margin: 0; padding: 0; list-style: none; }
   .downloads .eyebrow { margin-left: 0; }
   .footer__nav { flex-direction: column; align-items: flex-start; gap: 14px; }
   /* The agent facts fold into an accordion, the first open; the title row is the toggle. */
+  .facts { gap: 0; }
   .fact { gap: 0; border-top: 1px solid #262626; }
   .facts > .fact:last-child { border-bottom: 1px solid #262626; }
+  /* Rows meet at their hairlines: 18px above and below every title, and the same 18px under an open item's text. */
   .fact__head { order: -1; pointer-events: auto; cursor: pointer; padding: 18px 0; }
   .fact__chev { display: flex; }
   .fact__viz { order: 2; margin-bottom: 16px; }
-  .fact__text { order: 3; padding-bottom: 22px; }
+  .fact__text { order: 3; padding-bottom: 18px; }
 }
