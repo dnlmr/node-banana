@@ -1332,3 +1332,21 @@ ul { margin: 0; padding: 0; list-style: none; }
 @keyframes sp-press { 50% { background: #bdbdbd; transform: scale(0.96); } }
 @keyframes sp-zoom { from { transform: translate(170px, 37px) scale(1); } to { transform: translate(22px, 41px) scale(0.31); } }
 /* ---------- Sections end ------------------------------------------------ */
+
+/* ---------- Phones and narrow tablets: the big visuals fit the column ------ */
+
+@media (max-width: 899px) {
+  /* The split is one column here, so the prompting graph has the whole width, not half of it. */
+  .graph { --gw: min(672px, 100cqw); }
+  /* The tangle is drawn in a 620 × 870 space; shrink it to the column instead of cropping it. */
+  .tangle { zoom: min(1, tan(atan2(100cqw, 640px))); }
+}
+
+@media (max-width: 599px) {
+  /* The noodle card's stage overhangs its card by 80px on the left; on a phone the card is the stage. */
+  .dzoom--noodle { left: 8px; }
+  /* The agent pill board has nothing but the pill; it needs no 260px on a phone. */
+  .fact__viz { height: 180px; }
+  /* The wide cards' stages scale to the card width (about 0.55), so their content is half as tall. */
+  .dcard--wide .dcard__viz { height: 240px; }
+}
