@@ -15,7 +15,6 @@ import {
   OnSelectionChangeParams,
   useStore,
   useUpdateNodeInternals,
-  getNodesBounds,
 } from "@xyflow/react";
 import { frameLoadedGraph } from "@/utils/frameGraph";
 import "@xyflow/react/dist/style.css";
@@ -577,7 +576,12 @@ export function WorkflowCanvas() {
         if (useWorkflowStore.getState().canvasViewport !== null) return;
         const wrapper = reactFlowWrapper.current;
         const viewport = frameLoadedGraph(
-          getNodesBounds(getNodes()),
+          getNodes().map((node) => ({
+            x: node.position.x,
+            y: node.position.y,
+            width: node.measured?.width ?? node.width ?? 0,
+            height: node.measured?.height ?? node.height ?? 0,
+          })),
           wrapper?.clientWidth || window.innerWidth,
           wrapper?.clientHeight || window.innerHeight,
         );
