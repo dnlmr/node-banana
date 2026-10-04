@@ -8,13 +8,17 @@ import { minMac, minWindows } from "./release";
 export interface FaqEntry {
   question: string;
   answer: string;
-  /** Links shown after the answer on the page, and as their URLs in the data. */
-  links?: { label: string; href: string }[];
+  /** A closing sentence of links, "<lead> A and B.", with the addresses spelled out in the data. */
+  links?: { lead: string; items: { label: string; href: string }[] };
 }
 
 /** The answer as one plain sentence run, with the link's address spelled out. */
 export const faqAnswerText = ({ answer, links }: FaqEntry) =>
-  links?.length ? `${answer} ${links.map((link) => `${link.label}: ${link.href}`).join(". ")}` : answer;
+  links ? `${answer} ${links.lead} ${joinNaturally(links.items.map((link) => `${link.label} (${link.href})`))}.` : answer;
+
+/** "A", "A and B", "A, B and C". */
+export const joinNaturally = (parts: string[]) =>
+  parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 
 export const FAQ: FaqEntry[] = [
   {
@@ -71,9 +75,12 @@ export const FAQ: FaqEntry[] = [
     question: "Who made Node Banana?",
     answer:
       "Node Banana is mainly maintained by Willie (Shrimbly on GitHub), with support from the open source community. Willie is a product designer at ComfyUI, and Node Banana is a passion project: a place to experiment with ideas and features for node-based interfaces.",
-    links: [
-      { label: "Willie on X", href: "https://x.com/ReflctWillie" },
-      { label: "Willie on LinkedIn", href: "https://www.linkedin.com/in/willie-falloon-961a8a68/" },
-    ],
+    links: {
+      lead: "Find Willie on",
+      items: [
+        { label: "X", href: "https://x.com/ReflctWillie" },
+        { label: "LinkedIn", href: "https://www.linkedin.com/in/willie-falloon-961a8a68/" },
+      ],
+    },
   },
 ];

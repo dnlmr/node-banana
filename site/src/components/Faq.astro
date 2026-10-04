@@ -24,7 +24,7 @@ const structuredData = {
     {FAQ.map(({ question, answer, links }, i) => (
       <details class="faq__item reveal" style={`--d: ${2 + (i % 3)};`} open={i === 0}>
         <summary class="faq__q"><span class="h3">{question}</span><span class="faq__icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M10 3v14M3 10h14"></path></svg></span></summary>
-        <p class="faq__answer">{answer}{links?.map((link) => <> <a class="faq__link" href={link.href}>{link.label}</a></>)}</p>
+        <p class="faq__answer">{answer}{links && <> {links.lead} {links.items.map((link, j) => <>{j > 0 && (j === links.items.length - 1 ? " and " : ", ")}<a class="faq__link" href={link.href}>{link.label}</a></>)}.</>}</p>
       </details>
     ))}
   </div>
