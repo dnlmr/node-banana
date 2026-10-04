@@ -61,4 +61,9 @@ export const FAQ: FaqEntry[] = [
     answer:
       "Download the Mac or Windows installer from nodebanana.app, open it, then paste the API keys for the providers you use into Settings → Providers. The Mac app is signed and notarised. The Windows installer is not yet code-signed, so SmartScreen may ask you to confirm the first time.",
   },
+  {
+    question: "Who made Node Banana?",
+    answer:
+      "Node Banana is mainly maintained by Shrimbly (Willie), with support from the open source community. Willie is a product designer at ComfyUI, and Node Banana is a passion project: a place to experiment with ideas and features for node-based interfaces.",
+  },
 ];
