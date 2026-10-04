@@ -1,9 +1,9 @@
 "use client";
 
-import { ChevronDown, Columns2, Download, LayoutGrid, Play, Replace, Rows2, SquareArrowRightExit, SquareDashed } from "lucide-react";
+import { Box, ChevronDown, Columns2, Download, LayoutGrid, Play, Rows2, SquareArrowRightExit, SquareDashed } from "lucide-react";
 import { MenuDivider, MenuIconButton, MenuSurface } from "@/components/ui/Menu";
 import { Tooltip, type TooltipPlacement } from "@/components/ui/Tooltip";
-import { useReactFlow } from "@xyflow/react";
+import { ViewportPortal, useStore } from "@xyflow/react";
 import { useShallow } from "zustand/shallow";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { memo, useMemo, useCallback, useEffect, useRef, useState, type ButtonHTMLAttributes } from "react";
@@ -36,8 +36,8 @@ const ARRANGEMENTS: { mode: Arrangement; label: string; shortcut?: string; Icon:
   { mode: "grid", label: "Arrange as grid", shortcut: "G", Icon: LayoutGrid },
 ];
 /** Keeps a press inside the menu or slider from panning, dragging or deselecting on the canvas beneath. */
-/** The closest the bar comes to the canvas's top edge, in px. */
-const TOOLBAR_TOP_MIN = 8;
+/** Screen px between the bar's bottom and the top of the selection. */
+const TOOLBAR_GAP = 14;
 
 const stopCanvasEvents = {
   onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
@@ -81,7 +81,9 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
   // One model for the whole selection, offered when every node is the same kind of generator
   const generateType = useMemo(() => sharedGenerateType(selectedNodes), [selectedNodes]);
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
-  const { getViewport } = useReactFlow();
+  // The bar lives in the canvas's own coordinates (ViewportPortal), so it pans
+  // and zooms with the nodes; the zoom is read back to keep it at screen size.
+  const zoom = useStore((state) => state.transform[2]);
   const selectionKey = JSON.stringify(selectedNodes.map((node) => node.id).sort());
   const [arrangement, setArrangement] = useState<{
     selectionKey: string;
@@ -130,13 +132,12 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
 
   const someInGroup = selectedNodeGroups.length > 0;
 
-  // Calculate toolbar position (centered above selected nodes)
+  // Where the bar hangs: the top centre of the selection, in flow units. A bar
+  // anchored to the canvas can always be panned into view, unlike one fixed to
+  // the screen, which a selection near the top pushed under the tab strip.
   const toolbarPosition = useMemo(() => {
     if (selectedNodes.length < 2) return null;
 
-    const viewport = getViewport();
-
-    // Find bounding box of selected nodes
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -148,16 +149,8 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
       maxX = Math.max(maxX, node.position.x + nodeWidth);
     });
 
-    // Convert flow coordinates to screen coordinates
-    const centerX = (minX + maxX) / 2;
-    const screenX = centerX * viewport.zoom + viewport.x;
-    // 50px above the selection, but never above the canvas: a selection scrolled
-    // up past the top would put the bar under the tab strip, where it cannot be
-    // clicked. It stays at the canvas's top edge instead, over the nodes.
-    const screenY = Math.max(TOOLBAR_TOP_MIN, minY * viewport.zoom + viewport.y - 50);
-
-    return { x: screenX, y: screenY };
-  }, [selectedNodes, getViewport]);
+    return { x: (minX + maxX) / 2, y: minY };
+  }, [selectedNodes]);
 
   const applyArrangement = (mode: Arrangement, gap: number, nodes = selectedNodes) => {
     if (selectedNodes.length < 2) return;
@@ -237,17 +230,28 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
   }, [selectedNodes]);
 
   if (!toolbarPosition || selectedNodes.length < 2) return null;
+  // While the spacing slider is in use the bar stays where it was when the
+  // arrangement began, so it does not slide under the pointer as the nodes spread.
+  const anchor = activeArrangement?.position ?? toolbarPosition;
 
   return (
+    <>
+    <ViewportPortal>
+    <div
+      className="absolute left-0 top-0 z-[1000]"
+      style={{
+        // To the anchor, then unscale so the bar keeps its screen size, then sit
+        // its bottom centre a gap above the anchor (the gap is in bar px, so it
+        // comes out as screen px after the unscale).
+        transform: `translate(${anchor.x}px, ${anchor.y}px) scale(${1 / zoom}) translate(-50%, calc(-100% - ${TOOLBAR_GAP}px))`,
+        transformOrigin: "0 0",
+      }}
+    >
     <MenuSurface
       ref={toolbarRef}
       variant="bar"
-      className="nodrag nopan"
-      style={{
-        left: activeArrangement?.position.x ?? toolbarPosition.x,
-        top: activeArrangement?.position.y ?? toolbarPosition.y,
-        transform: "translateX(-50%)",
-      }}
+      floating={false}
+      className="nodrag nopan relative"
     >
       {/* Run just the selection */}
       <ToolbarButton
@@ -301,7 +305,7 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
       {generateType && (
         <>
           <ToolbarButton onClick={() => setModelDialogOpen(true)} label="Change model for selected nodes">
-            <Replace size={16} strokeWidth={1.5} />
+            <Box size={16} strokeWidth={1.5} />
           </ToolbarButton>
           <MenuDivider variant="bar" className="mx-0.5" />
         </>
@@ -372,6 +376,10 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
         )}
         </div>
       )}
+    </MenuSurface>
+    </div>
+    </ViewportPortal>
+      {/* The dialog is a window of its own, outside the canvas's transform. */}
       {modelDialogOpen && generateType && (
         <ModelSearchDialog
           isOpen
@@ -384,6 +392,6 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
           }}
         />
       )}
-    </MenuSurface>
+    </>
   );
 });

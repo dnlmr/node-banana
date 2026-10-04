@@ -39,6 +39,9 @@ vi.mock("@xyflow/react", async () => {
     useReactFlow: () => ({
       getViewport: mockGetViewport,
     }),
+    // No <ReactFlow> here: the portal renders in place, at zoom 1.
+    ViewportPortal: ({ children }: { children: React.ReactNode }) => children,
+    useStore: (selector: (state: { transform: number[] }) => unknown) => selector({ transform: [0, 0, 1] }),
   };
 });
 
@@ -146,10 +149,10 @@ describe("MultiSelectToolbar", () => {
       expect(screen.getByRole("button", { name: "Arrange nodes" })).toBeInTheDocument();
     });
 
-    it("stays at the canvas's top edge when the selection is scrolled above it", () => {
-      // 50px above a selection whose top is 600px above the canvas would be
-      // under the tab strip, where the bar cannot be clicked.
-      mockGetViewport.mockReturnValueOnce({ x: 0, y: -600, zoom: 1 });
+    it("hangs from the top centre of the selection in canvas coordinates", () => {
+      // Two 220px-wide nodes at x 0 and 300, y 0: centre 260, top 0. In the
+      // canvas's own coordinates the bar pans and zooms with the nodes, so a
+      // selection near the top can always be panned into view.
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           nodes: [
@@ -165,9 +168,10 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      let bar: HTMLElement | null = screen.getByRole("button", { name: "Arrange nodes" });
-      while (bar && !bar.style.top) bar = bar.parentElement;
-      expect(bar?.style.top).toBe("8px");
+      let anchor: HTMLElement | null = screen.getByRole("button", { name: "Arrange nodes" });
+      while (anchor && !anchor.style.transform) anchor = anchor.parentElement;
+      expect(anchor?.style.transform).toContain("translate(260px, 0px)");
+      expect(anchor?.style.transform).toContain("scale(1)");
     });
 
     it("should not render when nodes are selected but less than 2", () => {
@@ -335,9 +339,9 @@ describe("MultiSelectToolbar", () => {
       expect(tooltipOf(button)).toBeNull();
     });
 
-    it("draws change model as a swap and grouping as a dashed frame", () => {
+    it("draws change model as a box (the model browser's mark) and grouping as a dashed frame", () => {
       render2();
-      expect(screen.getByRole("button", { name: "Change model for selected nodes" }).querySelector("svg")).toHaveClass("lucide-replace");
+      expect(screen.getByRole("button", { name: "Change model for selected nodes" }).querySelector("svg")).toHaveClass("lucide-box");
       expect(screen.getByRole("button", { name: "Create group" }).querySelector("svg")).toHaveClass("lucide-square-dashed");
     });
   });
@@ -835,7 +839,7 @@ describe("MultiSelectToolbar", () => {
   });
 
   describe("Toolbar Position", () => {
-    it("should position toolbar based on selected nodes bounding box", () => {
+    it("should position toolbar at the selection's top centre, in canvas coordinates", () => {
       mockUseWorkflowStore.mockImplementation((selector) => {
         return selector(createDefaultState({
           nodes: [
@@ -851,11 +855,14 @@ describe("MultiSelectToolbar", () => {
         </TestWrapper>
       );
 
-      const toolbar = container.firstChild as HTMLElement;
-      expect(toolbar).toHaveStyle({ transform: "translateX(-50%)" });
+      // 100..620 across, top 200: the anchor is (360, 200), the bar's own
+      // bottom centre set a gap above it.
+      const anchor = container.firstChild as HTMLElement;
+      expect(anchor.style.transform).toContain("translate(360px, 200px)");
+      expect(anchor.style.transform).toContain("translate(-50%, calc(-100% - 14px))");
     });
 
-    it("should account for viewport zoom in positioning", () => {
+    it("keeps its screen size at any zoom by unscaling in the canvas", () => {
       mockGetViewport.mockReturnValue({ x: 100, y: 50, zoom: 2 });
 
       mockUseWorkflowStore.mockImplementation((selector) => {
@@ -875,6 +882,8 @@ describe("MultiSelectToolbar", () => {
 
       const toolbar = container.firstChild as HTMLElement;
       expect(toolbar).toBeInTheDocument();
+      // The portal mock reports zoom 1, so the unscale is scale(1); the bar is in canvas space either way.
+      expect(toolbar.style.transform).toContain("scale(1)");
     });
   });
 
