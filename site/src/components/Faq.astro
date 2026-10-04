@@ -15,7 +15,11 @@ const structuredData = {
 ---
 <section class="section" id="faq">
   <div class="section__inner">
-  <div class="section__head"><div class="section__copy"><h2 class="h2 reveal">FAQ</h2></div><p class="lead reveal" style="--d: 1;">The short version of what Node Banana is, what it costs, where your files go, and what it runs on.</p></div>
+  <div class="section__split section__split--faq">
+    <div class="section__copy">
+      <h2 class="h2 reveal">FAQ</h2>
+      <p class="lead reveal" style="--d: 1;">The short version of what Node Banana is, what it costs, where your files go, and what it runs on.</p>
+    </div>
   <div class="faq">
     {FAQ.map(({ question, answer }, i) => (
       <details class="faq__item reveal" style={`--d: ${2 + (i % 3)};`} open={i === 0}>
@@ -23,6 +27,7 @@ const structuredData = {
         <p class="faq__answer">{answer}</p>
       </details>
     ))}
+  </div>
   </div>
   </div>
   <script type="application/ld+json" set:html={JSON.stringify(structuredData)}></script>
