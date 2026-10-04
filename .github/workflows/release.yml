@@ -120,6 +120,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -z "$CSC_LINK" ]; then echo "::error::MAC_CERTIFICATE_P12_BASE64 is not set"; exit 1; fi
+          # An empty password cannot open our .p12: electron-builder would log the failed
+          # import and carry on, and the verify step below would be the first to say so.
+          if [ -z "$CSC_KEY_PASSWORD" ]; then echo "::error::MAC_CERTIFICATE_PASSWORD is empty: set it to the .p12's password"; exit 1; fi
           if [ "$PUBLISH" = "true" ]; then
             npm run electron:package -- --sign --publish
           else
