@@ -74,7 +74,7 @@ export const FAQ: FaqEntry[] = [
   {
     question: "Who made Node Banana?",
     answer:
-      "Node Banana is Willie's project (Shrimbly on GitHub), built with support from the open source community. Willie is a product designer at ComfyUI, and Node Banana is a passion project: a place to experiment with ideas and features for node-based interfaces.",
+      "Node Banana is made by Willie (Shrimbly on GitHub), with help from the open source community. Willie is a product designer at ComfyUI, and Node Banana is his passion project: a place to experiment with ideas and features for node-based interfaces.",
     links: {
       lead: "Find Willie on",
       items: [
