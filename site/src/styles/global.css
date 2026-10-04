@@ -1014,6 +1014,18 @@ ul { margin: 0; padding: 0; list-style: none; }
 /* Three facts, each with a crop of the window. */
 .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .fact, .dcard { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+/* On desktop a fact is always open and its title row is plain; on a phone it is an accordion (below). */
+.fact__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; order: 2; list-style: none; pointer-events: none; cursor: default; }
+.fact__head::-webkit-details-marker { display: none; }
+/* The details element wraps its content in a box of its own; unwrapped, the viz, title and
+   text order themselves like the other cards (viz first on desktop, title first on a phone). */
+.fact[open]::details-content { display: contents; }
+.fact:not([open])::details-content { display: none; }
+.fact__chev { display: none; flex: none; width: 20px; height: 20px; color: var(--ink-3); transition: transform 240ms var(--ease-out); }
+.fact__chev svg { width: 100%; height: 100%; }
+.fact[open] .fact__chev { transform: rotate(45deg); }
+.fact__viz { order: 1; }
+.fact__text { order: 3; }
 .fact__viz { height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
 
 /* ---------- Every generation, kept (the Assets view) --------------------- */
@@ -1233,21 +1245,21 @@ ul { margin: 0; padding: 0; list-style: none; }
   /* Run: the cursor comes to +, holds it down, and the count runs 4 → 100, quickening. */
   .js .rcount { --runs: 4; }
   .js .rcursor { opacity: 0; transform: translate(70px, 54px); }
-  .js .dcard:hover .rcursor { animation: rcursor-hold 4200ms var(--ease-out) forwards; }
-  .js .dcard:hover .rmenu__plus { animation: plus-held 4200ms linear forwards; }
-  .js .dcard:hover .rcount { animation: runs-up 3000ms cubic-bezier(0.6, 0, 0.95, 0.5) 750ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .rcursor { animation: rcursor-hold 4200ms var(--ease-out) forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .rmenu__plus { animation: plus-held 4200ms linear forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .rcount { animation: runs-up 3000ms cubic-bezier(0.6, 0, 0.95, 0.5) 750ms forwards; }
 
   /* Ease: the view pans up to the video, which plays (site.js). */
-  .js .dcard:hover .dzoom--ease { top: 14px; }
+  .js :is(.dcard:hover, .dcard.is-live) .dzoom--ease { top: 14px; }
 
   /* Spaghetti: the cursor finds the label, the hidden connections fan out and flow. */
   .js .dcard .fan { clip-path: inset(0 100% 0 0); }
   .js .dcard .ncursor { opacity: 0; transform: translate(300px, 230px); }
   .js .dcard .stack--noodle { border-color: rgb(16 185 129 / 0.35); background: #1a1f1c; }
-  .js .dcard:hover .ncursor { animation: ncursor-in 900ms var(--ease-out) forwards; }
-  .js .dcard:hover .stack--noodle { animation: label-lit 300ms var(--ease-out) 700ms forwards; }
-  .js .dcard:hover .fan { animation: fan-open 1300ms var(--ease-out) 800ms forwards; }
-  .js .dcard:hover .fan path { animation: dash-flow 900ms linear infinite; }
+  .js :is(.dcard:hover, .dcard.is-live) .ncursor { animation: ncursor-in 900ms var(--ease-out) forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .stack--noodle { animation: label-lit 300ms var(--ease-out) 700ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .fan { animation: fan-open 1300ms var(--ease-out) 800ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .fan path { animation: dash-flow 900ms linear infinite; }
 
   /* Lists: the prompts open one after another. */
   .js .dcard .arr__item--open { max-height: 22px; padding-top: 0; padding-bottom: 0; align-items: center; background: rgb(38 38 38 / 0.6); color: #d4d4d4; }
@@ -1255,33 +1267,33 @@ ul { margin: 0; padding: 0; list-style: none; }
   .js .dcard .arr__item--open .arr__chev { transform: none; margin-top: 0; }
   .js .dcard .arr__item--open .arr__dot { margin-top: 0; }
   /* A cursor clicks each prompt open in turn; opening one closes the one before, as in the node. */
-  .js .dcard:hover .acursor { animation: acursor-click 4400ms var(--ease-out) forwards; }
-  .js .dcard:hover .arr__item:nth-child(1) { animation: item-open 400ms var(--ease-out) 750ms forwards, item-close 300ms var(--ease-out) 2450ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(2) { animation: item-open 400ms var(--ease-out) 2450ms forwards, item-close 300ms var(--ease-out) 4150ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(3) { animation: item-open 400ms var(--ease-out) 4150ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(1) .arr__text { animation: text-open 1ms 750ms forwards, text-close 1ms 2450ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(2) .arr__text { animation: text-open 1ms 2450ms forwards, text-close 1ms 4150ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(3) .arr__text { animation: text-open 1ms 4150ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(1) .arr__chev { animation: chev-open 250ms var(--ease-out) 750ms forwards, chev-close 250ms var(--ease-out) 2450ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(2) .arr__chev { animation: chev-open 250ms var(--ease-out) 2450ms forwards, chev-close 250ms var(--ease-out) 4150ms forwards; }
-  .js .dcard:hover .arr__item:nth-child(3) .arr__chev { animation: chev-open 250ms var(--ease-out) 4150ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .acursor { animation: acursor-click 4400ms var(--ease-out) forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(1) { animation: item-open 400ms var(--ease-out) 750ms forwards, item-close 300ms var(--ease-out) 2450ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(2) { animation: item-open 400ms var(--ease-out) 2450ms forwards, item-close 300ms var(--ease-out) 4150ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(3) { animation: item-open 400ms var(--ease-out) 4150ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(1) .arr__text { animation: text-open 1ms 750ms forwards, text-close 1ms 2450ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(2) .arr__text { animation: text-open 1ms 2450ms forwards, text-close 1ms 4150ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(3) .arr__text { animation: text-open 1ms 4150ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(1) .arr__chev { animation: chev-open 250ms var(--ease-out) 750ms forwards, chev-close 250ms var(--ease-out) 2450ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(2) .arr__chev { animation: chev-open 250ms var(--ease-out) 2450ms forwards, chev-close 250ms var(--ease-out) 4150ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .arr__item:nth-child(3) .arr__chev { animation: chev-open 250ms var(--ease-out) 4150ms forwards; }
 
   /* Divide and conquer: zoomed in on the split; the cell editor opens and gains Generate Image, Prompt
      and Output; Apply; the editor closes and the view zooms out as the four cell groups land. */
   .js .sp__cam { transform: translate(170px, 37px) scale(1); }
   .js .sp__cam .node--group, .js .sp__wires, .js .sp__t--u, .js .sp__t--p, .js .sp__t--o, .js .sp__w--0, .js .sp__w--1, .js .sp__w--2 { opacity: 0; }
   .js .sp__cam .node--group, .js .sp__t--u, .js .sp__t--p, .js .sp__t--o { animation: none; }
-  .js .dcard:hover .sp__modal { visibility: visible; animation: sp-modal-in 400ms var(--ease-out) 700ms both, sp-modal-out 400ms var(--ease-out) 5800ms forwards; }
-  .js .dcard:hover .sp__t--u, .js .dcard:hover .sp__w--0 { animation: sp-pop 450ms var(--ease-out) 1700ms forwards; }
-  .js .dcard:hover .sp__t--p, .js .dcard:hover .sp__w--1 { animation: sp-pop 450ms var(--ease-out) 2600ms forwards; }
-  .js .dcard:hover .sp__t--o, .js .dcard:hover .sp__w--2 { animation: sp-pop 450ms var(--ease-out) 3500ms forwards; }
-  .js .dcard:hover .sp__sum--1 { animation: sp-hide 1ms linear 3700ms forwards; }
-  .js .dcard:hover .sp__sum--4 { animation: sp-show 1ms linear 3700ms forwards; }
-  .js .dcard:hover .sp__cursor { animation: sp-cursor 1600ms var(--ease-out) 4200ms forwards; }
-  .js .dcard:hover .sp__apply { animation: sp-press 220ms ease-out 5250ms; }
-  .js .dcard:hover .sp__cam { animation: sp-zoom 1700ms cubic-bezier(0.65, 0, 0.35, 1) 6000ms forwards; }
-  .js .dcard:hover .sp__cam .node--group { animation: sp-pop 500ms var(--ease-out) forwards; animation-delay: calc(6600ms + var(--i, 0) * 160ms); }
-  .js .dcard:hover .sp__wires { animation: sp-pop 600ms var(--ease-out) 7500ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__modal { visibility: visible; animation: sp-modal-in 400ms var(--ease-out) 700ms both, sp-modal-out 400ms var(--ease-out) 5800ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__t--u, .js :is(.dcard:hover, .dcard.is-live) .sp__w--0 { animation: sp-pop 450ms var(--ease-out) 1700ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__t--p, .js :is(.dcard:hover, .dcard.is-live) .sp__w--1 { animation: sp-pop 450ms var(--ease-out) 2600ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__t--o, .js :is(.dcard:hover, .dcard.is-live) .sp__w--2 { animation: sp-pop 450ms var(--ease-out) 3500ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__sum--1 { animation: sp-hide 1ms linear 3700ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__sum--4 { animation: sp-show 1ms linear 3700ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__cursor { animation: sp-cursor 1600ms var(--ease-out) 4200ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__apply { animation: sp-press 220ms ease-out 5250ms; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__cam { animation: sp-zoom 1700ms cubic-bezier(0.65, 0, 0.35, 1) 6000ms forwards; }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__cam .node--group { animation: sp-pop 500ms var(--ease-out) forwards; animation-delay: calc(6600ms + var(--i, 0) * 160ms); }
+  .js :is(.dcard:hover, .dcard.is-live) .sp__wires { animation: sp-pop 600ms var(--ease-out) 7500ms forwards; }
 }
 @keyframes rcursor-hold {
   0% { opacity: 0; transform: translate(70px, 54px); }
@@ -1343,10 +1355,34 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 
 @media (max-width: 599px) {
-  /* The noodle card's stage overhangs its card by 80px on the left; on a phone the card is the stage. */
-  .dzoom--noodle { left: 8px; }
+  /* The noodle card's stage overhangs its card by 80px on the left; on a phone the card is the
+     stage, so the whole stage (node, pill and cursor together) shifts right. */
+  .dcard__stage:has(.dzoom--noodle) { transform: translateX(calc(-50% + 76px)); }
+  /* The agent window's graph at the fold's phone zoom, scrolling sideways; the script drifts it. */
+  .agraph { --z: 0.42; height: calc(1010px * 0.42); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .agraph::-webkit-scrollbar { display: none; }
+  .agraph::after { content: ""; display: block; width: calc(1490px * 0.42 + 24px); height: 1px; }
   /* The agent pill board has nothing but the pill; it needs no 260px on a phone. */
   .fact__viz { height: 180px; }
-  /* The wide cards' stages scale to the card width (about 0.55), so their content is half as tall. */
-  .dcard--wide .dcard__viz { height: 240px; }
+  /* The wide cards' stages scale to the card width, so their content is shorter; a narrower
+     stage keeps the split grid and the array legible. */
+  .dcard--wide .dcard__stage { --sw: 520px; }
+  .dcard--wide .dcard__viz { height: 260px; }
+  /* The Run menu's rows, a little more air between them. */
+  .rmenu__item { min-height: 34px; }
+  /* The ComfyUI tangle is desktop decoration. */
+  .tangle { display: none; }
+  /* The agent window: half the chat. */
+  .canvas--agent > .aw { height: 300px; }
+  /* The footer: the download column, then the links one under another. */
+  .footer__row { flex-direction: column; align-items: stretch; gap: 32px; }
+  .downloads .eyebrow { margin-left: 0; }
+  .footer__nav { flex-direction: column; align-items: flex-start; gap: 14px; }
+  /* The agent facts fold into an accordion, the first open; the title row is the toggle. */
+  .fact { gap: 0; border-top: 1px solid #262626; }
+  .facts > .fact:last-child { border-bottom: 1px solid #262626; }
+  .fact__head { order: -1; pointer-events: auto; cursor: pointer; padding: 18px 0; }
+  .fact__chev { display: flex; }
+  .fact__viz { order: 2; margin-bottom: 16px; }
+  .fact__text { order: 3; padding-bottom: 22px; }
 }

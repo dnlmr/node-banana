@@ -153,6 +153,31 @@
     }
   })(document.querySelector("[data-agent-play]"));
 
+  /* 5b'. On a phone the agent window's graph is wider than the screen and scrolls sideways;
+     it drifts across by itself, after the build animation, until the first touch. */
+  (function (graph) {
+    if (!graph || reducedMotion || !window.matchMedia || !window.matchMedia("(max-width: 599px)").matches || !("IntersectionObserver" in window)) return;
+    var done = false, started = false, paused = true, pausedAt = 0, shift = 0, t0 = null, frame = 0, period = 30000;
+    function step(now) {
+      if (done || paused) return;
+      if (t0 === null) t0 = now;
+      var p = ((now - t0 - shift) % period) / period;
+      graph.scrollLeft = (graph.scrollWidth - graph.clientWidth) * (0.5 - 0.5 * Math.cos(p * Math.PI * 2));
+      frame = requestAnimationFrame(step);
+    }
+    function play() { if (done || !paused) return; paused = false; if (pausedAt) shift += performance.now() - pausedAt; frame = requestAnimationFrame(step); }
+    function rest() { if (paused) return; paused = true; pausedAt = performance.now(); cancelAnimationFrame(frame); }
+    function stop() { done = true; cancelAnimationFrame(frame); }
+    graph.addEventListener("touchstart", stop, { passive: true });
+    graph.addEventListener("pointerdown", stop, { passive: true });
+    graph.addEventListener("wheel", stop, { passive: true });
+    new IntersectionObserver(function (entries) {
+      if (done) return;
+      if (!entries[0].isIntersecting) { rest(); return; }
+      if (!started) { started = true; setTimeout(play, 2600); } else play();
+    }, { threshold: 0.4 }).observe(graph);
+  })(document.querySelector(".agraph"));
+
   /* 5c. The feature cards play on hover (CSS); a card's video plays with it, from the start. */
   (function () {
     if (reducedMotion || !window.matchMedia || !window.matchMedia("(hover: hover)").matches) return;
@@ -172,6 +197,34 @@
         video.currentTime = 0;
       });
     });
+  })();
+
+  /* 5c'. Without hover (phones, tablets) a card plays as it scrolls into view and resets
+     when it leaves, so it reads with its motion every time. */
+  (function () {
+    if (reducedMotion || !window.matchMedia || window.matchMedia("(hover: hover)").matches || !("IntersectionObserver" in window)) return;
+    var cards = Array.prototype.slice.call(document.querySelectorAll(".dcard"));
+    if (!cards.length) return;
+    var watch = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        var card = entry.target, video = card.querySelector("video[data-hover-play]");
+        if (entry.isIntersecting) {
+          card.classList.add("is-live");
+          if (video) { video.muted = true; video.currentTime = 0; clearTimeout(video._start); video._start = setTimeout(function () { var p = video.play(); if (p && p.catch) p.catch(function () {}); }, 500); }
+        } else {
+          card.classList.remove("is-live");
+          if (video) { clearTimeout(video._start); video.pause(); video.currentTime = 0; }
+        }
+      });
+    }, { threshold: 0.6 });
+    cards.forEach(function (card) { watch.observe(card); });
+  })();
+
+  /* 5e. On a phone the agent facts are an accordion: the first open, the others closed.
+     Without this script they all stay open, which still reads. */
+  (function () {
+    if (!window.matchMedia || !window.matchMedia("(max-width: 599px)").matches) return;
+    Array.prototype.forEach.call(document.querySelectorAll("details.fact"), function (fact, i) { if (i > 0) fact.open = false; });
   })();
 
   /* 5d. The Comfy node: click to select it, drag a side edge to resize it as the app does
