@@ -13,6 +13,23 @@
 
   var reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  /* A drift that gathers, travels and settles: phases of [target, ms], each eased
+     in and out from the previous target, looping. Returns the value at a time. */
+  function driftTimeline(phases, start) {
+    var total = 0;
+    phases.forEach(function (phase) { total += phase[1]; });
+    var ease = function (t) { return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+    return function (ms) {
+      var t = ((ms % total) + total) % total, from = start;
+      for (var i = 0; i < phases.length; i++) {
+        var to = phases[i][0], dur = phases[i][1];
+        if (t < dur) return from + (to - from) * ease(t / dur);
+        t -= dur; from = to;
+      }
+      return from;
+    };
+  }
+
   /* 2. Platform. Only the label and the target change; both platforms stay in the menu. */
   var main = document.querySelector("[data-download-main]");
   var label = document.querySelector("[data-platform-label]");
@@ -157,12 +174,13 @@
      it drifts across by itself, after the build animation, until the first touch. */
   (function (graph) {
     if (!graph || reducedMotion || !window.matchMedia || !window.matchMedia("(max-width: 599px)").matches || !("IntersectionObserver" in window)) return;
-    var done = false, started = false, paused = true, pausedAt = 0, shift = 0, t0 = null, frame = 0, period = 30000;
+    var done = false, started = false, paused = true, pausedAt = 0, shift = 0, t0 = null, frame = 0;
+    /* From the left end: a breath, across to the right, a pause, back, a pause. */
+    var at = driftTimeline([[0, 1500], [1, 7000], [1, 2400], [0, 7000], [0, 2400]], 0);
     function step(now) {
       if (done || paused) return;
       if (t0 === null) t0 = now;
-      var p = ((now - t0 - shift) % period) / period;
-      graph.scrollLeft = (graph.scrollWidth - graph.clientWidth) * (0.5 - 0.5 * Math.cos(p * Math.PI * 2));
+      graph.scrollLeft = (graph.scrollWidth - graph.clientWidth) * at(now - t0 - shift);
       frame = requestAnimationFrame(step);
     }
     function play() { if (done || !paused) return; paused = false; if (pausedAt) shift += performance.now() - pausedAt; frame = requestAnimationFrame(step); }
@@ -202,7 +220,8 @@
   /* 5c'. Without hover (phones, tablets) a card plays as it scrolls into view and resets
      when it leaves, so it reads with its motion every time. */
   (function () {
-    if (reducedMotion || !window.matchMedia || window.matchMedia("(hover: hover)").matches || !("IntersectionObserver" in window)) return;
+    if (reducedMotion || !window.matchMedia || !("IntersectionObserver" in window)) return;
+    if (window.matchMedia("(hover: hover)").matches && !window.matchMedia("(max-width: 899px)").matches) return;
     var cards = Array.prototype.slice.call(document.querySelectorAll(".dcard"));
     if (!cards.length) return;
     var watch = new IntersectionObserver(function (entries) {
@@ -570,12 +589,15 @@
     var margin = 20;
     var reachRight = Math.min(0, (r.width - margin) - right); /* pan left this far to show the right end */
     var reachLeft = Math.max(0, margin - left);              /* pan right this far to show the left end */
-    var period = 36000, t0 = null, shift = 0;
+    /* From the centre: a breath, out to the right end, a pause there, across to
+       the left end, a pause, back to the centre; eased, so it gathers and settles. */
+    var at = driftTimeline([[0, 1400], [1, 6500], [1, 2200], [-1, 9000], [-1, 2200], [0, 6500]], 0);
+    var t0 = null, shift = 0;
     var run = { stage: stage, frame: 0, paused: false, pausedAt: 0 };
     function step(now) {
       if (autoPan !== run || run.paused) return;
       if (t0 === null) t0 = now;
-      var s = Math.sin(((now - t0 - shift) % period) / period * Math.PI * 2); /* -1..1, from the centre */
+      var s = at(now - t0 - shift); /* -1..1, from the centre */
       v.x = x0 + (s > 0 ? reachRight * s : reachLeft * -s);
       applyView(stage);
       run.frame = requestAnimationFrame(step);

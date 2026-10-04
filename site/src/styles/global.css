@@ -1021,6 +1021,11 @@ ul { margin: 0; padding: 0; list-style: none; }
 /* The details element wraps its content in a box of its own; unwrapped, the viz, title and
    text order themselves like the other cards (viz first on desktop, title first on a phone). */
 .fact[open]::details-content { display: contents; }
+/* Opening: the content rises in, the plus turns; closing is instant, as native details is. */
+@keyframes fold-open { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+.fact[open] .fact__viz, .fact[open] .fact__text, .faq__item[open] .faq__answer { animation: fold-open 360ms var(--ease-out) both; }
+.fact[open] .fact__text { animation-delay: 60ms; }
+@media (prefers-reduced-motion: reduce) { .fact[open] .fact__viz, .fact[open] .fact__text, .faq__item[open] .faq__answer { animation: none; } }
 .fact:not([open])::details-content { display: none; }
 .fact__chev { display: none; flex: none; width: 20px; height: 20px; color: var(--ink-3); transition: transform 240ms var(--ease-out); }
 .fact__chev svg { width: 100%; height: 100%; }
