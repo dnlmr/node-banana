@@ -8,12 +8,13 @@ import { minMac, minWindows } from "./release";
 export interface FaqEntry {
   question: string;
   answer: string;
-  /** A link shown after the answer on the page, and as its URL in the data. */
-  link?: { label: string; href: string };
+  /** Links shown after the answer on the page, and as their URLs in the data. */
+  links?: { label: string; href: string }[];
 }
 
 /** The answer as one plain sentence run, with the link's address spelled out. */
-export const faqAnswerText = ({ answer, link }: FaqEntry) => (link ? `${answer} ${link.label}: ${link.href}` : answer);
+export const faqAnswerText = ({ answer, links }: FaqEntry) =>
+  links?.length ? `${answer} ${links.map((link) => `${link.label}: ${link.href}`).join(". ")}` : answer;
 
 export const FAQ: FaqEntry[] = [
   {
@@ -70,6 +71,6 @@ export const FAQ: FaqEntry[] = [
     question: "Who made Node Banana?",
     answer:
       "Node Banana is mainly maintained by Willie (Shrimbly on GitHub), with support from the open source community. Willie is a product designer at ComfyUI, and Node Banana is a passion project: a place to experiment with ideas and features for node-based interfaces.",
-    link: { label: "Willie on X", href: "https://x.com/ReflctWillie" },
+    links: [{ label: "Willie on X", href: "https://x.com/ReflctWillie" }],
   },
 ];
