@@ -12,7 +12,7 @@
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { build } = require('electron-builder');
 const { pickHostEnvironment } = require('../electron/lib/env.cjs');
