@@ -238,7 +238,11 @@ export const MultiSelectToolbar = memo(function MultiSelectToolbar() {
     <>
     <ViewportPortal>
     <div
-      className="absolute left-0 top-0 z-[1000]"
+      // The viewport layer is pointer-events: none (nodes opt back in); so does the bar.
+      // A press inside it is the bar's own, never the pane's.
+      className="absolute left-0 top-0 z-[1000] pointer-events-auto"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
       style={{
         // To the anchor, then unscale so the bar keeps its screen size, then sit
         // its bottom centre a gap above the anchor (the gap is in bar px, so it
