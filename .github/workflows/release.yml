@@ -123,6 +123,10 @@ jobs:
           # An empty password cannot open our .p12: electron-builder would log the failed
           # import and carry on, and the verify step below would be the first to say so.
           if [ -z "$CSC_KEY_PASSWORD" ]; then echo "::error::MAC_CERTIFICATE_PASSWORD is empty: set it to the .p12's password"; exit 1; fi
+          # Signing walks every file of the bundled runtime; the runner's default
+          # limit of 256 open files ran out part-way (EMFILE) on the 2.0.0 run.
+          ulimit -n 65536 || ulimit -n 10240
+          echo "open files limit: $(ulimit -n)"
           if [ "$PUBLISH" = "true" ]; then
             npm run electron:package -- --sign --publish
           else
