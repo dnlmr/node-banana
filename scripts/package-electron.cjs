@@ -12,7 +12,7 @@
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { build } = require('electron-builder');
 const { pickHostEnvironment } = require('../electron/lib/env.cjs');
@@ -153,6 +153,15 @@ async function main() {
       // ask for a file that is not there.
       artifactName: 'Node-Banana-${version}-${arch}.${ext}',
     } });
+    // A signed build is checked here, not only by the workflow: electron-builder
+    // has carried on past a failed certificate import and left an app whose
+    // signature does not match its contents, with an exit code of 0.
+    if (sign) {
+      const built = path.join(output, 'mac-arm64', 'Node Banana.app');
+      const check = spawnSync('codesign', ['--verify', '--deep', '--strict', '--verbose=2', built], { encoding: 'utf8' });
+      if (check.status !== 0) throw new Error(`The signed app does not verify: ${(check.stderr || check.stdout || '').trim()}`);
+      console.log(`Signature verified: ${built}`);
+    }
     console.log(`Release artifacts: ${output}`);
   } finally { await fs.rm(work, { recursive: true, force: true }); }
 }
