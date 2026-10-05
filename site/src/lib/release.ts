@@ -28,3 +28,5 @@ export const version: string = rootPackage.version;
 export const versionLabel = `v${version}`;
 export const minMac = "macOS 13";
 export const minWindows = "Windows 10";
+/** The Windows build was withdrawn after 2.0.0 shipped (slow and buggy); it returns in a later release. */
+export const windowsAvailable = false;
